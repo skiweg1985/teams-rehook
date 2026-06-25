@@ -1,0 +1,13 @@
+{
+  "name": "codex-app-skeleton",
+  "version": "0.1.0",
+  "description": "Template for authenticated internal tools with FastAPI, Postgres, React and Vite",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "frontend:dev": "npm --prefix frontend run dev",
+    "frontend:build": "npm --prefix frontend run build",
+    "backend:check": "python3 -m py_compile backend/app/*.py backend/app/routers/*.py backend/app/core/*.py",
+    "test": "npm run frontend:build && npm run backend:check"
+  }
+}
