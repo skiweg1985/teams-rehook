@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -13,6 +15,7 @@ from app.database import Base, get_db
 from app.main import create_app
 from app.models import Organization, User
 from app.security import hash_secret
+from app.schemas import OAuthAppDiagnosticsOut, OAuthTenantDiagnosticsOut
 from app.services.graph_targets import GraphRequestError
 from app.services.teams_bot import BotDeliveryError
 
@@ -86,6 +89,52 @@ def login_admin(client: TestClient) -> str:
     return response.json()["csrf_token"]
 
 
+def fake_jwt(**claims) -> str:
+    header = _jwt_part({"alg": "none", "typ": "JWT"})
+    payload = _jwt_part(claims)
+    return f"{header}.{payload}.signature"
+
+
+def _jwt_part(value: dict) -> str:
+    encoded = base64.urlsafe_b64encode(json.dumps(value).encode("utf-8")).decode("utf-8")
+    return encoded.rstrip("=")
+
+
+def fake_token_response(audience: str = "https://graph.microsoft.com"):
+    from app.routers.admin import OAuthTokenResponse
+
+    token = fake_jwt(
+        aud=audience,
+        iss="https://login.microsoftonline.com/tenant/v2.0",
+        roles=["User.Read.All", "Team.ReadBasic.All"],
+    )
+    return OAuthTokenResponse(access_token=token, expires_in_seconds=3600, claims={
+        "aud": audience,
+        "iss": "https://login.microsoftonline.com/tenant/v2.0",
+        "roles": ["User.Read.All", "Team.ReadBasic.All"],
+    })
+
+
+def metadata_pair():
+    return (
+        OAuthAppDiagnosticsOut(
+            metadata_checked=True,
+            available=True,
+            display_name="Teams Rehook App",
+            app_id="client",
+            service_principal_id="sp-id",
+            account_enabled=True,
+            service_principal_type="Application",
+        ),
+        OAuthTenantDiagnosticsOut(
+            metadata_checked=True,
+            available=True,
+            display_name="Example Tenant",
+            primary_domain="example.com",
+        ),
+    )
+
+
 def test_readiness_requires_admin_session(db_session: Session, monkeypatch: pytest.MonkeyPatch):
     with make_client(db_session, monkeypatch, BOT_DELIVERY_MODE="mock") as client:
         response = client.get("/api/v1/admin/readiness")
@@ -126,7 +175,11 @@ def test_readiness_reports_real_delivery_missing_bot_credentials(db_session: Ses
 
 
 def test_readiness_checks_bot_token_for_real_delivery(db_session: Session, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("app.routers.admin.fetch_botframework_token", lambda settings: ("bot-token", 3600))
+    monkeypatch.setattr(
+        "app.routers.admin._fetch_oauth_token",
+        lambda **kwargs: fake_token_response(kwargs["scope"]),
+    )
+    monkeypatch.setattr("app.routers.admin._metadata_for_credentials", lambda **kwargs: metadata_pair())
     with make_client(
         db_session,
         monkeypatch,
@@ -150,13 +203,25 @@ def test_readiness_checks_bot_token_for_real_delivery(db_session: Session, monke
         "client_secret": "configured",
         "default_service_url": "missing",
     }
+    assert body["bot"]["oauth"]["tenant_id"] == "tenant"
+    assert body["bot"]["oauth"]["client_id"] == "client"
+    assert body["bot"]["oauth"]["scope"] == "https://api.botframework.com/.default"
+    assert body["bot"]["oauth"]["token"]["succeeded"] is True
+    assert body["bot"]["oauth"]["token"]["expires_in_seconds"] == 3600
+    assert body["bot"]["oauth"]["token"]["audience"] == "https://api.botframework.com/.default"
+    assert body["bot"]["oauth"]["token"]["roles"] == ["User.Read.All", "Team.ReadBasic.All"]
+    assert body["bot"]["oauth"]["app"]["display_name"] == "Teams Rehook App"
+    assert body["bot"]["oauth"]["app"]["service_principal_id"] == "sp-id"
+    assert body["bot"]["oauth"]["tenant"]["display_name"] == "Example Tenant"
 
 
 def test_readiness_reports_bot_token_error_without_leaking_details(db_session: Session, monkeypatch: pytest.MonkeyPatch):
-    def fail_token(settings):
-        raise BotDeliveryError("raw provider detail that should not leak")
+    def fail_token(**kwargs):
+        if kwargs["request_error"] is BotDeliveryError:
+            raise BotDeliveryError("raw provider detail that should not leak")
+        raise GraphRequestError("raw graph detail that should not leak")
 
-    monkeypatch.setattr("app.routers.admin.fetch_botframework_token", fail_token)
+    monkeypatch.setattr("app.routers.admin._fetch_oauth_token", fail_token)
     with make_client(
         db_session,
         monkeypatch,
@@ -174,12 +239,18 @@ def test_readiness_reports_bot_token_error_without_leaking_details(db_session: S
     assert body["bot"]["auth_status"] == "token_error"
     assert body["bot"]["token_checked"] is True
     assert body["bot"]["token_request_succeeded"] is False
+    assert body["bot"]["oauth"]["token"]["checked"] is True
+    assert body["bot"]["oauth"]["token"]["succeeded"] is False
     assert "raw provider detail" not in body["bot"]["message"]
 
 
 def test_readiness_reports_graph_credentials_and_bot_fallback(db_session: Session, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("app.routers.admin.fetch_botframework_token", lambda settings: ("bot-token", 3600))
-    monkeypatch.setattr("app.routers.admin.fetch_graph_token", lambda settings: ("graph-token", 3600))
+    monkeypatch.setattr(
+        "app.routers.admin._fetch_oauth_token",
+        lambda **kwargs: fake_token_response(kwargs["scope"]),
+    )
+    monkeypatch.setattr("app.routers.admin._metadata_for_credentials", lambda **kwargs: metadata_pair())
+    monkeypatch.setattr("app.routers.admin._metadata_from_graph_token", lambda access_token, client_id: metadata_pair())
     with make_client(
         db_session,
         monkeypatch,
@@ -196,13 +267,17 @@ def test_readiness_reports_graph_credentials_and_bot_fallback(db_session: Sessio
     assert fallback_body["bot"]["ready"] is True
     assert fallback_body["graph"]["ready"] is True
     assert fallback_body["graph"]["credential_source"] == "bot"
-    assert fallback_body["graph"]["auth_status"] == "permission_warning"
+    assert fallback_body["graph"]["auth_status"] == "ready"
     assert fallback_body["graph"]["token_checked"] is True
     assert fallback_body["graph"]["credential_fields"] == {
         "tenant_id": "inherited",
         "client_id": "inherited",
         "client_secret": "inherited",
     }
+    assert fallback_body["graph"]["oauth"]["credential_source"] == "bot"
+    assert fallback_body["graph"]["oauth"]["token"]["expires_in_seconds"] == 3600
+    assert fallback_body["graph"]["oauth"]["app"]["available"] is True
+    assert fallback_body["graph"]["oauth"]["tenant"]["primary_domain"] == "example.com"
 
     with make_client(
         db_session,
@@ -219,15 +294,22 @@ def test_readiness_reports_graph_credentials_and_bot_fallback(db_session: Sessio
     graph_body = graph_response.json()
     assert graph_body["graph"]["ready"] is True
     assert graph_body["graph"]["credential_source"] == "graph"
+    assert graph_body["graph"]["auth_status"] == "ready"
     assert graph_body["graph"]["credential_fields"] == {
         "tenant_id": "configured",
         "client_id": "configured",
         "client_secret": "configured",
     }
+    assert graph_body["graph"]["oauth"]["credential_source"] == "graph"
+    assert graph_body["graph"]["oauth"]["app"]["display_name"] == "Teams Rehook App"
 
 
 def test_readiness_reports_mixed_graph_credentials_and_bot_fallback(db_session: Session, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("app.routers.admin.fetch_graph_token", lambda settings: ("graph-token", 3600))
+    monkeypatch.setattr(
+        "app.routers.admin._fetch_oauth_token",
+        lambda **kwargs: fake_token_response(kwargs["scope"]),
+    )
+    monkeypatch.setattr("app.routers.admin._metadata_from_graph_token", lambda access_token, client_id: metadata_pair())
     with make_client(
         db_session,
         monkeypatch,
@@ -242,6 +324,7 @@ def test_readiness_reports_mixed_graph_credentials_and_bot_fallback(db_session: 
     body = response.json()
     assert body["graph"]["ready"] is True
     assert body["graph"]["credential_source"] == "bot"
+    assert body["graph"]["auth_status"] == "ready"
     assert body["graph"]["credential_fields"] == {
         "tenant_id": "configured",
         "client_id": "inherited",
@@ -249,11 +332,53 @@ def test_readiness_reports_mixed_graph_credentials_and_bot_fallback(db_session: 
     }
 
 
+def test_readiness_keeps_graph_ready_when_metadata_is_unavailable(db_session: Session, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        "app.routers.admin._fetch_oauth_token",
+        lambda **kwargs: fake_token_response(kwargs["scope"]),
+    )
+    monkeypatch.setattr(
+        "app.routers.admin._metadata_from_graph_token",
+        lambda access_token, client_id: (
+            OAuthAppDiagnosticsOut(
+                metadata_checked=True,
+                available=False,
+                message="App metadata is not available with the current Graph permissions.",
+            ),
+            OAuthTenantDiagnosticsOut(
+                metadata_checked=True,
+                available=False,
+                message="Tenant metadata is not available with the current Graph permissions.",
+            ),
+        ),
+    )
+    with make_client(
+        db_session,
+        monkeypatch,
+        GRAPH_TENANT_ID="tenant",
+        GRAPH_CLIENT_ID="client",
+        GRAPH_CLIENT_SECRET="secret",
+    ) as client:
+        csrf_token = login_admin(client)
+        response = client.get("/api/v1/admin/readiness", headers={"X-CSRF-Token": csrf_token})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["graph"]["ready"] is True
+    assert body["graph"]["auth_status"] == "permission_warning"
+    assert body["graph"]["token_request_succeeded"] is True
+    assert body["graph"]["oauth"]["app"]["metadata_checked"] is True
+    assert body["graph"]["oauth"]["app"]["available"] is False
+    assert body["graph"]["oauth"]["tenant"]["metadata_checked"] is True
+    assert body["graph"]["oauth"]["tenant"]["available"] is False
+    assert "raw" not in body["graph"]["oauth"]["app"]["message"]
+
+
 def test_readiness_reports_graph_token_error_without_leaking_details(db_session: Session, monkeypatch: pytest.MonkeyPatch):
-    def fail_token(settings):
+    def fail_token(**kwargs):
         raise GraphRequestError("raw graph response that should not leak")
 
-    monkeypatch.setattr("app.routers.admin.fetch_graph_token", fail_token)
+    monkeypatch.setattr("app.routers.admin._fetch_oauth_token", fail_token)
     with make_client(
         db_session,
         monkeypatch,
@@ -270,4 +395,6 @@ def test_readiness_reports_graph_token_error_without_leaking_details(db_session:
     assert body["graph"]["auth_status"] == "token_error"
     assert body["graph"]["token_checked"] is True
     assert body["graph"]["token_request_succeeded"] is False
+    assert body["graph"]["oauth"]["token"]["checked"] is True
+    assert body["graph"]["oauth"]["token"]["succeeded"] is False
     assert "raw graph response" not in body["graph"]["message"]

@@ -95,6 +95,20 @@ GRAPH_CLIENT_ID=
 GRAPH_CLIENT_SECRET=
 ```
 
+### Microsoft Graph Permissions
+
+Graph access is optional and only supports target search and display-name resolution. Teams delivery itself does not use Microsoft Graph message send or message read APIs; delivery uses Bot Framework credentials plus a captured Teams conversation reference.
+
+Configure these permissions as Microsoft Graph **Application permissions** on the Entra app registration used by `GRAPH_CLIENT_ID`, then grant tenant admin consent. Teams Rehook requests tokens with the client credentials flow and `GRAPH_SCOPE=https://graph.microsoft.com/.default`.
+
+The current Graph calls need:
+
+- `User.Read.All` for user search and name resolution through `/users` and `/users/{id}`.
+- `Team.ReadBasic.All` for team search and name resolution through `/teams` and `/teams/{team-id}`.
+- `Channel.ReadBasic.All` for channel lookup and name resolution through `/teams/{team-id}/channels` and `/teams/{team-id}/channels/{channel-id}`.
+
+Settings > Readiness also performs optional read-only diagnostics against `/servicePrincipals` and `/organization` to display the app registration and tenant metadata behind the token. If those diagnostic metadata calls are not available in a tenant, target search can still work as long as the required permissions above are present; the page will show a permission warning for the missing optional metadata.
+
 Use **Settings > Readiness** to verify delivery mode, credential completeness, Bot and Graph token request status, public URLs, payload limits, log retention, and cookie configuration.
 
 ## Prepare A Teams Target

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -35,6 +35,7 @@ import type {
   AuditEventOut,
   BotConversationReferenceOut,
   GraphTargetKind,
+  OAuthDiagnosticsOut,
   SystemLogEventOut,
   UserOut,
   WebhookDeliveryEventDetailOut,
@@ -1654,7 +1655,7 @@ function UsersPage() {
 }
 
 function SettingsPage() {
-  const { session } = useAppContext();
+  const { notify, session } = useAppContext();
   const [readiness, setReadiness] = useState<AdminReadinessOut | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -1675,6 +1676,11 @@ function SettingsPage() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  async function copyDiagnosticValue(value: string, label: string) {
+    await navigator.clipboard.writeText(value);
+    notify({ tone: "success", title: `${label} copied` });
+  }
 
   return (
     <>
@@ -1701,77 +1707,327 @@ function SettingsPage() {
           </div>
         </Card>
       ) : readiness ? (
-        <div className="settings-grid">
-          <Card title="Delivery" description="Teams delivery mode and Bot Framework readiness.">
-            <div className="readiness-header">
-              <StatusBadge label={authStatusLabel(readiness.bot.auth_status)} tone={authStatusTone(readiness.bot.auth_status)} />
-              <StatusBadge label={readiness.delivery_mode} tone={readiness.delivery_mode === "real" ? "success" : "neutral"} />
+        <div className="settings-page">
+          <section className="settings-section">
+            <div className="settings-section-header">
+              <h2>Integrations</h2>
+              <p>Health, credentials and token checks for the services that relay messages into Teams.</p>
             </div>
-            <p className="muted">{readiness.bot.message}</p>
-            <dl className="definition-list">
-              <dt>Tenant ID</dt>
-              <dd>{credentialStatusLabel(readiness.bot.credential_fields.tenant_id)}</dd>
-              <dt>Client ID</dt>
-              <dd>{credentialStatusLabel(readiness.bot.credential_fields.client_id)}</dd>
-              <dt>Client secret</dt>
-              <dd>{credentialStatusLabel(readiness.bot.credential_fields.client_secret)}</dd>
-              <dt>Default service URL</dt>
-              <dd>{credentialStatusLabel(readiness.bot.credential_fields.default_service_url)}</dd>
-              <dt>Token request</dt>
-              <dd>{tokenStatusLabel(readiness.bot.token_checked, readiness.bot.token_request_succeeded)}</dd>
-            </dl>
-          </Card>
-          <Card title="Microsoft Graph" description="Target search and display-name resolution readiness.">
-            <div className="readiness-header">
-              <StatusBadge label={authStatusLabel(readiness.graph.auth_status)} tone={authStatusTone(readiness.graph.auth_status)} />
-              <StatusBadge label={graphCredentialLabel(readiness.graph.credential_source)} />
+            <div className="settings-integrations-grid">
+              <IntegrationReadinessCard
+                title="Delivery"
+                description="Teams delivery mode and Bot Framework readiness."
+                authStatus={readiness.bot.auth_status}
+                badges={[
+                  { label: readiness.delivery_mode, tone: readiness.delivery_mode === "real" ? "success" : "neutral" },
+                  {
+                    label: readiness.bot.default_service_url_configured ? "Service URL set" : "No default service URL",
+                    tone: readiness.bot.default_service_url_configured ? "success" : "neutral",
+                  },
+                ]}
+                message={readiness.bot.message}
+                oauth={readiness.bot.oauth}
+                credentialRows={[
+                  ["Tenant ID", credentialStatusLabel(readiness.bot.credential_fields.tenant_id)],
+                  ["Client ID", credentialStatusLabel(readiness.bot.credential_fields.client_id)],
+                  ["Client secret", credentialStatusLabel(readiness.bot.credential_fields.client_secret)],
+                  ["Default service URL", credentialStatusLabel(readiness.bot.credential_fields.default_service_url)],
+                ]}
+                onCopy={copyDiagnosticValue}
+              />
+              <IntegrationReadinessCard
+                title="Microsoft Graph"
+                description="Target search and display-name resolution readiness."
+                authStatus={readiness.graph.auth_status}
+                badges={[
+                  {
+                    label: graphCredentialLabel(readiness.graph.credential_source),
+                    tone: readiness.graph.credential_source === "missing" ? "warn" : "neutral",
+                  },
+                ]}
+                message={readiness.graph.message}
+                oauth={readiness.graph.oauth}
+                credentialRows={[
+                  ["Tenant ID", credentialStatusLabel(readiness.graph.credential_fields.tenant_id)],
+                  ["Client ID", credentialStatusLabel(readiness.graph.credential_fields.client_id)],
+                  ["Client secret", credentialStatusLabel(readiness.graph.credential_fields.client_secret)],
+                ]}
+                onCopy={copyDiagnosticValue}
+              />
             </div>
-            <p className="muted">{readiness.graph.message}</p>
-            <p className="muted">Graph helps find Teams, channels and users. It does not prove that the bot can send there; validate each route with Send test.</p>
-            <dl className="definition-list">
-              <dt>Tenant ID</dt>
-              <dd>{credentialStatusLabel(readiness.graph.credential_fields.tenant_id)}</dd>
-              <dt>Client ID</dt>
-              <dd>{credentialStatusLabel(readiness.graph.credential_fields.client_id)}</dd>
-              <dt>Client secret</dt>
-              <dd>{credentialStatusLabel(readiness.graph.credential_fields.client_secret)}</dd>
-              <dt>Token request</dt>
-              <dd>{tokenStatusLabel(readiness.graph.token_checked, readiness.graph.token_request_succeeded)}</dd>
-            </dl>
-          </Card>
-          <Card title="Runtime" description="Public URLs, limits and retention used by relay operations.">
-            <dl className="definition-list">
-              <dt>Application</dt>
-              <dd>{readiness.app_name} {readiness.app_version}</dd>
-              <dt>Public URL</dt>
-              <dd>{readiness.runtime.app_public_base_url}</dd>
-              <dt>Frontend URL</dt>
-              <dd>{readiness.runtime.frontend_base_url}</dd>
-              <dt>CORS origins</dt>
-              <dd>{readiness.runtime.cors_origins.join(", ") || "-"}</dd>
-              <dt>Payload limit</dt>
-              <dd>{formatBytes(readiness.runtime.webhook_max_payload_bytes)}</dd>
-              <dt>Log retention</dt>
-              <dd>{readiness.runtime.log_retention_days} days</dd>
-              <dt>Cleanup interval</dt>
-              <dd>{readiness.runtime.log_cleanup_interval_minutes} minutes</dd>
-              <dt>Secure session cookie</dt>
-              <dd>{yesNo(readiness.runtime.session_secure_cookie)}</dd>
-            </dl>
-          </Card>
-          <Card title="Operator checklist" description="Minimum path to a working relay route.">
-            <ol className="check-list">
-              <li>Add the bot to the target Teams chat or channel.</li>
-              <li>Send or mention the bot once so Teams Rehook captures the conversation.</li>
-              <li>Create a webhook route from that known conversation.</li>
-              <li>Use Send test and confirm the message appears in Teams.</li>
-              <li>Copy the relay URL into the source system and monitor Messages.</li>
-            </ol>
-          </Card>
+          </section>
+
+          <section className="settings-section settings-section--secondary">
+            <div className="settings-section-header">
+              <h2>Operations</h2>
+              <p>Runtime defaults and the shortest path to validating a production relay route.</p>
+            </div>
+            <div className="settings-support-grid">
+              <Card title="Runtime" description="Public URLs, limits and retention used by relay operations.">
+                <dl className="definition-list">
+                  <dt>Application</dt>
+                  <dd>
+                    {readiness.app_name} {readiness.app_version}
+                  </dd>
+                  <dt>Public URL</dt>
+                  <dd>{readiness.runtime.app_public_base_url}</dd>
+                  <dt>Frontend URL</dt>
+                  <dd>{readiness.runtime.frontend_base_url}</dd>
+                  <dt>CORS origins</dt>
+                  <dd>{readiness.runtime.cors_origins.join(", ") || "-"}</dd>
+                  <dt>Payload limit</dt>
+                  <dd>{formatBytes(readiness.runtime.webhook_max_payload_bytes)}</dd>
+                  <dt>Log retention</dt>
+                  <dd>{readiness.runtime.log_retention_days} days</dd>
+                  <dt>Cleanup interval</dt>
+                  <dd>{readiness.runtime.log_cleanup_interval_minutes} minutes</dd>
+                  <dt>Secure session cookie</dt>
+                  <dd>{yesNo(readiness.runtime.session_secure_cookie)}</dd>
+                </dl>
+              </Card>
+              <Card title="Operator checklist" description="Minimum path to a working relay route.">
+                <ol className="check-list">
+                  <li>Add the bot to the target Teams chat or channel.</li>
+                  <li>Send or mention the bot once so Teams Rehook captures the conversation.</li>
+                  <li>Create a webhook route from that known conversation.</li>
+                  <li>Use Send test and confirm the message appears in Teams.</li>
+                  <li>Copy the relay URL into the source system and monitor Messages.</li>
+                </ol>
+              </Card>
+            </div>
+          </section>
         </div>
       ) : null}
     </>
   );
+}
+
+function IntegrationReadinessCard({
+  authStatus,
+  badges,
+  credentialRows,
+  description,
+  message,
+  oauth,
+  onCopy,
+  title,
+}: {
+  authStatus: string;
+  badges: Array<{ label: string; tone?: "neutral" | "success" | "warn" | "danger" }>;
+  credentialRows: Array<[string, string]>;
+  description: string;
+  message: string;
+  oauth: OAuthDiagnosticsOut;
+  onCopy: (value: string, label: string) => void;
+  title: string;
+}) {
+  const attentionItems = readinessAttentionItems(authStatus, message, oauth);
+  const permissionTone = oauth.token.succeeded && oauth.token.roles.length ? "success" : oauth.token.succeeded ? "neutral" : "warn";
+
+  return (
+    <Card className="integration-readiness-card">
+      <div className="integration-card-content">
+        <div className="integration-status">
+          <div className="integration-status-main">
+            <div>
+              <p className="integration-kicker">{title}</p>
+              <h2>{description}</h2>
+            </div>
+            <div className={classNames("health-state", `health-state--${authStatusTone(authStatus)}`)}>
+              <span aria-hidden="true" />
+              <strong>{healthStateLabel(authStatus)}</strong>
+            </div>
+            <p>{readinessSummary(authStatus, message, oauth)}</p>
+          </div>
+          <div className="integration-status-badges">
+            <StatusBadge label={authStatusLabel(authStatus)} tone={authStatusTone(authStatus)} />
+            {badges.map((badge) => (
+              <StatusBadge key={badge.label} label={badge.label} tone={badge.tone ?? "neutral"} />
+            ))}
+          </div>
+        </div>
+
+        <section className="settings-subsection">
+          <div className="settings-subsection-header">
+            <h3>Operational status</h3>
+          </div>
+          <dl className="settings-kv-list">
+            <KeyValue label="Token" tone={oauth.token.succeeded ? "success" : oauth.token.checked ? "danger" : "neutral"}>
+              {tokenFact(oauth)}
+            </KeyValue>
+            <KeyValue label="Token expires" tone={oauth.token.succeeded ? "success" : "neutral"}>
+              {tokenExpirationLabel(oauth)}
+            </KeyValue>
+            <KeyValue label="Credential source">{oauthCredentialSourceLabel(oauth.credential_source)}</KeyValue>
+            <KeyValue label="Scope">{compactScope(oauth.scope || oauth.token.audience)}</KeyValue>
+          </dl>
+        </section>
+
+        <section className="settings-subsection">
+          <div className="settings-subsection-header">
+            <h3>Credentials</h3>
+          </div>
+          <div className="credential-check-grid">
+            {credentialRows.map(([label, value]) => (
+              <CredentialCheck key={label} label={label} value={value} />
+            ))}
+          </div>
+        </section>
+
+        <section className="settings-subsection">
+          <div className="settings-subsection-header">
+            <h3>Permissions</h3>
+            <p>{permissionSummary(oauth)}</p>
+          </div>
+          <div className="permission-badge-list">
+            {oauth.token.roles.length ? (
+              oauth.token.roles.map((role) => (
+                <span className="permission-badge permission-badge--success" key={role}>
+                  {role}
+                </span>
+              ))
+            ) : (
+              <span className={classNames("permission-badge", `permission-badge--${permissionTone}`)}>
+                {oauth.token.succeeded ? "No roles reported" : "Permissions not verified"}
+              </span>
+            )}
+          </div>
+        </section>
+
+        {attentionItems.length ? (
+          <section className="settings-subsection">
+            <div className="settings-subsection-header">
+              <h3>Needs attention</h3>
+            </div>
+            <ul className="attention-list">
+              {attentionItems.map((item) => (
+                <li className={classNames("attention-item", `attention-item--${item.tone}`)} key={item.title}>
+                  <strong>{item.title}</strong>
+                  <span>{item.description}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+
+        <details className="advanced-details">
+          <summary>
+            <span>Advanced technical details</span>
+            <small>IDs, claims and directory metadata</small>
+          </summary>
+          <dl className="definition-list definition-list--compact advanced-definition-list">
+            <dt>Tenant ID</dt>
+            <dd>
+              <DiagnosticValue value={oauth.tenant_id} label="Tenant ID" onCopy={onCopy} />
+            </dd>
+            <dt>Client ID</dt>
+            <dd>
+              <DiagnosticValue value={oauth.client_id} label="Client ID" onCopy={onCopy} />
+            </dd>
+            <dt>Audience</dt>
+            <dd>{oauth.token.audience || "-"}</dd>
+            <dt>Issuer</dt>
+            <dd>{oauth.token.issuer || "-"}</dd>
+            <dt>App name</dt>
+            <dd>{oauth.app.display_name || "-"}</dd>
+            <dt>App ID</dt>
+            <dd>
+              <DiagnosticValue value={oauth.app.app_id} label="App ID" onCopy={onCopy} />
+            </dd>
+            <dt>Service principal</dt>
+            <dd>
+              <DiagnosticValue value={oauth.app.service_principal_id} label="Service principal ID" onCopy={onCopy} />
+            </dd>
+            <dt>Principal type</dt>
+            <dd>{oauth.app.service_principal_type || "-"}</dd>
+            <dt>Account enabled</dt>
+            <dd>{oauth.app.account_enabled === null ? "-" : yesNo(oauth.app.account_enabled)}</dd>
+            <dt>Tenant</dt>
+            <dd>{oauth.tenant.display_name || "-"}</dd>
+            <dt>Primary domain</dt>
+            <dd>{oauth.tenant.primary_domain || "-"}</dd>
+          </dl>
+        </details>
+      </div>
+    </Card>
+  );
+}
+
+function KeyValue({
+  children,
+  label,
+  tone = "neutral",
+}: {
+  children: ReactNode;
+  label: string;
+  tone?: "neutral" | "success" | "warn" | "danger";
+}) {
+  return (
+    <>
+      <dt>{label}</dt>
+      <dd className={classNames("settings-kv-value", tone !== "neutral" && `settings-kv-value--${tone}`)}>
+        <span aria-hidden="true" />
+        <strong>{children}</strong>
+      </dd>
+    </>
+  );
+}
+
+function CredentialCheck({ label, value }: { label: string; value: string }) {
+  const tone = value === "Missing" ? "warn" : value === "Configured" || value === "Inherited" ? "success" : "neutral";
+
+  return (
+    <div className={classNames("credential-check", `credential-check--${tone}`)}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function DiagnosticValue({ label, onCopy, value }: { label: string; onCopy: (value: string, label: string) => void; value: string }) {
+  if (!value) return <>-</>;
+  return (
+    <span className="diagnostic-value">
+      <code>{shortDiagnosticId(value)}</code>
+      <button className="icon-button icon-button--tiny" type="button" onClick={() => onCopy(value, label)} aria-label={`Copy ${label}`} title={`Copy ${label}`}>
+        <ClipboardCopy aria-hidden="true" focusable="false" />
+      </button>
+    </span>
+  );
+}
+
+function tokenFact(oauth: OAuthDiagnosticsOut): string {
+  if (!oauth.token.checked) return "Not checked";
+  if (!oauth.token.succeeded) return "Failed";
+  if (!oauth.token.expires_at) return "Valid";
+  return `Valid ${formatRelativeTime(oauth.token.expires_at)}`;
+}
+
+function tokenExpirationLabel(oauth: OAuthDiagnosticsOut): string {
+  if (!oauth.token.checked) return "Not checked";
+  if (!oauth.token.succeeded) return "Unavailable";
+  if (!oauth.token.expires_at) return "Not provided";
+  return `${formatRelativeTime(oauth.token.expires_at)} (${formatDateTime(oauth.token.expires_at)})`;
+}
+
+function readinessSummary(authStatus: string, message: string, oauth: OAuthDiagnosticsOut): string {
+  if (authStatus === "ready") return "Token checks passed, required credentials are present and the integration is ready for production traffic.";
+  if (authStatus === "permission_warning") return "Core token checks passed, but optional directory metadata is limited by Microsoft Graph permissions.";
+  if (authStatus === "mock") return "Delivery is running in mock mode, so Teams messages are validated without being sent.";
+  if (authStatus === "token_error") return message || "Token verification failed, so runtime delivery cannot be trusted yet.";
+  if (authStatus === "incomplete") return message || "Required credentials are missing for this integration.";
+  if (oauth.token.succeeded) return "Token checks passed, but the readiness state needs review.";
+  return message || "Readiness could not be fully determined.";
+}
+
+function compactScope(value: string): string {
+  if (!value) return "-";
+  return value.replace(/^https:\/\/(graph\.microsoft\.com|api\.botframework\.com)\//, "");
+}
+
+function shortDiagnosticId(value: string): string {
+  if (value.length <= 18) return value;
+  return `${value.slice(0, 8)}...${value.slice(-6)}`;
 }
 
 function yesNo(value: boolean): string {
@@ -1781,6 +2037,12 @@ function yesNo(value: boolean): string {
 function graphCredentialLabel(source: string): string {
   if (source === "graph") return "Graph credentials";
   if (source === "bot") return "Bot fallback";
+  return "Missing";
+}
+
+function oauthCredentialSourceLabel(source: string): string {
+  if (source === "graph") return "Graph credentials";
+  if (source === "bot") return "Bot credentials";
   return "Missing";
 }
 
@@ -1800,15 +2062,62 @@ function authStatusLabel(status: string): string {
 }
 
 function authStatusTone(status: string): "neutral" | "success" | "warn" | "danger" {
-  if (status === "ready" || status === "permission_warning") return "success";
+  if (status === "ready") return "success";
+  if (status === "permission_warning") return "warn";
   if (status === "token_error") return "danger";
   if (status === "incomplete") return "warn";
   return "neutral";
 }
 
-function tokenStatusLabel(checked: boolean, succeeded: boolean): string {
-  if (!checked) return "Not checked";
-  return succeeded ? "Succeeded" : "Failed";
+function healthStateLabel(status: string): string {
+  if (status === "ready" || status === "mock") return "Ready";
+  if (status === "token_error") return "Error";
+  return "Warning";
+}
+
+function permissionSummary(oauth: OAuthDiagnosticsOut): string {
+  if (!oauth.token.checked) return "Permissions have not been checked yet.";
+  if (!oauth.token.succeeded) return "Permissions cannot be verified until token acquisition succeeds.";
+  if (oauth.token.roles.length) return `${oauth.token.roles.length} application permission${oauth.token.roles.length === 1 ? "" : "s"} returned in the token.`;
+  return "The token is valid, but no application roles were reported.";
+}
+
+function readinessAttentionItems(authStatus: string, message: string, oauth: OAuthDiagnosticsOut): Array<{ title: string; description: string; tone: "warn" | "danger" }> {
+  const items: Array<{ title: string; description: string; tone: "warn" | "danger" }> = [];
+
+  if (authStatus === "token_error") {
+    items.push({
+      title: "Token request failed",
+      description: message || "Required: fix the credentials or tenant configuration before this integration can be trusted.",
+      tone: "danger",
+    });
+  }
+
+  if (authStatus === "incomplete") {
+    items.push({
+      title: "Required credentials are missing",
+      description: message || "Required: configure the missing tenant, client or secret values.",
+      tone: "warn",
+    });
+  }
+
+  if (oauth.app.metadata_checked && !oauth.app.available) {
+    items.push({
+      title: "App metadata is limited",
+      description: `${oauth.app.message || "App metadata is not available."} Optional: this only affects diagnostics such as app display name.`,
+      tone: "warn",
+    });
+  }
+
+  if (oauth.tenant.metadata_checked && !oauth.tenant.available) {
+    items.push({
+      title: "Tenant metadata is limited",
+      description: `${oauth.tenant.message || "Tenant metadata is not available."} Optional: this only affects tenant display details.`,
+      tone: "warn",
+    });
+  }
+
+  return items;
 }
 
 function formatBytes(value: number): string {

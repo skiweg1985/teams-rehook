@@ -202,6 +202,7 @@ export type AdminReadinessOut = {
     credentials_configured: boolean;
     default_service_url_configured: boolean;
     credential_fields: Record<string, string>;
+    oauth: OAuthDiagnosticsOut;
   };
   graph: {
     ready: boolean;
@@ -212,6 +213,7 @@ export type AdminReadinessOut = {
     configured: boolean;
     credential_source: "graph" | "bot" | "missing" | string;
     credential_fields: Record<string, string>;
+    oauth: OAuthDiagnosticsOut;
   };
   runtime: {
     app_public_base_url: string;
@@ -221,6 +223,39 @@ export type AdminReadinessOut = {
     log_retention_days: number;
     log_cleanup_interval_minutes: number;
     session_secure_cookie: boolean;
+  };
+};
+
+export type OAuthDiagnosticsOut = {
+  credential_source: string;
+  tenant_id: string;
+  client_id: string;
+  scope: string;
+  token: {
+    checked: boolean;
+    succeeded: boolean;
+    expires_in_seconds: number | null;
+    expires_at: string | null;
+    audience: string;
+    issuer: string;
+    roles: string[];
+  };
+  app: {
+    metadata_checked: boolean;
+    available: boolean;
+    display_name: string;
+    app_id: string;
+    service_principal_id: string;
+    account_enabled: boolean | null;
+    service_principal_type: string;
+    message: string;
+  };
+  tenant: {
+    metadata_checked: boolean;
+    available: boolean;
+    display_name: string;
+    primary_domain: string;
+    message: string;
   };
 };
 

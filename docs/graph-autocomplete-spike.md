@@ -25,6 +25,8 @@ GRAPH_SCOPE=https://graph.microsoft.com/.default
 
 Admin consent is expected for the app-only permissions.
 
+Settings readiness also tries optional read-only metadata checks against `/servicePrincipals` and `/organization` so operators can see which app registration and tenant are behind the token. Missing optional metadata should produce a readiness warning, not block Graph target search when the starting permissions above are present.
+
 ## Implemented API Surface
 
 - `GET /api/v1/teams-targets/search?kind=user|team&q=...`

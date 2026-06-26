@@ -242,17 +242,58 @@ class ReadinessComponentOut(BaseModel):
     token_request_succeeded: bool
 
 
+class OAuthTokenDiagnosticsOut(BaseModel):
+    checked: bool = False
+    succeeded: bool = False
+    expires_in_seconds: int | None = None
+    expires_at: datetime | None = None
+    audience: str = ""
+    issuer: str = ""
+    roles: list[str] = Field(default_factory=list)
+
+
+class OAuthAppDiagnosticsOut(BaseModel):
+    metadata_checked: bool = False
+    available: bool = False
+    display_name: str = ""
+    app_id: str = ""
+    service_principal_id: str = ""
+    account_enabled: bool | None = None
+    service_principal_type: str = ""
+    message: str = ""
+
+
+class OAuthTenantDiagnosticsOut(BaseModel):
+    metadata_checked: bool = False
+    available: bool = False
+    display_name: str = ""
+    primary_domain: str = ""
+    message: str = ""
+
+
+class OAuthDiagnosticsOut(BaseModel):
+    credential_source: str = ""
+    tenant_id: str = ""
+    client_id: str = ""
+    scope: str = ""
+    token: OAuthTokenDiagnosticsOut = Field(default_factory=OAuthTokenDiagnosticsOut)
+    app: OAuthAppDiagnosticsOut = Field(default_factory=OAuthAppDiagnosticsOut)
+    tenant: OAuthTenantDiagnosticsOut = Field(default_factory=OAuthTenantDiagnosticsOut)
+
+
 class BotReadinessOut(ReadinessComponentOut):
     mode: str
     credentials_configured: bool
     default_service_url_configured: bool
     credential_fields: dict[str, str]
+    oauth: OAuthDiagnosticsOut
 
 
 class GraphReadinessOut(ReadinessComponentOut):
     configured: bool
     credential_source: str
     credential_fields: dict[str, str]
+    oauth: OAuthDiagnosticsOut
 
 
 class RuntimeReadinessOut(BaseModel):
