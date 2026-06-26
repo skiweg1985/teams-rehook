@@ -63,3 +63,64 @@ export type AuditEventOut = {
   metadata: Record<string, unknown>;
   created_at: string;
 };
+
+export type WebhookTargetType = "bot_conversation";
+
+export type WebhookRouteOut = {
+  id: string;
+  organization_id: string;
+  name: string;
+  source_system: string;
+  is_active: boolean;
+  target_type: WebhookTargetType;
+  target_name: string;
+  bot_service_url: string;
+  bot_conversation_id: string;
+  webhook_url: string | null;
+  webhook_url_available: boolean;
+  last_delivery_status: "delivered" | "failed" | "rejected" | null;
+  last_delivery_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WebhookRouteCreate = {
+  name: string;
+  source_system: string;
+  is_active: boolean;
+  target_type: WebhookTargetType;
+  target_name: string;
+  bot_service_url: string;
+  bot_conversation_id: string;
+};
+
+export type WebhookRouteUpdate = Partial<WebhookRouteCreate>;
+
+export type WebhookRouteTestRequest = {
+  title: string;
+  text: string;
+  severity: string;
+};
+
+export type WebhookDeliveryOut = {
+  ok: boolean;
+  status: "delivered" | "failed" | "rejected";
+  route_id: string;
+  delivery_event_id: string;
+  message: string;
+};
+
+export type WebhookRouteDefaultsOut = {
+  bot_default_service_url: string;
+};
+
+export type WebhookDeliveryEventOut = {
+  id: string;
+  route_id: string | null;
+  status: "delivered" | "failed" | "rejected";
+  request_metadata: Record<string, unknown>;
+  normalized_message: Record<string, unknown>;
+  delivery_result: Record<string, unknown>;
+  error: string;
+  created_at: string;
+};

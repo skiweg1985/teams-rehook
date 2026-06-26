@@ -27,9 +27,22 @@ class Settings(BaseSettings):
     bootstrap_admin_password: str = "change-me-admin-password"
     bootstrap_admin_display_name: str = "App Admin"
 
+    bot_tenant_id: str = ""
+    bot_client_id: str = ""
+    bot_client_secret: str = ""
+    botframework_scope: str = "https://api.botframework.com/.default"
+    bot_delivery_mode: str = "mock"
+    bot_default_service_url: str = ""
+    webhook_max_payload_bytes: int = 64_000
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def bot_delivery_mode_normalized(self) -> str:
+        mode = self.bot_delivery_mode.strip().lower()
+        return mode if mode in {"mock", "real"} else "mock"
 
 
 @lru_cache

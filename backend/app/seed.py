@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from sqlalchemy import select
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -11,6 +12,7 @@ from app.security import hash_secret
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
+    _ensure_additive_schema()
     settings = get_settings()
     with Session(engine) as db:
         org = db.scalar(select(Organization).where(Organization.slug == settings.default_org_slug))
@@ -61,3 +63,26 @@ def init_db() -> None:
                 ]
             )
         db.commit()
+
+
+def _ensure_additive_schema() -> None:
+    with engine.begin() as connection:
+        dialect = engine.dialect.name
+        if dialect == "sqlite":
+            columns = {row[1] for row in connection.execute(text("PRAGMA table_info(webhook_routes)")).all()}
+            if "route_token" not in columns:
+                connection.execute(text("ALTER TABLE webhook_routes ADD COLUMN route_token TEXT DEFAULT '' NOT NULL"))
+            return
+
+        exists = connection.execute(
+            text(
+                """
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_name = 'webhook_routes'
+                  AND column_name = 'route_token'
+                """
+            )
+        ).first()
+        if not exists:
+            connection.execute(text("ALTER TABLE webhook_routes ADD COLUMN route_token TEXT DEFAULT '' NOT NULL"))

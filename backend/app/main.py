@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
-from app.routers import admin, auth, demo_items, public
+from app.routers import admin, auth, demo_items, public, webhook_routes
 from app.seed import init_db
 
 
@@ -34,6 +34,7 @@ def create_app() -> FastAPI:
     app.include_router(public.router, prefix=settings.api_v1_prefix)
     app.include_router(auth.router, prefix=settings.api_v1_prefix)
     app.include_router(demo_items.router, prefix=settings.api_v1_prefix)
+    app.include_router(webhook_routes.router, prefix=settings.api_v1_prefix)
     app.include_router(admin.router, prefix=settings.api_v1_prefix)
     return app
 

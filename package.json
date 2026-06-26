@@ -7,7 +7,8 @@
   "scripts": {
     "frontend:dev": "npm --prefix frontend run dev",
     "frontend:build": "npm --prefix frontend run build",
-    "backend:check": "python3 -m py_compile backend/app/*.py backend/app/routers/*.py backend/app/core/*.py",
-    "test": "npm run frontend:build && npm run backend:check"
+    "backend:check": "python3 -m py_compile backend/app/*.py backend/app/routers/*.py backend/app/core/*.py backend/app/services/*.py",
+    "backend:test": "python3 -m pytest",
+    "test": "npm run frontend:build && npm run backend:check && npm run backend:test"
   }
 }

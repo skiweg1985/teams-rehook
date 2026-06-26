@@ -68,6 +68,44 @@ class DemoItem(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
 
+class WebhookRoute(Base):
+    __tablename__ = "webhook_routes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    created_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    source_system: Mapped[str] = mapped_column(String(120), default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    route_token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    route_token: Mapped[str] = mapped_column(Text, default="")
+    target_type: Mapped[str] = mapped_column(String(32), default="bot_conversation")
+    target_name: Mapped[str] = mapped_column(String(200))
+    bot_service_url: Mapped[str] = mapped_column(Text, default="")
+    bot_conversation_id: Mapped[str] = mapped_column(Text, default="")
+    last_delivery_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_delivery_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+    __table_args__ = (UniqueConstraint("organization_id", "name", name="uq_webhook_routes_org_name"),)
+
+
+class WebhookDeliveryEvent(Base):
+    __tablename__ = "webhook_delivery_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str | None] = mapped_column(ForeignKey("organizations.id"), nullable=True, index=True)
+    route_id: Mapped[str | None] = mapped_column(ForeignKey("webhook_routes.id"), nullable=True, index=True)
+    route_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    request_metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    normalized_message_json: Mapped[str] = mapped_column(Text, default="{}")
+    delivery_result_json: Mapped[str] = mapped_column(Text, default="{}")
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_events"
 

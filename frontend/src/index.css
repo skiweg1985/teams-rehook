@@ -396,6 +396,7 @@ button:disabled {
   border-bottom: 1px solid var(--line);
   text-align: left;
   vertical-align: middle;
+  overflow-wrap: anywhere;
 }
 
 .data-table th {
@@ -474,6 +475,42 @@ button:disabled {
 
 .row-actions {
   gap: var(--space-2);
+}
+
+.stacked-cell {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 700;
+}
+
+.checkbox-field input {
+  width: auto;
+  min-height: auto;
+}
+
+.webhook-url-box {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+}
+
+.webhook-url-box code {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--ink-secondary);
+}
+
+.webhook-url-box small {
+  color: var(--muted);
 }
 
 .modal-root {
@@ -643,7 +680,7 @@ button:disabled {
   }
 
   .nav-list {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .nav-link {

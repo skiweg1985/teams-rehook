@@ -3,15 +3,17 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { api } from "./api";
 import { AppProvider, useAppContext } from "./app-context";
 import { Card, DataTable, EmptyState, Field, LoadingScreen, Modal, PageIntro, StatusBadge, ToastViewport } from "./components";
+import { isApiError } from "./errors";
 import { ThemeToggle } from "./theme-toggle";
-import type { AuditEventOut, DemoItemOut, DemoItemStatus, UserOut } from "./types";
+import type { AuditEventOut, DemoItemOut, DemoItemStatus, UserOut, WebhookDeliveryEventOut, WebhookRouteOut } from "./types";
 import { classNames, compactJson, formatDateTime } from "./utils";
 
-type RouteName = "dashboard" | "items" | "users" | "settings" | "logs";
+type RouteName = "dashboard" | "items" | "webhooks" | "users" | "settings" | "logs";
 
 const NAV: Array<{ route: RouteName; label: string; path: string; icon: string }> = [
   { route: "dashboard", label: "Dashboard", path: "/dashboard", icon: "D" },
   { route: "items", label: "Items", path: "/items", icon: "I" },
+  { route: "webhooks", label: "Webhooks", path: "/webhooks", icon: "W" },
   { route: "users", label: "Users", path: "/users", icon: "U" },
   { route: "settings", label: "Settings", path: "/settings", icon: "S" },
   { route: "logs", label: "Logs", path: "/logs", icon: "L" },
@@ -20,6 +22,7 @@ const NAV: Array<{ route: RouteName; label: string; path: string; icon: string }
 function routeFromPath(pathname: string): RouteName {
   if (pathname === "/" || pathname === "/dashboard") return "dashboard";
   if (pathname === "/items") return "items";
+  if (pathname === "/webhooks") return "webhooks";
   if (pathname === "/users") return "users";
   if (pathname === "/settings") return "settings";
   if (pathname === "/logs") return "logs";
@@ -138,6 +141,7 @@ function AppShell() {
         </header>
         {route === "dashboard" ? <DashboardPage /> : null}
         {route === "items" ? <ItemsPage /> : null}
+        {route === "webhooks" ? <WebhooksPage /> : null}
         {route === "users" ? <UsersPage /> : null}
         {route === "settings" ? <SettingsPage /> : null}
         {route === "logs" ? <LogsPage /> : null}
@@ -350,6 +354,360 @@ function ItemModal({
       </form>
     </Modal>
   );
+}
+
+function WebhooksPage() {
+  const { session, notify } = useAppContext();
+  const [routes, setRoutes] = useState<WebhookRouteOut[]>([]);
+  const [editing, setEditing] = useState<WebhookRouteOut | null>(null);
+  const [viewingLogs, setViewingLogs] = useState<WebhookRouteOut | null>(null);
+  const [botDefaultServiceUrl, setBotDefaultServiceUrl] = useState("");
+  const [testingId, setTestingId] = useState("");
+  const [regeneratingId, setRegeneratingId] = useState("");
+  const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
+
+  async function refresh() {
+    setRoutes(await api.webhookRoutes());
+  }
+
+  useEffect(() => {
+    void refresh();
+  }, [csrfToken]);
+
+  useEffect(() => {
+    void api.webhookRouteDefaults().then((defaults) => setBotDefaultServiceUrl(defaults.bot_default_service_url));
+  }, []);
+
+  async function deleteRoute(route: WebhookRouteOut) {
+    await api.deleteWebhookRoute(csrfToken, route.id);
+    notify({ tone: "info", title: "Webhook route deleted", description: route.name });
+    await refresh();
+  }
+
+  async function testRoute(route: WebhookRouteOut) {
+    setTestingId(route.id);
+    try {
+      await api.testWebhookRoute(csrfToken, route.id, {
+        title: `Relay test: ${route.name}`,
+        text: "This test message was sent from the Teams Webhook Relay.",
+        severity: "info",
+      });
+      notify({ tone: "success", title: "Test delivered", description: route.target_name });
+      await refresh();
+    } catch (error) {
+      notify({
+        tone: "error",
+        title: "Test failed",
+        description: isApiError(error) ? error.message : "The route could not be tested.",
+      });
+      await refresh();
+    } finally {
+      setTestingId("");
+    }
+  }
+
+  async function copyWebhookUrl(route: WebhookRouteOut) {
+    if (!route.webhook_url) return;
+    await navigator.clipboard.writeText(route.webhook_url);
+    notify({ tone: "success", title: "Webhook URL copied", description: route.name });
+  }
+
+  async function regenerateWebhookUrl(route: WebhookRouteOut) {
+    if (!window.confirm(`Generate a new relay URL for "${route.name}"? The previous URL will stop working.`)) return;
+    setRegeneratingId(route.id);
+    try {
+      const updated = await api.regenerateWebhookRouteUrl(csrfToken, route.id);
+      if (updated.webhook_url) await navigator.clipboard.writeText(updated.webhook_url);
+      notify({ tone: "success", title: "Webhook URL regenerated", description: "The new URL was copied." });
+      await refresh();
+    } catch (error) {
+      notify({
+        tone: "error",
+        title: "Regeneration failed",
+        description: isApiError(error) ? error.message : "The route URL could not be regenerated.",
+      });
+    } finally {
+      setRegeneratingId("");
+    }
+  }
+
+  return (
+    <>
+      <PageIntro
+        eyebrow="Teams relay"
+        title="Webhook routes"
+        description="Map stable relay webhook URLs to Teams bot targets and validate delivery with deterministic test sends."
+        actions={
+          <button className="primary-button" type="button" onClick={() => setEditing(emptyWebhookRoute(botDefaultServiceUrl))}>
+            New route
+          </button>
+        }
+      />
+      <Card>
+        <DataTable
+          columns={["Route", "Source", "Target", "Active", "Last delivery", "Relay URL", ""]}
+          rows={routes.map((route) => [
+            <strong>{route.name}</strong>,
+            <span className="muted">{route.source_system || "-"}</span>,
+            <div className="stacked-cell">
+              <strong>{route.target_name}</strong>
+              <span className="muted">Bot conversation</span>
+            </div>,
+            route.is_active ? <StatusBadge label="Active" tone="success" /> : <StatusBadge label="Disabled" tone="warn" />,
+            <DeliveryStatusBadge route={route} />,
+            route.webhook_url ? (
+              <button className="secondary-button secondary-button--small" type="button" onClick={() => void copyWebhookUrl(route)}>
+                Copy URL
+              </button>
+            ) : (
+              <span className="muted">Unavailable for old route</span>
+            ),
+            <div className="row-actions">
+              <button
+                className="secondary-button secondary-button--small"
+                type="button"
+                disabled={testingId === route.id}
+                onClick={() => void testRoute(route)}
+              >
+                {testingId === route.id ? "Testing..." : "Test"}
+              </button>
+              <button className="secondary-button secondary-button--small" type="button" onClick={() => setEditing(route)}>
+                Edit
+              </button>
+              <button className="secondary-button secondary-button--small" type="button" onClick={() => setViewingLogs(route)}>
+                Logs
+              </button>
+              <button
+                className="secondary-button secondary-button--small"
+                type="button"
+                disabled={regeneratingId === route.id}
+                onClick={() => void regenerateWebhookUrl(route)}
+              >
+                {regeneratingId === route.id ? "Regenerating..." : "Regenerate URL"}
+              </button>
+              <button className="ghost-button ghost-button--small" type="button" onClick={() => void deleteRoute(route)}>
+                Delete
+              </button>
+            </div>,
+          ])}
+          emptyTitle="No webhook routes"
+          emptyBody="Create a route to receive webhook requests and forward them through the Teams bot adapter."
+          rowKey={(index) => routes[index]?.id ?? index}
+        />
+      </Card>
+      {editing ? (
+        <WebhookRouteModal
+          route={editing.id ? editing : null}
+          initial={editing}
+          onClose={() => setEditing(null)}
+          onChanged={refresh}
+        />
+      ) : null}
+      {viewingLogs ? <WebhookDeliveryLogsModal route={viewingLogs} onClose={() => setViewingLogs(null)} /> : null}
+    </>
+  );
+}
+
+function DeliveryStatusBadge({ route }: { route: WebhookRouteOut }) {
+  if (!route.last_delivery_status) return <span className="muted">Not tested</span>;
+  const label = `${route.last_delivery_status}${route.last_delivery_at ? ` · ${formatDateTime(route.last_delivery_at)}` : ""}`;
+  if (route.last_delivery_status === "delivered") return <StatusBadge label={label} tone="success" />;
+  if (route.last_delivery_status === "failed") return <StatusBadge label={label} tone="danger" />;
+  return <StatusBadge label={label} tone="warn" />;
+}
+
+function emptyWebhookRoute(botDefaultServiceUrl = ""): WebhookRouteOut {
+  return {
+    id: "",
+    organization_id: "",
+    name: "",
+    source_system: "",
+    is_active: true,
+    target_type: "bot_conversation",
+    target_name: "",
+    bot_service_url: botDefaultServiceUrl,
+    bot_conversation_id: "",
+    webhook_url: null,
+    webhook_url_available: false,
+    last_delivery_status: null,
+    last_delivery_at: null,
+    created_at: "",
+    updated_at: "",
+  };
+}
+
+function WebhookRouteModal({
+  route,
+  initial,
+  onClose,
+  onChanged,
+}: {
+  route: WebhookRouteOut | null;
+  initial: WebhookRouteOut;
+  onClose: () => void;
+  onChanged: () => Promise<void>;
+}) {
+  const { session, notify } = useAppContext();
+  const [name, setName] = useState(initial.name);
+  const [sourceSystem, setSourceSystem] = useState(initial.source_system);
+  const [isActive, setIsActive] = useState(initial.is_active);
+  const [targetName, setTargetName] = useState(initial.target_name);
+  const [botServiceUrl, setBotServiceUrl] = useState(initial.bot_service_url);
+  const [botConversationId, setBotConversationId] = useState(initial.bot_conversation_id);
+  const [createdWebhookUrl, setCreatedWebhookUrl] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    const body = {
+      name: name.trim(),
+      source_system: sourceSystem.trim(),
+      is_active: isActive,
+      target_type: "bot_conversation" as const,
+      target_name: targetName.trim(),
+      bot_service_url: botServiceUrl.trim(),
+      bot_conversation_id: botConversationId.trim(),
+    };
+    try {
+      if (route) {
+        await api.updateWebhookRoute(csrfToken, route.id, body);
+        notify({ tone: "success", title: "Webhook route updated" });
+        await onChanged();
+        onClose();
+      } else {
+        const created = await api.createWebhookRoute(csrfToken, body);
+        setCreatedWebhookUrl(created.webhook_url);
+        notify({ tone: "success", title: "Webhook route created", description: "Copy the generated URL now." });
+        await onChanged();
+      }
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Saving the webhook route failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      title={route ? "Edit webhook route" : "New webhook route"}
+      description="Create stable relay URLs and map them to Teams bot conversations."
+      onClose={onClose}
+    >
+      <form className="compact-form" onSubmit={submit}>
+        <Field label="Name">
+          <input value={name} required maxLength={200} onChange={(event) => setName(event.target.value)} />
+        </Field>
+        <Field label="Source system" hint="For example PRTG, macmon or firewall-events.">
+          <input value={sourceSystem} maxLength={120} onChange={(event) => setSourceSystem(event.target.value)} />
+        </Field>
+        <label className="checkbox-field">
+          <input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} />
+          <span>Route is active</span>
+        </label>
+        <Field label="Teams target name">
+          <input value={targetName} required maxLength={200} onChange={(event) => setTargetName(event.target.value)} />
+        </Field>
+        <Field label="Bot service URL">
+          <input value={botServiceUrl} required onChange={(event) => setBotServiceUrl(event.target.value)} />
+        </Field>
+        <Field label="Bot conversation ID">
+          <textarea value={botConversationId} required onChange={(event) => setBotConversationId(event.target.value)} />
+        </Field>
+        {createdWebhookUrl ? (
+          <div className="webhook-url-box">
+            <strong>Relay webhook URL</strong>
+            <code>{createdWebhookUrl}</code>
+            <small>This URL is also available in the route table for copying later.</small>
+          </div>
+        ) : null}
+        {error ? <p className="form-error">{error}</p> : null}
+        <div className="form-actions">
+          <button className="secondary-button" type="button" onClick={onClose} disabled={busy}>
+            {createdWebhookUrl ? "Done" : "Cancel"}
+          </button>
+          <button className="primary-button" type="submit" disabled={busy || Boolean(createdWebhookUrl)}>
+            {busy ? "Saving..." : route ? "Save" : "Create route"}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function WebhookDeliveryLogsModal({ route, onClose }: { route: WebhookRouteOut; onClose: () => void }) {
+  const [events, setEvents] = useState<WebhookDeliveryEventOut[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let mounted = true;
+    setLoading(true);
+    setError("");
+    api
+      .webhookRouteDeliveries(route.id)
+      .then((rows) => {
+        if (mounted) setEvents(rows);
+      })
+      .catch((err) => {
+        if (mounted) setError(isApiError(err) ? err.message : "Delivery logs could not be loaded.");
+      })
+      .finally(() => {
+        if (mounted) setLoading(false);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [route.id]);
+
+  return (
+    <Modal title={`Delivery logs: ${route.name}`} description="Recent delivery attempts for this webhook route." onClose={onClose}>
+      {loading ? <p className="muted">Loading delivery logs...</p> : null}
+      {error ? <p className="form-error">{error}</p> : null}
+      {!loading && !error ? (
+        <DataTable
+          columns={["Status", "Time", "Message", "Payload", "Mode", "Error"]}
+          rows={events.map((event) => [
+            <DeliveryEventStatusBadge status={event.status} />,
+            formatDateTime(event.created_at),
+            <span>{eventTitle(event)}</span>,
+            <span className="muted">{eventPayloadType(event)}</span>,
+            <span className="muted">{eventDeliveryMode(event)}</span>,
+            event.error ? <span className="form-error">{event.error}</span> : <span className="muted">-</span>,
+          ])}
+          emptyTitle="No delivery logs"
+          emptyBody="Test sends and incoming webhooks will appear here."
+          rowKey={(index) => events[index]?.id ?? index}
+        />
+      ) : null}
+    </Modal>
+  );
+}
+
+function DeliveryEventStatusBadge({ status }: { status: WebhookDeliveryEventOut["status"] }) {
+  if (status === "delivered") return <StatusBadge label="Delivered" tone="success" />;
+  if (status === "failed") return <StatusBadge label="Failed" tone="danger" />;
+  return <StatusBadge label="Rejected" tone="warn" />;
+}
+
+function eventTitle(event: WebhookDeliveryEventOut): string {
+  const title = event.normalized_message.title;
+  return typeof title === "string" && title.trim() ? title : "-";
+}
+
+function eventPayloadType(event: WebhookDeliveryEventOut): string {
+  const rawType = event.normalized_message.raw_type;
+  return typeof rawType === "string" && rawType.trim() ? rawType : "-";
+}
+
+function eventDeliveryMode(event: WebhookDeliveryEventOut): string {
+  const mode = event.delivery_result.mode;
+  const statusCode = event.delivery_result.status_code;
+  const modeText = typeof mode === "string" && mode.trim() ? mode : "-";
+  return typeof statusCode === "number" ? `${modeText} / ${statusCode}` : modeText;
 }
 
 function UsersPage() {

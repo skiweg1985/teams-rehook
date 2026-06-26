@@ -6,6 +6,13 @@ import type {
   DemoItemUpdate,
   SessionResponse,
   UserOut,
+  WebhookDeliveryEventOut,
+  WebhookDeliveryOut,
+  WebhookRouteCreate,
+  WebhookRouteDefaultsOut,
+  WebhookRouteOut,
+  WebhookRouteTestRequest,
+  WebhookRouteUpdate,
 } from "./types";
 
 type HttpMethod = "GET" | "POST" | "PATCH" | "DELETE";
@@ -93,5 +100,47 @@ export const api = {
   },
   adminLogs(csrfToken: string) {
     return request<AuditEventOut[]>("/api/v1/admin/logs", { csrfToken });
+  },
+  webhookRoutes() {
+    return request<WebhookRouteOut[]>("/api/v1/webhook-routes");
+  },
+  webhookRouteDefaults() {
+    return request<WebhookRouteDefaultsOut>("/api/v1/webhook-routes/defaults");
+  },
+  createWebhookRoute(csrfToken: string, body: WebhookRouteCreate) {
+    return request<WebhookRouteOut>("/api/v1/webhook-routes", {
+      method: "POST",
+      csrfToken,
+      body,
+    });
+  },
+  updateWebhookRoute(csrfToken: string, id: string, body: WebhookRouteUpdate) {
+    return request<WebhookRouteOut>(`/api/v1/webhook-routes/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      csrfToken,
+      body,
+    });
+  },
+  deleteWebhookRoute(csrfToken: string, id: string) {
+    return request<void>(`/api/v1/webhook-routes/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      csrfToken,
+    });
+  },
+  regenerateWebhookRouteUrl(csrfToken: string, id: string) {
+    return request<WebhookRouteOut>(`/api/v1/webhook-routes/${encodeURIComponent(id)}/regenerate-url`, {
+      method: "POST",
+      csrfToken,
+    });
+  },
+  webhookRouteDeliveries(id: string) {
+    return request<WebhookDeliveryEventOut[]>(`/api/v1/webhook-routes/${encodeURIComponent(id)}/deliveries`);
+  },
+  testWebhookRoute(csrfToken: string, id: string, body: WebhookRouteTestRequest) {
+    return request<WebhookDeliveryOut>(`/api/v1/webhook-routes/${encodeURIComponent(id)}/test`, {
+      method: "POST",
+      csrfToken,
+      body,
+    });
   },
 };
