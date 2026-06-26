@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     ms_app_client_secret: str = ""
     botframework_scope: str = "https://api.botframework.com/.default"
     graph_scope: str = "https://graph.microsoft.com/.default"
-    bot_delivery_mode: str = "mock"
+    bot_delivery_mode: str = "real"
     bot_default_service_url: str = ""
     webhook_max_payload_bytes: int = 64_000
     log_retention_days: int = 7

@@ -68,15 +68,7 @@ Restart the containers after changing configuration.
 
 ## Delivery Modes
 
-Local validation uses mock delivery by default:
-
-```text
-BOT_DELIVERY_MODE=mock
-```
-
-Mock mode records successful delivery attempts without sending real Teams messages.
-
-For real Teams delivery, set:
+Real Teams delivery is the default:
 
 ```text
 BOT_DELIVERY_MODE=real
@@ -85,6 +77,16 @@ MS_APP_CLIENT_ID=
 MS_APP_CLIENT_SECRET=
 BOT_DEFAULT_SERVICE_URL=
 ```
+
+Until the Entra credentials are configured, `/api/v1/admin/readiness` reports `ready=false` for bot delivery.
+
+For local validation without sending real Teams messages, set:
+
+```text
+BOT_DELIVERY_MODE=mock
+```
+
+Mock mode records successful delivery attempts without contacting Bot Framework.
 
 The same Entra app registration credentials are used for Bot Framework delivery and Microsoft Graph target search. API scopes remain separate:
 
