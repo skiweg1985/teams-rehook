@@ -1655,6 +1655,73 @@ function UsersPage() {
   );
 }
 
+const SETTING_META: Record<string, { group: string; description: string; unit?: string }> = {
+  bot_delivery_mode: {
+    group: "Delivery",
+    description: "Real sends to Teams via Bot Framework. Mock simulates delivery for local checks.",
+  },
+  bot_default_service_url: {
+    group: "Delivery",
+    description: "Fallback Bot Framework service URL used when a route has none.",
+  },
+  webhook_max_payload_bytes: {
+    group: "Limits & retention",
+    description: "Maximum accepted size of an incoming webhook request body.",
+    unit: "bytes",
+  },
+  log_retention_days: {
+    group: "Limits & retention",
+    description: "How long delivery, audit and bot activity events are kept.",
+    unit: "days",
+  },
+  log_cleanup_interval_minutes: {
+    group: "Limits & retention",
+    description: "Minimum time between automatic log cleanup runs.",
+    unit: "minutes",
+  },
+  app_public_base_url: {
+    group: "URLs",
+    description: "Public base URL used to build relay webhook links.",
+  },
+  frontend_base_url: {
+    group: "URLs",
+    description: "Base URL of the web interface for generated links.",
+  },
+  ms_app_tenant_id: {
+    group: "Microsoft Entra",
+    description: "Directory (tenant) ID of the Entra app registration.",
+  },
+  ms_app_client_id: {
+    group: "Microsoft Entra",
+    description: "Application (client) ID of the Entra app registration.",
+  },
+  ms_app_client_secret: {
+    group: "Microsoft Entra",
+    description: "Client secret for Bot Framework delivery and Graph lookup.",
+  },
+  botframework_scope: {
+    group: "Microsoft Entra",
+    description: "OAuth scope requested for Bot Framework tokens.",
+  },
+  graph_scope: {
+    group: "Microsoft Entra",
+    description: "OAuth scope requested for Microsoft Graph tokens.",
+  },
+};
+
+const SETTING_GROUP_ORDER = ["Delivery", "Limits & retention", "URLs", "Microsoft Entra"];
+
+const TECHNICAL_SETTING_KEYS = new Set([
+  "bot_default_service_url",
+  "app_public_base_url",
+  "frontend_base_url",
+  "ms_app_tenant_id",
+  "ms_app_client_id",
+  "ms_app_client_secret",
+  "botframework_scope",
+  "graph_scope",
+]);
+
 function SettingsPage() {
   const { notify, session } = useAppContext();
   const [readiness, setReadiness] = useState<AdminReadinessOut | null>(null);
@@ -1688,6 +1755,12 @@ function SettingsPage() {
     await navigator.clipboard.writeText(value);
     notify({ tone: "success", title: `${label} copied` });
   }
+
+  const overrideCount = settings.filter((item) => item.is_overridden).length;
+  const groupedSettings = SETTING_GROUP_ORDER.map((name) => ({
+    name,
+    items: settings.filter((item) => (SETTING_META[item.key]?.group ?? "Other") === name),
+  })).filter((group) => group.items.length > 0);
 
   return (
     <>
@@ -1723,16 +1796,34 @@ function SettingsPage() {
                 restores the environment default.
               </p>
             </div>
-            <Card title="Editable settings" description="Live runtime configuration for relay operations.">
+            <Card
+              title="Editable settings"
+              description="Live runtime configuration for relay operations."
+              headerActions={
+                <StatusBadge
+                  label={overrideCount > 0 ? `${overrideCount} ${overrideCount === 1 ? "override" : "overrides"} active` : "All defaults"}
+                  tone={overrideCount > 0 ? "warn" : "neutral"}
+                />
+              }
+            >
               <div className="settings-overrides">
-                {settings.map((item) => (
-                  <RuntimeSettingRow
-                    key={item.key}
-                    item={item}
-                    csrfToken={csrfToken}
-                    onChanged={refresh}
-                    notify={notify}
-                  />
+                {groupedSettings.map((group) => (
+                  <div className="settings-override-group" key={group.name}>
+                    <div className="settings-subsection-header">
+                      <h3>{group.name}</h3>
+                    </div>
+                    <div className="settings-override-rows">
+                      {group.items.map((item) => (
+                        <RuntimeSettingRow
+                          key={item.key}
+                          item={item}
+                          csrfToken={csrfToken}
+                          onChanged={refresh}
+                          notify={notify}
+                        />
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
             </Card>
@@ -1886,22 +1977,22 @@ function RuntimeSettingRow({
     }
   }
 
+  const meta = SETTING_META[item.key];
+  const isMono = TECHNICAL_SETTING_KEYS.has(item.key);
+  const inputClassName = isMono ? "settings-input--mono" : undefined;
+
   return (
     <div className="settings-override-row">
       <div className="settings-override-meta">
         <div className="settings-override-heading">
           <strong>{item.label}</strong>
-          <StatusBadge label={item.is_overridden ? "Overridden" : "Default"} tone={item.is_overridden ? "warn" : "neutral"} />
+          {item.is_overridden ? <StatusBadge label="Overridden" tone="warn" /> : null}
         </div>
-        <p className="settings-override-summary">
-          Active: <span>{item.effective_value || "-"}</span>
-          {" · "}
-          Environment default: <span>{item.env_default || "-"}</span>
-        </p>
+        {meta?.description ? <p className="settings-override-hint">{meta.description}</p> : null}
       </div>
       <div className="settings-override-editor">
         {item.type === "enum" ? (
-          <select value={draft} onChange={(event) => setDraft(event.target.value)} disabled={busy}>
+          <select className={inputClassName} value={draft} onChange={(event) => setDraft(event.target.value)} disabled={busy}>
             {item.enum_values.map((value) => (
               <option key={value} value={value}>
                 {value}
@@ -1910,6 +2001,7 @@ function RuntimeSettingRow({
           </select>
         ) : item.type === "secret" ? (
           <input
+            className={inputClassName}
             type="password"
             value={draft}
             placeholder="Enter new secret"
@@ -1918,24 +2010,40 @@ function RuntimeSettingRow({
             onChange={(event) => setDraft(event.target.value)}
           />
         ) : item.type === "int" ? (
-          <input
-            type="number"
-            value={draft}
-            disabled={busy}
-            onChange={(event) => setDraft(event.target.value)}
-          />
+          <div className="settings-int-field">
+            <input
+              type="number"
+              value={draft}
+              disabled={busy}
+              onChange={(event) => setDraft(event.target.value)}
+            />
+            {meta?.unit ? <span className="settings-unit">{meta.unit}</span> : null}
+          </div>
         ) : (
-          <input value={draft} disabled={busy} onChange={(event) => setDraft(event.target.value)} />
+          <input className={inputClassName} value={draft} disabled={busy} onChange={(event) => setDraft(event.target.value)} />
         )}
-        <div className="settings-override-actions">
-          <button className="primary-button" type="button" disabled={busy || !canSave} onClick={() => void save()}>
-            Save
-          </button>
-          {item.is_overridden ? (
-            <button className="secondary-button secondary-button--small" type="button" disabled={busy} onClick={() => setResetOpen(true)}>
-              Reset
-            </button>
-          ) : null}
+        <div className="settings-override-footer">
+          <div className="settings-override-default">
+            {item.is_overridden ? (
+              <>
+                Default: <span className={isMono ? "settings-mono" : undefined}>{item.env_default || "-"}</span>
+              </>
+            ) : (
+              <span className="settings-override-default-muted">Using environment default</span>
+            )}
+          </div>
+          <div className="settings-override-actions">
+            {item.is_overridden ? (
+              <button className="settings-reset-link" type="button" disabled={busy} onClick={() => setResetOpen(true)}>
+                Reset to default
+              </button>
+            ) : null}
+            {canSave ? (
+              <button className="primary-button secondary-button--small" type="button" disabled={busy} onClick={() => void save()}>
+                Save
+              </button>
+            ) : null}
+          </div>
         </div>
         {error ? <p className="form-error">{error}</p> : null}
       </div>

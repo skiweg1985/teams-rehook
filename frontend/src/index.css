@@ -959,19 +959,38 @@ button:disabled {
 
 .settings-overrides {
   display: grid;
-  gap: var(--space-4);
+  gap: var(--space-6);
+}
+
+.settings-override-group {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.settings-override-rows {
+  display: grid;
 }
 
 .settings-override-row {
   display: grid;
   gap: var(--space-3);
-  padding-bottom: var(--space-4);
-  border-bottom: 1px solid var(--line);
+  padding: var(--space-4) 0;
+  border-top: 1px solid var(--line);
+}
+
+.settings-override-row:first-child {
+  padding-top: 0;
+  border-top: none;
 }
 
 .settings-override-row:last-child {
   padding-bottom: 0;
-  border-bottom: none;
+}
+
+.settings-override-meta {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
 }
 
 .settings-override-heading {
@@ -981,20 +1000,22 @@ button:disabled {
   gap: var(--space-2);
 }
 
-.settings-override-summary {
-  margin: var(--space-1) 0 0;
-  color: var(--muted);
-  font-size: 0.875rem;
+.settings-override-heading strong {
+  color: var(--ink);
+  font-weight: 700;
 }
 
-.settings-override-summary span {
-  color: var(--ink);
-  font-weight: 600;
+.settings-override-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.45;
 }
 
 .settings-override-editor {
   display: grid;
   gap: var(--space-2);
+  min-width: 0;
 }
 
 .settings-override-editor input,
@@ -1002,16 +1023,89 @@ button:disabled {
   width: 100%;
 }
 
+.settings-input--mono,
+.settings-mono {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.875rem;
+}
+
+.settings-int-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.settings-int-field input {
+  padding-right: 72px;
+}
+
+.settings-unit {
+  position: absolute;
+  right: var(--space-3);
+  color: var(--muted);
+  font-size: 0.8125rem;
+  pointer-events: none;
+}
+
+.settings-override-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: 28px;
+}
+
+.settings-override-default {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-override-default span {
+  color: var(--ink-secondary);
+  font-weight: 600;
+}
+
+.settings-override-default-muted {
+  color: var(--muted);
+  font-weight: 500;
+}
+
 .settings-override-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2);
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.settings-reset-link {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color 0.15s ease;
+}
+
+.settings-reset-link:hover:not(:disabled) {
+  color: var(--ink);
+}
+
+.settings-reset-link:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 @media (min-width: 900px) {
   .settings-override-row {
-    grid-template-columns: minmax(220px, 0.9fr) minmax(0, 1.4fr);
+    grid-template-columns: minmax(240px, 1fr) minmax(0, 1.3fr);
     align-items: start;
+    gap: var(--space-5);
   }
 }
 
