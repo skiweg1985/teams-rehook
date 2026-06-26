@@ -7,10 +7,10 @@ Teams Rehook is currently an internal MVP/evaluation-stage tool. The core relay 
 ## What Teams Rehook Is For
 
 - Connect webhook sources such as monitoring, firewall events, or operations systems to Teams
-- Manage one stable relay URL per source system or event stream
+- Manage stable relay URLs for external systems and event streams
 - Capture Teams bot conversations and use them as delivery targets
-- Send test messages before enabling a source in production
-- Build plain JSON and Adaptive Card payload examples for source systems
+- Send test messages before enabling a relay URL in production
+- Build plain JSON and Adaptive Card payload examples for external systems
 - Review delivered, failed, and rejected webhook attempts
 - Regenerate relay URLs when a URL must be rotated or has been exposed
 
@@ -124,31 +124,30 @@ If the conversation is not listed, Teams Rehook does not yet have a sendable Bot
 
 ### Teams Bot Commands
 
-Inbound Teams bot messages also capture or refresh the conversation reference. The bot recognizes slash commands in chats or channels where it is installed:
+Inbound Teams bot messages also capture or refresh the conversation reference. The bot recognizes commands in chats or channels where it is installed:
 
 ```text
-/register <route name>  create or update a route for this Teams conversation
-/webhook <route name>   show the relay URL for an existing route
-/disable [route name]   disable a route linked to this conversation
-/enable [route name]    enable a route linked to this conversation
-/delete <route name>    delete a route linked to this conversation
-/info [route name]      show captured IDs and linked route details
-/help                   show the command list
+register <route name>  create or update a route for this Teams conversation
+webhook <route name>   show the relay URL for an existing route
+disable [route name]   disable a route linked to this conversation
+enable [route name]    enable a route linked to this conversation
+delete <route name>    delete a route linked to this conversation
+info [route name]      show captured IDs and linked route details
+help                   show the command list
 ```
 
-Routes created through `/register` use `source_system=teams-command` and still need the same operational care as UI-created routes. Treat the returned relay URL as a secret.
+Routes created through `register` still need the same operational care as UI-created routes. Treat the returned relay URL as a secret.
 
 ## Create A Webhook Route
 
 1. Open **Webhooks**.
 2. Click **New route**.
 3. Enter a clear name, for example `PRTG network alerts`.
-4. Optionally enter the source system, for example `PRTG`, `macmon`, or `firewall-events`.
-5. Keep **Route is active** enabled.
-6. Select the captured Teams conversation.
-7. Click **Create route**.
-8. Use **Send test** and confirm that the message appears in Teams.
-9. Copy the relay URL into the source system.
+4. Keep **Route is active** enabled.
+5. Select the captured Teams conversation.
+6. Click **Create route**.
+7. Use **Send test** and confirm that the message appears in Teams.
+8. Copy the relay URL into the external system.
 
 After saving, Teams Rehook copies the generated relay URL to your clipboard. You can copy it again from the route table with **Copy URL**.
 
@@ -179,12 +178,12 @@ Empty payloads, invalid JSON, unknown route tokens, disabled routes, and oversiz
 
 ## Build Example Payloads
 
-Open **Payload Generator** to build source-system payload examples without hand-writing JSON. It can generate:
+Open **Payload Generator** to build external-system payload examples without hand-writing JSON. It can generate:
 
 - Plain message JSON with title, message text, severity-style details, and name/value facts.
 - Adaptive Card activity JSON with title formatting, optional image, facts, OpenURL buttons, and Teams full-width card metadata.
 
-Use **Copy JSON**, then paste the generated body into the source system or a `curl` test against the route relay URL.
+Use **Copy JSON**, then paste the generated body into the external system or a `curl` test against the route relay URL.
 
 ## Operate And Troubleshoot
 

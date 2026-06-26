@@ -70,7 +70,6 @@ def add_route(db: Session, *, token: str = "route-token", active: bool = True) -
     route = WebhookRoute(
         organization_id=org.id,
         name=f"Route {token}",
-        source_system="PRTG",
         is_active=active,
         route_token_hash=lookup_secret_hash(token),
         route_token=token,
@@ -178,7 +177,6 @@ def test_create_route_stores_graph_target_metadata(client: TestClient):
         headers={"X-CSRF-Token": csrf_token},
         json={
             "name": "Graph target route",
-            "source_system": "PRTG",
             "is_active": True,
             "target_type": "bot_conversation",
             "target_name": "Monitoring / Alerts",
@@ -359,7 +357,7 @@ def test_global_delivery_events_endpoint_paginates_summaries(client: TestClient,
                 route_token_hash=route.route_token_hash,
                 status="delivered" if index != 1 else "failed",
                 request_metadata_json=dumps_json({"payload_preview": f"payload-{index}"}),
-                normalized_message_json=dumps_json({"title": f"Message {index}", "raw_type": "json_object", "source": "PRTG"}),
+                normalized_message_json=dumps_json({"title": f"Message {index}", "raw_type": "json_object"}),
                 delivery_result_json=dumps_json({"mode": "mock", "status_code": 202}),
                 error="failed send" if index == 1 else "",
                 created_at=utcnow() + timedelta(minutes=index),
@@ -378,7 +376,6 @@ def test_global_delivery_events_endpoint_paginates_summaries(client: TestClient,
     assert body["retention_days"] == 7
     assert len(body["items"]) == 2
     assert body["items"][0]["route_name"] == route.name
-    assert body["items"][0]["source_system"] == "PRTG"
     assert body["items"][0]["title"] == "Message 2"
     assert body["items"][0]["delivery_mode"] == "mock"
     assert body["items"][0]["status_code"] == 202

@@ -5,7 +5,7 @@
 ### Added
 
 - Documentation audit report covering updated files, removed obsolete content, remaining gaps and manual-review items.
-- README coverage for the Payload Generator, Teams bot slash commands, Users page limitations and local Vite proxy behavior.
+- README coverage for the Payload Generator, Teams bot commands, Users page limitations and local Vite proxy behavior.
 - Admin settings API and UI for runtime overrides with per-field reset to environment defaults.
 - `app_settings` table for persisted overrides; secrets encrypted at rest.
 - Technical documentation for configuration layers and the settings API contract.
@@ -13,6 +13,13 @@
 
 ### Changed
 
+- Known Teams conversations modal condensed into compact single-row entries showing the channel or user, the involved user, and a relative last-seen time; technical conversation ID, service URL, and Graph IDs removed.
+- Webhook route edit modal widened and the name field paired with the status control on one row to reduce vertical scrolling.
+- Webhook route active state in the edit modal switched from a checkbox to an Active/Disabled segmented control matching the rest of the UI.
+- Webhook route name in the route list is now clickable to open the edit modal.
+- Webhook route last-delivery time shown as toned text instead of a status badge in the route list.
+- Webhook routes table rows slimmed down: removed the duplicated target name, moved technical Graph IDs into a tooltip, and dropped the bot-source badge.
+- Webhook route source-system metadata removed from the route API, forms, delivery logs, and payload normalization.
 - `docker-compose.yml` backend `environment` block reduced to the Postgres `DATABASE_URL` override; other variables come from `.env` via `env_file`.
 - `.env.example` no longer sets `DATABASE_URL`; local SQLite remains the code default and Docker Compose overrides Postgres.
 - Settings page combines editable runtime overrides with integration readiness diagnostics.

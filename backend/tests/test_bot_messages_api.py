@@ -164,7 +164,7 @@ def test_register_command_creates_webhook_route_from_current_conversation(monkey
     client, db = make_client()
     activity = {
         "type": "message",
-        "text": "<at>Relay Bot</at> /register Jira Alerts",
+        "text": "<at>Relay Bot</at> register Jira Alerts",
         "serviceUrl": "https://smba.trafficmanager.net/emea/",
         "conversation": {"id": "19:channel@thread.tacv2;messageid=1782480239835", "conversationType": "channel"},
         "from": {"id": "29:user", "name": "Ada Admin", "aadObjectId": "aad-user-id"},
@@ -225,7 +225,7 @@ def test_register_command_uses_existing_reference_names_when_message_omits_them(
     }
     message = {
         "type": "message",
-        "text": "/register Jira Alerts",
+        "text": "register Jira Alerts",
         "serviceUrl": "https://smba.trafficmanager.net/emea/",
         "conversation": {"id": "19:channel@thread.tacv2;messageid=123", "conversationType": "channel"},
         "from": {"id": "29:user", "name": "Ada Admin", "aadObjectId": "aad-user-id"},
@@ -265,7 +265,7 @@ def test_register_command_resolves_missing_channel_names_from_graph(monkeypatch)
     client, db = make_client()
     activity = {
         "type": "message",
-        "text": "/register Jira Alerts",
+        "text": "register Jira Alerts",
         "serviceUrl": "https://smba.trafficmanager.net/emea/",
         "conversation": {"id": "19:channel@thread.tacv2;messageid=123", "conversationType": "channel"},
         "from": {"id": "29:user", "aadObjectId": "aad-user-id"},
@@ -295,7 +295,7 @@ def test_register_command_updates_existing_route_without_regenerating_url(monkey
     client, db = make_client()
     first = {
         "type": "message",
-        "text": "/register Jira Alerts",
+        "text": "register Jira Alerts",
         "serviceUrl": "https://old.example/",
         "conversation": {"id": "conversation-one", "conversationType": "personal"},
         "from": {"id": "29:user", "aadObjectId": "aad-user-id"},
@@ -303,7 +303,7 @@ def test_register_command_updates_existing_route_without_regenerating_url(monkey
     }
     second = {
         "type": "message",
-        "text": "/register Jira Alerts",
+        "text": "register Jira Alerts",
         "serviceUrl": "https://new.example/",
         "conversation": {"id": "conversation-two", "conversationType": "personal"},
         "from": {"id": "29:user", "aadObjectId": "aad-user-id"},
@@ -331,7 +331,7 @@ def test_register_command_rejects_too_long_route_name(monkeypatch):
     client, db = make_client()
     activity = {
         "type": "message",
-        "text": f"/register {'x' * 201}",
+        "text": f"register {'x' * 201}",
         "serviceUrl": "https://smba.trafficmanager.net/emea/",
         "conversation": {"id": "conversation-id", "conversationType": "personal"},
         "from": {"id": "29:user", "aadObjectId": "aad-user-id"},
@@ -358,10 +358,10 @@ def test_webhook_and_info_commands_reply_with_route_and_reference_details(monkey
         "from": {"id": "29:user", "aadObjectId": "aad-user-id"},
         "channelData": {"tenant": {"id": "tenant-id"}},
     }
-    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "/register Personal Alerts"}).status_code == 200
+    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "register Personal Alerts"}).status_code == 200
 
-    webhook_response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "/webhook Personal Alerts"})
-    info_response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "/info"})
+    webhook_response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "webhook Personal Alerts"})
+    info_response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "info"})
 
     assert webhook_response.status_code == 200
     assert "Webhook URL for `Personal Alerts`" in webhook_response.json()["reply_text"]
@@ -396,14 +396,14 @@ def test_info_command_lists_all_linked_routes_with_core_details(monkeypatch):
             "channel": {"id": "channel-id", "name": "Ops Alerts"},
         },
     }
-    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "/register Primary Alerts"}).status_code == 200
-    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "/register Secondary Alerts"}).status_code == 200
+    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "register Primary Alerts"}).status_code == 200
+    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "register Secondary Alerts"}).status_code == 200
     primary = db.scalar(select(WebhookRoute).where(WebhookRoute.name == "Primary Alerts"))
     secondary = db.scalar(select(WebhookRoute).where(WebhookRoute.name == "Secondary Alerts"))
     assert primary is not None
     assert secondary is not None
 
-    response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "/info"})
+    response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "info"})
 
     assert response.status_code == 200
     reply_text = response.json()["reply_text"]
@@ -415,8 +415,8 @@ def test_info_command_lists_all_linked_routes_with_core_details(monkeypatch):
     assert "Team: Operations" in reply_text
     assert "Channel: Ops Alerts" in reply_text
     assert "User: Ada Admin" in reply_text
-    assert "Details: /info Primary Alerts" in reply_text
-    assert "Details: /info Secondary Alerts" in reply_text
+    assert "Details: info Primary Alerts" in reply_text
+    assert "Details: info Secondary Alerts" in reply_text
     info_card = card_from_sent_reply(sent_replies[2])
     card_text = repr(info_card)
     primary_url = expected_webhook_url(primary.route_token)
@@ -438,10 +438,10 @@ def test_info_command_omits_missing_user_team_and_channel_fields_from_card(monke
         "conversation": {"id": "conversation-id", "conversationType": "personal"},
         "channelData": {"tenant": {"id": "tenant-id"}},
     }
-    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "/register Personal Alerts"}).status_code == 200
-    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "/register Secondary Alerts"}).status_code == 200
+    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "register Personal Alerts"}).status_code == 200
+    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "register Secondary Alerts"}).status_code == 200
 
-    response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "/info"})
+    response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "info"})
 
     assert response.status_code == 200
     info_card = card_from_sent_reply(sent_replies[2])
@@ -449,7 +449,7 @@ def test_info_command_omits_missing_user_team_and_channel_fields_from_card(monke
     assert "Personal Alerts" in card_text
     assert "Secondary Alerts" in card_text
     assert "URL:" in card_text
-    assert "Details: /info Personal Alerts" in card_text
+    assert "Details: info Personal Alerts" in card_text
     assert "User:" not in card_text
     assert "Team:" not in card_text
     assert "Channel:" not in card_text
@@ -471,10 +471,10 @@ def test_info_command_omits_id_only_user_team_and_channel_from_visible_card(monk
             "channel": {"id": "channel-id"},
         },
     }
-    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "/register Primary Alerts"}).status_code == 200
-    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "/register Secondary Alerts"}).status_code == 200
+    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "register Primary Alerts"}).status_code == 200
+    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "register Secondary Alerts"}).status_code == 200
 
-    response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "/info"})
+    response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "info"})
 
     assert response.status_code == 200
     info_card = card_from_sent_reply(sent_replies[2])
@@ -510,7 +510,7 @@ def test_info_command_uses_stored_route_target_names_when_current_activity_only_
     }
     info_activity = {
         "type": "message",
-        "text": "/info",
+        "text": "info",
         "serviceUrl": "https://smba.trafficmanager.net/emea/",
         "conversation": {"id": "conversation-id", "conversationType": "channel"},
         "from": {"id": "29:user", "aadObjectId": "aad-user-id"},
@@ -520,7 +520,7 @@ def test_info_command_uses_stored_route_target_names_when_current_activity_only_
             "channel": {"id": "channel-id"},
         },
     }
-    assert client.post("/api/v1/bot/messages", json={**register_activity, "text": "/register Jira Infra"}).status_code == 200
+    assert client.post("/api/v1/bot/messages", json={**register_activity, "text": "register Jira Infra"}).status_code == 200
 
     response = client.post("/api/v1/bot/messages", json=info_activity)
 
@@ -547,11 +547,11 @@ def test_disable_and_enable_commands_update_single_linked_route_without_name(mon
         "from": {"id": "29:user", "aadObjectId": "aad-user-id"},
         "channelData": {"tenant": {"id": "tenant-id"}},
     }
-    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "/register Personal Alerts"}).status_code == 200
+    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "register Personal Alerts"}).status_code == 200
     route = db.scalar(select(WebhookRoute).where(WebhookRoute.name == "Personal Alerts"))
     assert route is not None
 
-    disable_response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "/disable"})
+    disable_response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "disable"})
     db.refresh(route)
 
     assert disable_response.status_code == 200
@@ -559,7 +559,7 @@ def test_disable_and_enable_commands_update_single_linked_route_without_name(mon
     assert "disabled" in disable_response.json()["reply_text"]
     assert route.is_active is False
 
-    enable_response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "/enable"})
+    enable_response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "enable"})
     db.refresh(route)
 
     assert enable_response.status_code == 200
@@ -582,10 +582,10 @@ def test_disable_command_requires_name_when_multiple_routes_are_linked(monkeypat
         "from": {"id": "29:user", "aadObjectId": "aad-user-id"},
         "channelData": {"tenant": {"id": "tenant-id"}},
     }
-    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "/register Primary Alerts"}).status_code == 200
-    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "/register Secondary Alerts"}).status_code == 200
+    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "register Primary Alerts"}).status_code == 200
+    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "register Secondary Alerts"}).status_code == 200
 
-    response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "/disable"})
+    response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "disable"})
 
     assert response.status_code == 200
     body = response.json()
@@ -609,10 +609,10 @@ def test_enable_and_disable_commands_target_named_route_when_multiple_are_linked
         "from": {"id": "29:user", "aadObjectId": "aad-user-id"},
         "channelData": {"tenant": {"id": "tenant-id"}},
     }
-    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "/register Primary Alerts"}).status_code == 200
-    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "/register Secondary Alerts"}).status_code == 200
+    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "register Primary Alerts"}).status_code == 200
+    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "register Secondary Alerts"}).status_code == 200
 
-    disable_response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "/disable Secondary Alerts"})
+    disable_response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "disable Secondary Alerts"})
     primary = db.scalar(select(WebhookRoute).where(WebhookRoute.name == "Primary Alerts"))
     secondary = db.scalar(select(WebhookRoute).where(WebhookRoute.name == "Secondary Alerts"))
     assert primary is not None
@@ -622,7 +622,7 @@ def test_enable_and_disable_commands_target_named_route_when_multiple_are_linked
     assert primary.is_active is True
     assert secondary.is_active is False
 
-    enable_response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "/enable Secondary Alerts"})
+    enable_response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "enable Secondary Alerts"})
     db.refresh(secondary)
 
     assert enable_response.status_code == 200
@@ -640,7 +640,7 @@ def test_delete_command_removes_named_linked_route_and_detaches_delivery_events(
         "from": {"id": "29:user", "aadObjectId": "aad-user-id"},
         "channelData": {"tenant": {"id": "tenant-id"}},
     }
-    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "/register Personal Alerts"}).status_code == 200
+    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "register Personal Alerts"}).status_code == 200
     route = db.scalar(select(WebhookRoute).where(WebhookRoute.name == "Personal Alerts"))
     assert route is not None
     delivery = WebhookDeliveryEvent(
@@ -652,7 +652,7 @@ def test_delete_command_removes_named_linked_route_and_detaches_delivery_events(
     db.add(delivery)
     db.commit()
 
-    response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "/delete Personal Alerts"})
+    response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "delete Personal Alerts"})
 
     assert response.status_code == 200
     assert response.json()["command"] == "delete"
@@ -680,12 +680,12 @@ def test_route_mutation_commands_reject_too_long_or_unlinked_names(monkeypatch):
         **linked_activity,
         "conversation": {"id": "other-conversation", "conversationType": "personal"},
     }
-    assert client.post("/api/v1/bot/messages", json={**linked_activity, "text": "/register Personal Alerts"}).status_code == 200
+    assert client.post("/api/v1/bot/messages", json={**linked_activity, "text": "register Personal Alerts"}).status_code == 200
     route = db.scalar(select(WebhookRoute).where(WebhookRoute.name == "Personal Alerts"))
     assert route is not None
 
-    long_name_response = client.post("/api/v1/bot/messages", json={**linked_activity, "text": f"/disable {'x' * 201}"})
-    unlinked_response = client.post("/api/v1/bot/messages", json={**other_activity, "text": "/disable Personal Alerts"})
+    long_name_response = client.post("/api/v1/bot/messages", json={**linked_activity, "text": f"disable {'x' * 201}"})
+    unlinked_response = client.post("/api/v1/bot/messages", json={**other_activity, "text": "disable Personal Alerts"})
     db.refresh(route)
 
     assert long_name_response.status_code == 200
@@ -702,7 +702,7 @@ def test_help_command_lists_available_commands_as_card(monkeypatch):
     client, db = make_client()
     activity = {
         "type": "message",
-        "text": "/help",
+        "text": "help",
         "serviceUrl": "https://smba.trafficmanager.net/emea/",
         "conversation": {"id": "conversation-id", "conversationType": "personal"},
         "from": {"id": "29:user", "aadObjectId": "aad-user-id"},
@@ -715,27 +715,57 @@ def test_help_command_lists_available_commands_as_card(monkeypatch):
     body = response.json()
     assert body["handled_command"] is True
     assert body["command"] == "help"
-    assert "/register <route name>" in body["reply_text"]
-    assert "/webhook <route name>" in body["reply_text"]
-    assert "/disable [route name]" in body["reply_text"]
-    assert "/enable [route name]" in body["reply_text"]
-    assert "/delete <route name>" in body["reply_text"]
-    assert "/info [route name]" in body["reply_text"]
-    assert "/help" in body["reply_text"]
+    assert "register <route name>" in body["reply_text"]
+    assert "webhook <route name>" in body["reply_text"]
+    assert "disable [route name]" in body["reply_text"]
+    assert "enable [route name]" in body["reply_text"]
+    assert "delete <route name>" in body["reply_text"]
+    assert "info [route name]" in body["reply_text"]
+    assert "help" in body["reply_text"]
+    assert "/register <route name>" not in body["reply_text"]
     sent_message = sent_replies[0]["message"]
     assert sent_message.activity is not None
     card = sent_message.activity["attachments"][0]["content"]
     assert card["body"][0]["text"] == "Available commands"
-    command_facts = card["body"][2]["facts"]
+    command_rows = card["body"][2]["items"]
+    command_labels = [row["columns"][0]["items"][0] for row in command_rows]
     assert {
-        "/register <route name>:",
-        "/webhook <route name>:",
-        "/disable [route name]:",
-        "/enable [route name]:",
-        "/delete <route name>:",
-        "/info [route name]:",
-        "/help:",
-    }.issubset({fact["title"] for fact in command_facts})
+        "register <route name>:",
+        "webhook <route name>:",
+        "disable [route name]:",
+        "enable [route name]:",
+        "delete <route name>:",
+        "info [route name]:",
+        "help:",
+    }.issubset({label["text"] for label in command_labels})
+    assert all(label["wrap"] is False for label in command_labels)
+    db.close()
+
+
+def test_slash_commands_and_unknown_text_are_ignored(monkeypatch):
+    sent_replies: list[dict] = []
+    monkeypatch.setattr("app.routers.bot_messages.send_bot_activity", lambda **kwargs: sent_replies.append(kwargs))
+    client, db = make_client()
+    base_activity = {
+        "type": "message",
+        "serviceUrl": "https://smba.trafficmanager.net/emea/",
+        "conversation": {"id": "conversation-id", "conversationType": "personal"},
+        "from": {"id": "29:user", "aadObjectId": "aad-user-id"},
+        "channelData": {"tenant": {"id": "tenant-id"}},
+    }
+
+    for text in ["/help", "/register Jira Alerts", "hello", "foo bar"]:
+        response = client.post("/api/v1/bot/messages", json={**base_activity, "text": text})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["handled_command"] is False
+        assert body["command"] is None
+        assert body["reply_text"] is None
+        assert body["reply_sent"] is False
+
+    assert sent_replies == []
+    assert db.scalar(select(WebhookRoute).where(WebhookRoute.name == "Jira Alerts")) is None
     db.close()
 
 

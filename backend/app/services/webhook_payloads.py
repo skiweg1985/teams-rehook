@@ -15,7 +15,6 @@ class NormalizedMessage:
     text: str
     severity: str = "info"
     status: str = ""
-    source: str = ""
     raw_type: str = "unknown"
     activity: dict[str, Any] | None = None
 
@@ -34,7 +33,7 @@ def payload_preview(payload: bytes, limit: int = 2000) -> str:
     return truncate_text(text, limit)
 
 
-def normalize_webhook_payload(payload: bytes, content_type: str | None, *, source: str = "") -> NormalizedMessage:
+def normalize_webhook_payload(payload: bytes, content_type: str | None) -> NormalizedMessage:
     if not payload or not payload.strip():
         raise WebhookPayloadError("Webhook payload must not be empty")
 
@@ -46,24 +45,22 @@ def normalize_webhook_payload(payload: bytes, content_type: str | None, *, sourc
             parsed = json.loads(text)
         except json.JSONDecodeError as exc:
             raise WebhookPayloadError("Webhook payload is not valid JSON") from exc
-        return _normalize_json(parsed, source=source)
+        return _normalize_json(parsed)
 
     return NormalizedMessage(
-        title=source or "Webhook message",
+        title="Webhook message",
         text=truncate_text(text),
-        source=source,
         raw_type="text",
     )
 
 
-def _normalize_json(value: Any, *, source: str) -> NormalizedMessage:
+def _normalize_json(value: Any) -> NormalizedMessage:
     if isinstance(value, list):
         if not value:
             raise WebhookPayloadError("Webhook JSON array must not be empty")
         return NormalizedMessage(
-            title=source or "Webhook message",
+            title="Webhook message",
             text=truncate_text(json.dumps(value, ensure_ascii=False, sort_keys=True)),
-            source=source,
             raw_type="json_array",
         )
     if not isinstance(value, dict):
@@ -73,16 +70,15 @@ def _normalize_json(value: Any, *, source: str) -> NormalizedMessage:
     if _is_bot_activity_with_attachments(value):
         title, text = _activity_summary(value)
         return NormalizedMessage(
-            title=truncate_text(title or source or "Adaptive card message", 255),
+            title=truncate_text(title or "Adaptive card message", 255),
             text=truncate_text(text or "Adaptive card payload", 4000),
             severity="info",
-            source=source,
             raw_type="adaptive_card_activity",
             activity=value,
         )
 
     raw_type = str(value.get("@type") or value.get("type") or "json_object")
-    title = _first_text(value, "title", "summary", "subject", "event", "name") or source or "Webhook message"
+    title = _first_text(value, "title", "summary", "subject", "event", "name") or "Webhook message"
     status = _first_text(value, "status", "state") or ""
     severity = (_first_text(value, "severity", "level", "priority") or status or "info").lower()
     body_text = _first_text(value, "text", "message", "description", "details", "summary") or ""
@@ -96,7 +92,6 @@ def _normalize_json(value: Any, *, source: str) -> NormalizedMessage:
         text=truncate_text("\n\n".join(parts), 4000),
         severity=truncate_text(severity, 40),
         status=truncate_text(status, 40),
-        source=source,
         raw_type=truncate_text(raw_type, 80),
     )
 

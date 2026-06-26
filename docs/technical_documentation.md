@@ -84,7 +84,7 @@ The FastAPI app mounts these routers under `API_V1_PREFIX`, which defaults to `/
 | Delivery events | `GET` | `/webhook-delivery-events` | Paginated delivery/event log |
 | Delivery events | `GET` | `/webhook-delivery-events/{event_id}` | Delivery/event detail |
 | Delivery events | `POST` | `/webhook-delivery-events/cleanup` | Manual log-retention cleanup, requires CSRF |
-| Relay ingress | `POST` | `/webhooks/{route_token}` | Public relay URL for source systems |
+| Relay ingress | `POST` | `/webhooks/{route_token}` | Public relay URL for external systems |
 | Bot | `POST` | `/bot/messages` | Public Teams bot activity ingest |
 | Bot | `GET` | `/bot/conversation-references` | Known Bot Framework conversations |
 | Graph targets | `GET` | `/teams-targets/search?kind=user\|team&q=...` | Graph-backed user/team search |
@@ -92,19 +92,19 @@ The FastAPI app mounts these routers under `API_V1_PREFIX`, which defaults to `/
 
 ## Teams bot command behavior
 
-`POST /bot/messages` stores bot activity events and upserts conversation references when an activity includes both `serviceUrl` and `conversation.id`. Message activities can also execute slash commands:
+`POST /bot/messages` stores bot activity events and upserts conversation references when an activity includes both `serviceUrl` and `conversation.id`. Message activities can also execute bot commands:
 
 | Command | Behavior |
 |---------|----------|
-| `/register <route name>` | Creates or updates a route for the current conversation and returns the relay URL |
-| `/webhook <route name>` | Returns the relay URL for an existing route |
-| `/disable [route name]` | Disables a route linked to the current conversation |
-| `/enable [route name]` | Enables a route linked to the current conversation |
-| `/delete <route name>` | Deletes a route linked to the current conversation |
-| `/info [route name]` | Shows captured conversation IDs and linked route details |
-| `/help` | Shows available commands |
+| `register <route name>` | Creates or updates a route for the current conversation and returns the relay URL |
+| `webhook <route name>` | Returns the relay URL for an existing route |
+| `disable [route name]` | Disables a route linked to the current conversation |
+| `enable [route name]` | Enables a route linked to the current conversation |
+| `delete <route name>` | Deletes a route linked to the current conversation |
+| `info [route name]` | Shows captured conversation IDs and linked route details |
+| `help` | Shows available commands |
 
-Bot-created routes use the default organization from `DEFAULT_ORG_SLUG`, `source_system=teams-command`, and `bot_target_source=bot_command`.
+Bot-created routes use the default organization from `DEFAULT_ORG_SLUG` and `bot_target_source=bot_command`.
 
 ## Payload handling
 

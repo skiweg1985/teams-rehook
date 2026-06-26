@@ -69,7 +69,6 @@ WebhookRouteStatus = Literal["delivered", "failed", "rejected"]
 
 class WebhookRouteBase(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    source_system: str = Field(default="", max_length=120)
     is_active: bool = True
     target_type: WebhookTargetType = "bot_conversation"
     target_name: str = Field(min_length=1, max_length=200)
@@ -89,7 +88,6 @@ class WebhookRouteCreate(WebhookRouteBase):
 
 class WebhookRouteUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
-    source_system: str | None = Field(default=None, max_length=120)
     is_active: bool | None = None
     target_type: WebhookTargetType | None = None
     target_name: str | None = Field(default=None, min_length=1, max_length=200)
@@ -106,7 +104,6 @@ class WebhookRouteUpdate(BaseModel):
     def require_change(self):
         if (
             self.name is None
-            and self.source_system is None
             and self.is_active is None
             and self.target_type is None
             and self.target_name is None
@@ -129,7 +126,6 @@ class WebhookRouteOut(BaseModel):
     id: str
     organization_id: str
     name: str
-    source_system: str
     is_active: bool
     target_type: str
     target_name: str
@@ -198,7 +194,6 @@ class WebhookDeliveryEventSummaryOut(BaseModel):
     id: str
     route_id: str | None = None
     route_name: str = ""
-    source_system: str = ""
     target_name: str = ""
     status: str
     title: str = ""
@@ -211,7 +206,6 @@ class WebhookDeliveryEventSummaryOut(BaseModel):
 
 class WebhookDeliveryEventDetailOut(WebhookDeliveryEventOut):
     route_name: str = ""
-    source_system: str = ""
     target_name: str = ""
 
 

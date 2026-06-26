@@ -62,7 +62,6 @@ class WebhookRoute(Base):
     organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
     created_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(200))
-    source_system: Mapped[str] = mapped_column(String(120), default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     route_token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     route_token: Mapped[str] = mapped_column(Text, default="")

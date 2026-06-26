@@ -70,7 +70,6 @@ def create_webhook_route(
         organization_id=admin.organization_id,
         created_by_id=admin.id,
         name=payload.name.strip(),
-        source_system=payload.source_system.strip(),
         is_active=payload.is_active,
         route_token_hash=lookup_secret_hash(route_token),
         route_token=route_token,
@@ -116,8 +115,6 @@ def update_webhook_route(
     route = _get_org_route(db, admin.organization_id, route_id)
     if payload.name is not None:
         route.name = payload.name.strip()
-    if payload.source_system is not None:
-        route.source_system = payload.source_system.strip()
     if payload.is_active is not None:
         route.is_active = payload.is_active
     if payload.target_type is not None:
@@ -308,7 +305,6 @@ def list_webhook_delivery_events(
                 WebhookDeliveryEvent.normalized_message_json.ilike(pattern),
                 WebhookDeliveryEvent.delivery_result_json.ilike(pattern),
                 WebhookRoute.name.ilike(pattern),
-                WebhookRoute.source_system.ilike(pattern),
                 WebhookRoute.target_name.ilike(pattern),
             )
         )
@@ -392,7 +388,6 @@ def test_webhook_route(
         title=payload.title.strip(),
         text=payload.text.strip(),
         severity=payload.severity.strip().lower() or "info",
-        source=route.source_system or "relay-test",
         raw_type="test",
     )
     delivery = _deliver_to_route(db, route, message, request_metadata=_manual_test_metadata(route))
@@ -460,7 +455,7 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=event.error)
 
     try:
-        message = normalize_webhook_payload(body, request.headers.get("content-type"), source=route.source_system)
+        message = normalize_webhook_payload(body, request.headers.get("content-type"))
     except WebhookPayloadError as exc:
         event = _record_event(
             db,
@@ -610,7 +605,6 @@ def _route_out(
         "id": route.id,
         "organization_id": route.organization_id,
         "name": route.name,
-        "source_system": route.source_system,
         "is_active": route.is_active,
         "target_type": route.target_type,
         "target_name": route.target_name,
@@ -656,7 +650,6 @@ def _delivery_event_summary_out(event: WebhookDeliveryEvent, route: WebhookRoute
         id=event.id,
         route_id=event.route_id,
         route_name=route.name if route else "",
-        source_system=route.source_system if route else _string_value(normalized_message, "source"),
         target_name=route.target_name if route else "",
         status=event.status,
         title=_string_value(normalized_message, "title"),
@@ -673,7 +666,6 @@ def _delivery_event_detail_out(event: WebhookDeliveryEvent, route: WebhookRoute 
     return WebhookDeliveryEventDetailOut(
         **base.model_dump(),
         route_name=route.name if route else "",
-        source_system=route.source_system if route else "",
         target_name=route.target_name if route else "",
     )
 

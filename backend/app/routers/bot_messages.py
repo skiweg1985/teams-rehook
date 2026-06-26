@@ -69,7 +69,6 @@ async def receive_bot_activity(request: Request, db: Session = Depends(get_db)):
                     title=command_result.title,
                     text=command_result.reply_text,
                     severity=command_result.severity,
-                    source="teams-relay-bot",
                     raw_type="bot-command-reply",
                     activity=command_result.activity,
                 ),
@@ -106,6 +105,9 @@ class CommandResult:
     title: str = "Teams Rehook"
     severity: str = "info"
     activity: dict[str, Any] | None = None
+
+
+KNOWN_COMMANDS = {"register", "webhook", "disable", "enable", "delete", "info", "help"}
 
 
 def _upsert_reference(db: Session, captured: dict[str, str]) -> BotConversationReference | None:
@@ -214,32 +216,20 @@ def _handle_command(
         return _info_command(db, captured, reference, argument)
     if command == "help":
         return _help_command()
-    return CommandResult(
-        handled=True,
-        command=command,
-        reply_text=(
-            "Unknown command. Available commands: `/register <route name>`, `/webhook <route name>`, "
-            "`/disable [route name]`, `/enable [route name]`, `/delete <route name>`, `/info [route name]`, `/help`."
-        ),
-        severity="warn",
-        activity=_command_activity(
-            "Unknown command",
-            (
-                "Available commands are /register <route name>, /webhook <route name>, /disable [route name], "
-                "/enable [route name], /delete <route name>, /info [route name] and /help."
-            ),
-        ),
-    )
+    return CommandResult()
 
 
 def _parse_command(text: str) -> tuple[str, str] | None:
     cleaned = unescape(re.sub(r"<at>.*?</at>", "", text, flags=re.IGNORECASE | re.DOTALL)).strip()
-    if not cleaned.startswith("/"):
+    if not cleaned or cleaned.startswith("/"):
         return None
-    match = re.match(r"^/([A-Za-z][A-Za-z0-9_-]*)(?:\s+(.+))?$", cleaned, flags=re.DOTALL)
+    match = re.match(r"^([A-Za-z][A-Za-z0-9_-]*)(?:\s+(.+))?$", cleaned, flags=re.DOTALL)
     if not match:
-        return ("invalid", "")
-    return match.group(1).lower(), " ".join((match.group(2) or "").strip().split())
+        return None
+    command = match.group(1).lower()
+    if command not in KNOWN_COMMANDS:
+        return None
+    return command, " ".join((match.group(2) or "").strip().split())
 
 
 def _command_activity(
@@ -461,7 +451,7 @@ def _route_overview_text(route: WebhookRoute, captured: dict[str, str], *, link_
         lines.append(f"Channel: {channel}")
     if user:
         lines.append(f"User: {user}")
-    lines.append(f"Details: /info {route.name}")
+    lines.append(f"Details: info {route.name}")
     return "\n".join(lines)
 
 
@@ -536,36 +526,103 @@ def _looks_like_display_label(value: str, route: WebhookRoute, captured: dict[st
 
 
 def _help_command() -> CommandResult:
+    commands = [
+        ("register <route name>", "Create or update a route for this Teams conversation."),
+        ("webhook <route name>", "Show the webhook URL for an existing route."),
+        ("disable [route name]", "Disable a route linked to this Teams conversation."),
+        ("enable [route name]", "Enable a route linked to this Teams conversation."),
+        ("delete <route name>", "Delete a route linked to this Teams conversation."),
+        ("info [route name]", "Show linked routes or details for one route."),
+        ("help", "Show this command list."),
+    ]
     reply_text = "\n".join(
         [
             "Available commands:",
-            "`/register <route name>` - create or update a route for this Teams conversation.",
-            "`/webhook <route name>` - show the webhook URL for an existing route.",
-            "`/disable [route name]` - disable a route linked to this Teams conversation.",
-            "`/enable [route name]` - enable a route linked to this Teams conversation.",
-            "`/delete <route name>` - delete a route linked to this Teams conversation.",
-            "`/info [route name]` - show linked routes or details for one route.",
-            "`/help` - show this command list.",
+            *[f"`{command}` - {description[0].lower()}{description[1:]}" for command, description in commands],
         ]
     )
     return CommandResult(
         handled=True,
         command="help",
         reply_text=reply_text,
-        activity=_command_activity(
-            "Available commands",
-            "Use these slash commands in a chat or channel where the relay bot is installed.",
-            facts=[
-                ("/register <route name>", "Create or update a route for this Teams conversation."),
-                ("/webhook <route name>", "Show the webhook URL for an existing route."),
-                ("/disable [route name]", "Disable a route linked to this Teams conversation."),
-                ("/enable [route name]", "Enable a route linked to this Teams conversation."),
-                ("/delete <route name>", "Delete a route linked to this Teams conversation."),
-                ("/info [route name]", "Show linked routes or details for one route."),
-                ("/help", "Show this command list."),
-            ],
-        ),
+        activity=_help_command_activity(commands),
     )
+
+
+def _help_command_activity(commands: list[tuple[str, str]]) -> dict[str, Any]:
+    command_rows = []
+    for command, description in commands:
+        command_rows.append(
+            {
+                "type": "ColumnSet",
+                "spacing": "Small",
+                "columns": [
+                    {
+                        "type": "Column",
+                        "width": "auto",
+                        "items": [
+                            {
+                                "type": "TextBlock",
+                                "text": f"{command}:",
+                                "weight": "Bolder",
+                                "wrap": False,
+                            }
+                        ],
+                    },
+                    {
+                        "type": "Column",
+                        "width": "stretch",
+                        "items": [
+                            {
+                                "type": "TextBlock",
+                                "text": description,
+                                "wrap": True,
+                            }
+                        ],
+                    },
+                ],
+            }
+        )
+    return _adaptive_card_activity(
+        [
+            {
+                "type": "TextBlock",
+                "text": "Available commands",
+                "weight": "Bolder",
+                "size": "Medium",
+                "wrap": True,
+            },
+            {
+                "type": "TextBlock",
+                "text": "Use these commands in a chat or channel where the relay bot is installed.",
+                "wrap": True,
+                "spacing": "Small",
+            },
+            {
+                "type": "Container",
+                "spacing": "Medium",
+                "items": command_rows,
+            },
+        ]
+    )
+
+
+def _adaptive_card_activity(body: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "type": "message",
+        "attachments": [
+            {
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": {
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "type": "AdaptiveCard",
+                    "version": "1.4",
+                    "msteams": {"width": "Full"},
+                    "body": body,
+                },
+            }
+        ],
+    }
 
 
 def _register_route_from_command(
@@ -575,13 +632,13 @@ def _register_route_from_command(
     reference: BotConversationReference | None,
 ) -> CommandResult:
     if not route_name:
-        reply_text = "Please include a route name, for example `/register Jira Alerts`."
+        reply_text = "Please include a route name, for example `register Jira Alerts`."
         return CommandResult(
             handled=True,
             command="register",
             reply_text=reply_text,
             severity="warn",
-            activity=_command_activity("Route name required", "Please include a route name before registering.", facts=[("Example", "/register Jira Alerts")]),
+            activity=_command_activity("Route name required", "Please include a route name before registering.", facts=[("Example", "register Jira Alerts")]),
         )
     if len(route_name) > 200:
         reply_text = "Route names are limited to 200 characters. Please choose a shorter name."
@@ -620,7 +677,6 @@ def _register_route_from_command(
             organization_id=organization.id,
             created_by_id=None,
             name=route_name,
-            source_system="teams-command",
             route_token_hash=lookup_secret_hash(route_token),
             route_token=route_token,
             target_type="bot_conversation",
@@ -649,7 +705,7 @@ def _register_route_from_command(
         reply_text=(
             f"Route `{route.name}` {verb} for this conversation.\n\n"
             f"Webhook URL:\n{webhook_url}\n\n"
-            "Use `/info` to inspect the captured Teams IDs."
+            "Use `info` to inspect the captured Teams IDs."
         ),
         activity=_route_command_activity(route, verb, webhook_url, effective),
     )
@@ -657,13 +713,13 @@ def _register_route_from_command(
 
 def _webhook_url_command(db: Session, route_name: str) -> CommandResult:
     if not route_name:
-        reply_text = "Please include a route name, for example `/webhook Jira Alerts`."
+        reply_text = "Please include a route name, for example `webhook Jira Alerts`."
         return CommandResult(
             handled=True,
             command="webhook",
             reply_text=reply_text,
             severity="warn",
-            activity=_command_activity("Route name required", "Please include a route name to look up.", facts=[("Example", "/webhook Jira Alerts")]),
+            activity=_command_activity("Route name required", "Please include a route name to look up.", facts=[("Example", "webhook Jira Alerts")]),
         )
     if len(route_name) > 200:
         reply_text = "Route names are limited to 200 characters. Please choose a shorter name."
@@ -682,7 +738,7 @@ def _webhook_url_command(db: Session, route_name: str) -> CommandResult:
         )
     )
     if route is None or not route.route_token:
-        reply_text = f"No route named `{route_name}` exists yet. Use `/register {route_name}` from the target conversation first."
+        reply_text = f"No route named `{route_name}` exists yet. Use `register {route_name}` from the target conversation first."
         return CommandResult(
             handled=True,
             command="webhook",
@@ -691,7 +747,7 @@ def _webhook_url_command(db: Session, route_name: str) -> CommandResult:
             activity=_command_activity(
                 "Route not found",
                 f"No route named {route_name} exists yet.",
-                facts=[("Create it with", f"/register {route_name}")],
+                facts=[("Create it with", f"register {route_name}")],
             ),
         )
     webhook_url = _build_webhook_url(route.route_token)
@@ -728,7 +784,7 @@ def _set_route_active_command(db: Session, captured: dict[str, str], route_name:
 
 def _delete_linked_route_command(db: Session, captured: dict[str, str], route_name: str) -> CommandResult:
     if not route_name:
-        reply_text = "Please include a route name, for example `/delete Jira Alerts`."
+        reply_text = "Please include a route name, for example `delete Jira Alerts`."
         return CommandResult(
             handled=True,
             command="delete",
@@ -737,7 +793,7 @@ def _delete_linked_route_command(db: Session, captured: dict[str, str], route_na
             activity=_command_activity(
                 "Route name required",
                 "Please include the route name before deleting.",
-                facts=[("Example", "/delete Jira Alerts")],
+                facts=[("Example", "delete Jira Alerts")],
             ),
         )
     if len(route_name) > 200:
@@ -817,7 +873,7 @@ def _info_command(
                 lines.extend(f"  {line}" for line in _route_overview_text(route, captured).splitlines())
         else:
             lines.append("Linked routes: `none`")
-            lines.append("Use `/register <route name>` to link a route to this Teams conversation.")
+            lines.append("Use `register <route name>` to link a route to this Teams conversation.")
         return CommandResult(
             handled=True,
             command="info",
@@ -854,7 +910,7 @@ def _resolve_linked_route(
             title = "Linked route not found"
             message = f"No route named {route_name} is linked to this Teams conversation."
         else:
-            reply_text = "No webhook route is linked to this Teams conversation yet. Use `/register <route name>` first."
+            reply_text = "No webhook route is linked to this Teams conversation yet. Use `register <route name>` first."
             title = "No linked route"
             message = "No webhook route is linked to this Teams conversation yet."
         return None, CommandResult(
@@ -862,14 +918,14 @@ def _resolve_linked_route(
             command=command,
             reply_text=reply_text,
             severity="warn",
-            activity=_command_activity(title, message, facts=[("Create it with", "/register <route name>")]),
+            activity=_command_activity(title, message, facts=[("Create it with", "register <route name>")]),
         )
     if route_name:
         return routes[0], None
     if len(routes) == 1:
         return routes[0], None
     names = ", ".join(f"`{route.name}`" for route in routes)
-    example = f"/{command} {routes[0].name}"
+    example = f"{command} {routes[0].name}"
     return None, CommandResult(
         handled=True,
         command=command,

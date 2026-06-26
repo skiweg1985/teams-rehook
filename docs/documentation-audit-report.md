@@ -22,7 +22,7 @@ Compared documentation against the current FastAPI routers, settings model, fron
   - Updated the backend syntax-check command to include `backend/app/services/*.py`, matching `package.json`.
 - `README.md`
   - Added the implemented Payload Generator.
-  - Added implemented Teams bot slash commands.
+  - Added implemented Teams bot commands.
   - Clarified Users page limitations.
   - Clarified local Vite proxy behavior when running frontend and backend separately.
   - Added root-level validation commands.
@@ -32,7 +32,7 @@ Compared documentation against the current FastAPI routers, settings model, fron
   - Added Teams bot command behavior.
   - Added payload handling behavior.
 - `docs/prd-teams-webhook-relay-service.md`
-  - Added Payload Generator and Teams bot slash commands as implemented MVP capabilities.
+  - Added Payload Generator and Teams bot commands as implemented MVP capabilities.
   - Marked the current Users UI as list-only.
 - `docs/CHANGELOG.md`
   - Added documentation-audit entries.

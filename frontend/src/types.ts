@@ -68,7 +68,6 @@ export type WebhookRouteOut = {
   id: string;
   organization_id: string;
   name: string;
-  source_system: string;
   is_active: boolean;
   target_type: WebhookTargetType;
   target_name: string;
@@ -92,7 +91,6 @@ export type WebhookRouteOut = {
 
 export type WebhookRouteCreate = {
   name: string;
-  source_system: string;
   is_active: boolean;
   target_type: WebhookTargetType;
   target_name: string;
@@ -152,7 +150,6 @@ export type WebhookDeliveryEventSummaryOut = {
   id: string;
   route_id: string | null;
   route_name: string;
-  source_system: string;
   target_name: string;
   status: WebhookDeliveryStatus;
   title: string;
@@ -165,7 +162,6 @@ export type WebhookDeliveryEventSummaryOut = {
 
 export type WebhookDeliveryEventDetailOut = WebhookDeliveryEventOut & {
   route_name: string;
-  source_system: string;
   target_name: string;
 };
 

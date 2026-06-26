@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   AlertTriangle,
+  Check,
   ChevronLeft,
   ChevronRight,
   ClipboardCopy,
@@ -322,12 +323,19 @@ function WebhookCopyPage() {
   const inputRef = useRef<HTMLInputElement>(null);
   const webhookUrl = useMemo(() => new URLSearchParams(window.location.search).get("url") ?? "", []);
   const [status, setStatus] = useState("");
+  const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout>>();
+
+  useEffect(() => () => clearTimeout(copiedTimer.current), []);
 
   async function copyWebhookUrl() {
     if (!webhookUrl) return;
     try {
       await navigator.clipboard.writeText(webhookUrl);
-      setStatus("Webhook URL copied.");
+      setStatus("");
+      setCopied(true);
+      clearTimeout(copiedTimer.current);
+      copiedTimer.current = setTimeout(() => setCopied(false), 2000);
     } catch {
       inputRef.current?.focus();
       inputRef.current?.select();
@@ -358,13 +366,24 @@ function WebhookCopyPage() {
           />
         </div>
         <button
-          className="primary-button button-with-icon"
+          className={`primary-button button-with-icon copy-url-button${copied ? " is-copied" : ""}`}
           type="button"
           disabled={!webhookUrl}
           onClick={() => void copyWebhookUrl()}
         >
-          <ClipboardCopy aria-hidden="true" className="button-icon" focusable="false" />
-          Copy URL
+          <span className="copy-url-button-label" key={copied ? "copied" : "idle"}>
+            {copied ? (
+              <>
+                <Check aria-hidden="true" className="button-icon" focusable="false" />
+                Copied
+              </>
+            ) : (
+              <>
+                <ClipboardCopy aria-hidden="true" className="button-icon" focusable="false" />
+                Copy URL
+              </>
+            )}
+          </span>
         </button>
         {status ? (
           <p className="copy-status" role="status" aria-live="polite">
@@ -563,7 +582,7 @@ function DashboardPage() {
             {untestedRoutes.map((route) => (
               <li key={route.id}>
                 <strong>{route.name}</strong>
-                <span>Send a test message before giving the relay URL to a source system.</span>
+                <span>Send a test message before sharing the relay URL.</span>
               </li>
             ))}
             {inactiveRoutes.map((route) => (
@@ -588,7 +607,6 @@ function DashboardPage() {
             <strong>{route.name}</strong>,
             <div className="stacked-cell">
               <span>{route.target_name}</span>
-              <span className="muted">{route.source_system || "No source system"}</span>
             </div>,
             route.is_active ? <StatusBadge label="Active" tone="success" /> : <StatusBadge label="Disabled" tone="warn" />,
             <DeliveryStatusBadge route={route} />,
@@ -861,7 +879,7 @@ function PayloadGeneratorPage() {
       <PageIntro
         eyebrow="Webhook helper"
         title="Payload Generator"
-        description="Build JSON payloads for Teams Rehook webhook routes and preview the Teams message shape before copying it into a source system."
+        description="Build JSON payloads for Teams Rehook webhook routes and preview the Teams message shape before copying it into an external system."
         actions={
           <div className="row-actions">
             <button className="secondary-button button-with-icon" type="button" onClick={resetGenerator}>
@@ -973,7 +991,7 @@ function PayloadGeneratorPage() {
                 <div className="payload-options-section">
                   <div className="payload-section-header">
                     <strong>Image</strong>
-                    <span>Optional Adaptive Card image rendered from a public or source-system URL.</span>
+                    <span>Optional Adaptive Card image rendered from a public or external-system URL.</span>
                   </div>
                   <Field label="Image URL" hint="Optional">
                     <input value={imageUrl} placeholder="https://example.com/image.png" onChange={(event) => setImageUrl(event.target.value)} />
@@ -1041,7 +1059,7 @@ function PayloadGeneratorPage() {
                 <div className="payload-facts-header">
                   <div>
                     <strong>Buttons</strong>
-                    <span>OpenURL actions for related pages or source-system details.</span>
+                    <span>OpenURL actions for related pages or external-system details.</span>
                   </div>
                   <button
                     className="secondary-button secondary-button--small button-with-icon"
@@ -1274,7 +1292,6 @@ function WebhooksPage() {
   const [confirmingRegeneration, setConfirmingRegeneration] = useState<WebhookRouteOut | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState<WebhookRouteOut | null>(null);
   const [regeneratedUrl, setRegeneratedUrl] = useState<{ routeName: string; url: string } | null>(null);
-  const [testResult, setTestResult] = useState<WebhookRouteOut | null>(null);
   const [viewingBotReferences, setViewingBotReferences] = useState(false);
   const [botDefaultServiceUrl, setBotDefaultServiceUrl] = useState("");
   const [loading, setLoading] = useState(true);
@@ -1354,8 +1371,7 @@ function WebhooksPage() {
         text: "This test message was sent from Teams Rehook.",
         severity: "info",
       });
-      setTestResult(route);
-      notify({ tone: "success", title: "Test delivered", description: graphTargetLabel(route) });
+      notify({ tone: "success", title: "Test delivered", description: route.name });
       await refresh();
     } catch (error) {
       notify({
@@ -1498,10 +1514,9 @@ function WebhooksPage() {
           columns={["Route", "Target", "Health", "Relay URL", "Actions"]}
           rows={routes.map((route) => [
             <div className="stacked-cell">
-              <strong>{route.name}</strong>
-              <span className="muted">{route.source_system || "No source system"}</span>
-              {route.bot_target_source === "bot_command" ? <StatusBadge label="Bot registered" tone="success" /> : null}
-              {route.bot_target_source === "conversation_reference" ? <StatusBadge label="Conversation selected" tone="success" /> : null}
+              <button type="button" className="cell-name-button" onClick={() => setEditing(route)}>
+                {route.name}
+              </button>
             </div>,
             <div className="stacked-cell">
               <strong>{route.target_name}</strong>
@@ -1511,6 +1526,7 @@ function WebhooksPage() {
                 teamName={route.graph_team_name}
                 teamId={route.graph_team_id}
                 channelId={route.graph_channel_id}
+                compact
               />
             </div>,
             <div className="stacked-cell">
@@ -1578,7 +1594,7 @@ function WebhooksPage() {
             </div>,
           ])}
           emptyTitle="No webhook routes"
-          emptyBody="Add the bot to a Teams chat or channel, open Known conversations to confirm capture, create a route, send a test, then copy the relay URL into the source system."
+          emptyBody="Add the bot to a Teams chat or channel, open Known conversations to confirm capture, create a route, send a test, then copy the relay URL into the external system."
           loading={loading}
           loadingLabel="Loading webhook routes..."
           error={error}
@@ -1619,7 +1635,7 @@ function WebhooksPage() {
         >
           <div className="warning-box">
             <strong>This route will stop accepting webhook requests.</strong>
-            <p>Source systems using this relay URL will fail until they are pointed to another active route.</p>
+            <p>External systems using this relay URL will fail until they are pointed to another active route.</p>
           </div>
         </ConfirmModal>
       ) : null}
@@ -1627,12 +1643,11 @@ function WebhooksPage() {
         <WebhookUrlRevealModal
           title="Webhook URL regenerated"
           routeName={regeneratedUrl.routeName}
-          note="The previous URL stopped working immediately. Update any source systems that still use it."
+          note="The previous URL stopped working immediately. Update any external systems that still use it."
           onCopy={() => void copyText(regeneratedUrl.url, regeneratedUrl.routeName)}
           onClose={() => setRegeneratedUrl(null)}
         />
       ) : null}
-      {testResult ? <TestDeliveryResultModal route={testResult} onClose={() => setTestResult(null)} /> : null}
       {viewingBotReferences ? (
         <BotConversationReferencesModal
           onClose={() => setViewingBotReferences(false)}
@@ -1663,7 +1678,7 @@ function RegenerateWebhookUrlModal({
     <Modal title="Regenerate relay URL" description={`Generate a new relay URL for ${route.name}.`} onClose={onClose}>
       <div className="warning-box">
         <strong>Old URL becomes invalid immediately.</strong>
-        <p>Any source system still using the current URL will receive a not found response as soon as the new URL is created.</p>
+        <p>Any external system still using the current URL will receive a not found response as soon as the new URL is created.</p>
       </div>
       {route.webhook_url ? (
         <div className="webhook-url-box">
@@ -1717,55 +1732,6 @@ function WebhookUrlRevealModal({
   );
 }
 
-function TestDeliveryResultModal({ route, onClose }: { route: WebhookRouteOut; onClose: () => void }) {
-  return (
-    <Modal title="Test message delivered" description={route.name} onClose={onClose}>
-      <div className="test-result-layout">
-        <section className="test-result-section">
-          <strong>Expected Graph target</strong>
-          {route.graph_target_kind ? (
-            <GraphTargetSummary
-              kind={route.graph_target_kind}
-              targetName={route.target_name}
-              teamName={route.graph_team_name}
-              teamId={route.graph_team_id}
-              channelId={route.graph_channel_id}
-            />
-          ) : (
-            <p className="muted">No Graph target selected.</p>
-          )}
-        </section>
-        <section className="test-result-section">
-          <strong>Bot delivery target</strong>
-          <dl className="definition-list">
-            <dt>Service URL</dt>
-            <dd>{route.bot_service_url}</dd>
-            <dt>Conversation ID</dt>
-            <dd>{shortId(route.bot_conversation_id)}</dd>
-            {route.bot_target_source === "bot_command" ? (
-              <>
-                <dt>Registered by</dt>
-                <dd>{route.bot_registered_by_id ? shortId(route.bot_registered_by_id) : "Bot command"}</dd>
-                <dt>Registered at</dt>
-                <dd>{route.bot_registered_at ? formatDateTime(route.bot_registered_at) : "-"}</dd>
-              </>
-            ) : null}
-          </dl>
-        </section>
-        <div className="warning-box">
-          <strong>Manual verification point.</strong>
-          <p>If the message did not appear in the expected Graph target, this Bot conversation ID belongs to a different Teams context.</p>
-        </div>
-      </div>
-      <div className="form-actions">
-        <button className="primary-button" type="button" onClick={onClose}>
-          Done
-        </button>
-      </div>
-    </Modal>
-  );
-}
-
 function BotConversationReferencesModal({
   onClose,
   onCreateRoute,
@@ -1800,7 +1766,7 @@ function BotConversationReferencesModal({
   return (
     <Modal
       title="Known Teams conversations"
-      description="Conversations captured from inbound Teams bot activities. Graph-discovered targets are not sendable until the bot has a valid conversation reference."
+      description="Conversations captured from inbound Teams bot activities, grouped by channel or user."
       panelClassName="delivery-logs-modal"
       onClose={onClose}
     >
@@ -1810,37 +1776,26 @@ function BotConversationReferencesModal({
         <div className="guidance-box">
           <strong>No bot conversations captured yet.</strong>
           <p>Add Teams Rehook to a chat or channel, then send a message or mention the bot. The next inbound bot activity stores the service URL and conversation ID needed for delivery.</p>
-          <p>After a conversation appears here, create a route from it and use Send test before sharing the relay URL with a source system.</p>
+          <p>After a conversation appears here, create a route from it and use Send test before sharing the relay URL with an external system.</p>
         </div>
       ) : null}
       {references.length ? (
         <div className="conversation-reference-list">
           {references.map((reference) => (
-            <section className="test-result-section" key={reference.id}>
-              <div className="delivery-event-detail-header">
-                <div>
+            <section className="conversation-reference-card" key={reference.id}>
+              <div className="conversation-reference-main">
+                <div className="conversation-reference-heading">
                   <h3>{referenceTitle(reference)}</h3>
-                  <p>{formatDateTime(reference.last_seen_at)} · {reference.raw_activity_type || "activity"}</p>
+                  <StatusBadge label={reference.scope || "unknown"} tone={reference.scope === "channel" ? "success" : "warn"} />
                 </div>
-                <StatusBadge label={reference.scope || "unknown"} tone={reference.scope === "channel" ? "success" : "warn"} />
+                <p className="conversation-reference-meta">
+                  {reference.user_name ? <span>{reference.user_name}</span> : null}
+                  <span>{formatRelativeTime(reference.last_seen_at)}</span>
+                </p>
               </div>
-              <dl className="definition-list">
-                <dt>Conversation</dt>
-                <dd>{reference.conversation_id}</dd>
-                <dt>Service URL</dt>
-                <dd>{reference.service_url}</dd>
-                <dt>Team</dt>
-                <dd>{identityLabel(reference.team_name, reference.graph_team_id || reference.team_id)}</dd>
-                <dt>Channel</dt>
-                <dd>{identityLabel(reference.channel_name, reference.channel_id)}</dd>
-                <dt>User</dt>
-                <dd>{identityLabel(reference.user_name, reference.graph_user_id || reference.user_id)}</dd>
-              </dl>
-              <div className="form-actions">
-                <button className="secondary-button secondary-button--small" type="button" onClick={() => onCreateRoute(reference)}>
-                  Create route
-                </button>
-              </div>
+              <button className="secondary-button secondary-button--small" type="button" onClick={() => onCreateRoute(reference)}>
+                Create route
+              </button>
             </section>
           ))}
         </div>
@@ -1872,11 +1827,6 @@ function referenceSubtitle(reference: BotConversationReferenceOut): string {
   return parts.join(" · ");
 }
 
-function identityLabel(name: string, id: string): string {
-  if (name && id) return `${name} (${shortId(id)})`;
-  return name || id || "-";
-}
-
 function referenceGraphKind(reference: BotConversationReferenceOut): GraphTargetKind | "" {
   if (reference.scope === "channel" || reference.channel_id) return "channel";
   if (reference.scope === "team" || reference.graph_team_id) return "team";
@@ -1902,30 +1852,33 @@ function GraphTargetSummary({
   teamName,
   teamId,
   channelId,
+  compact = false,
 }: {
   kind: GraphTargetKind | "";
   targetName: string;
   teamName: string;
   teamId: string;
   channelId: string;
+  compact?: boolean;
 }) {
   if (!kind) return null;
+  const technicalParts = [teamId ? `team ${shortId(teamId)}` : "", channelId ? `channel ${shortId(channelId)}` : ""].filter(Boolean);
+  if (compact) {
+    const typeLabel = kind === "channel" ? "Channel" : kind === "team" ? "Team" : "User";
+    return (
+      <span className="graph-target-summary">
+        <span className="muted" title={technicalParts.length ? technicalParts.join(" / ") : undefined}>{typeLabel}</span>
+      </span>
+    );
+  }
   const label = kind === "channel" ? "Graph channel" : kind === "team" ? "Graph team" : "Graph user";
   const title = kind === "channel" && teamName ? targetName || teamName : targetName || teamName || "Selected target";
-  const technicalParts = [teamId ? `team ${shortId(teamId)}` : "", channelId ? `channel ${shortId(channelId)}` : ""].filter(Boolean);
   return (
     <span className="graph-target-summary">
       <span>{label}: {title}</span>
       {technicalParts.length ? <small>{technicalParts.join(" / ")}</small> : null}
     </span>
   );
-}
-
-function graphTargetLabel(route: WebhookRouteOut): string {
-  if (!route.graph_target_kind) return route.target_name;
-  if (route.graph_target_kind === "channel") return `Expected channel: ${route.target_name}`;
-  if (route.graph_target_kind === "team") return `Expected team: ${route.target_name}`;
-  return `Expected user: ${route.target_name}`;
 }
 
 function shortId(value: string): string {
@@ -1938,13 +1891,13 @@ function DeliveryStatusBadge({ route }: { route: WebhookRouteOut }) {
   const label = formatRelativeTime(route.last_delivery_at);
   const detail = route.last_delivery_at ? `${statusLabel} · ${formatDateTime(route.last_delivery_at)}` : statusLabel;
   const ariaLabel = `${statusLabel} ${label}`;
-  if (route.last_delivery_status === "delivered") {
-    return <StatusBadge ariaLabel={ariaLabel} label={label} title={detail} tone="success" />;
-  }
-  if (route.last_delivery_status === "failed") {
-    return <StatusBadge ariaLabel={ariaLabel} label={label} title={detail} tone="danger" />;
-  }
-  return <StatusBadge ariaLabel={ariaLabel} label={label} title={detail} tone="warn" />;
+  const tone =
+    route.last_delivery_status === "delivered" ? "success" : route.last_delivery_status === "failed" ? "danger" : "warn";
+  return (
+    <span className={classNames("delivery-status-text", `delivery-status-text--${tone}`)} aria-label={ariaLabel} title={detail}>
+      {label}
+    </span>
+  );
 }
 
 function emptyWebhookRoute(botDefaultServiceUrl = ""): WebhookRouteOut {
@@ -1952,7 +1905,6 @@ function emptyWebhookRoute(botDefaultServiceUrl = ""): WebhookRouteOut {
     id: "",
     organization_id: "",
     name: "",
-    source_system: "",
     is_active: true,
     target_type: "bot_conversation",
     target_name: "",
@@ -1979,7 +1931,6 @@ function webhookRouteFromReference(reference: BotConversationReferenceOut): Webh
   const kind = referenceGraphKind(reference);
   return {
     ...emptyWebhookRoute(reference.service_url),
-    source_system: "teams",
     target_name: referenceTargetName(reference),
     bot_service_url: reference.service_url,
     bot_conversation_id: reference.conversation_id,
@@ -2006,7 +1957,6 @@ function WebhookRouteModal({
 }) {
   const { session, notify } = useAppContext();
   const [name, setName] = useState(initial.name);
-  const [sourceSystem, setSourceSystem] = useState(initial.source_system);
   const [isActive, setIsActive] = useState(initial.is_active);
   const [targetName, setTargetName] = useState(initial.target_name);
   const [botServiceUrl, setBotServiceUrl] = useState(initial.bot_service_url);
@@ -2084,7 +2034,6 @@ function WebhookRouteModal({
     setError("");
     const body = {
       name: name.trim(),
-      source_system: sourceSystem.trim(),
       is_active: isActive,
       target_type: "bot_conversation" as const,
       target_name: targetName.trim(),
@@ -2121,19 +2070,36 @@ function WebhookRouteModal({
     <Modal
       title={route ? "Edit webhook route" : "New webhook route"}
       description="Create stable relay URLs from Teams conversations the bot has already captured."
+      panelClassName="webhook-route-modal"
       onClose={onClose}
     >
       <form className="compact-form" onSubmit={submit}>
-        <Field label="Name">
-          <input value={name} required maxLength={200} onChange={(event) => setName(event.target.value)} />
-        </Field>
-        <Field label="Source system" hint="For example PRTG, macmon or firewall-events.">
-          <input value={sourceSystem} maxLength={120} onChange={(event) => setSourceSystem(event.target.value)} />
-        </Field>
-        <label className="checkbox-field">
-          <input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} />
-          <span>Route is active</span>
-        </label>
+        <div className="webhook-route-modal-top">
+          <Field label="Name">
+            <input value={name} required maxLength={200} onChange={(event) => setName(event.target.value)} />
+          </Field>
+          <div className="field">
+            <span>Status</span>
+            <div className="segmented-control" aria-label="Route status">
+              <button
+                type="button"
+                className={classNames("segmented-control-button", isActive && "is-active")}
+                aria-pressed={isActive}
+                onClick={() => setIsActive(true)}
+              >
+                Active
+              </button>
+              <button
+                type="button"
+                className={classNames("segmented-control-button", !isActive && "is-active")}
+                aria-pressed={!isActive}
+                onClick={() => setIsActive(false)}
+              >
+                Disabled
+              </button>
+            </div>
+          </div>
+        </div>
         <div className="graph-target-picker">
           <div className="graph-target-picker-header">
             <div>
@@ -2378,8 +2344,6 @@ function DeliveryEventDetails({ event }: { event: WebhookDeliveryEventOut & Part
         <dd>{event.route_name || (event.route_id ? shortId(event.route_id) : "-")}</dd>
         <dt>Target</dt>
         <dd>{event.target_name || "-"}</dd>
-        <dt>Source</dt>
-        <dd>{event.source_system || stringField(event.normalized_message, "source")}</dd>
         <dt>Mode</dt>
         <dd>{stringField(deliveryResult, "mode")}</dd>
         <dt>Status code</dt>
@@ -2781,7 +2745,7 @@ function SettingsPage() {
                   <li>Send or mention the bot once so Teams Rehook captures the conversation.</li>
                   <li>Create a webhook route from that known conversation.</li>
                   <li>Use Send test and confirm the message appears in Teams.</li>
-                  <li>Copy the relay URL into the source system and monitor Messages.</li>
+                  <li>Copy the relay URL into the external system and monitor Messages.</li>
                 </ol>
               </Card>
             </div>
@@ -3385,7 +3349,7 @@ function MessageLogsPage() {
             <input
               type="search"
               value={searchText}
-              placeholder="Route, source, message, error, payload"
+              placeholder="Route, message, error, payload"
               onChange={(event) => setSearchText(event.target.value)}
             />
           </label>
@@ -3399,7 +3363,7 @@ function MessageLogsPage() {
                 formatDateTime(event.created_at),
                 <div className="stacked-cell">
                   <strong>{event.route_name || "Deleted route"}</strong>
-                  <span className="muted">{event.source_system || event.target_name || "No route metadata"}</span>
+                  <span className="muted">{event.target_name || "No route metadata"}</span>
                 </div>,
                 <div className="stacked-cell">
                   <span>{event.title || "-"}</span>
