@@ -34,27 +34,6 @@ export type Toast = {
   description?: string;
 };
 
-export type DemoItemStatus = "todo" | "in_progress" | "done";
-
-export type DemoItemOut = {
-  id: string;
-  organization_id: string;
-  owner_id: string | null;
-  title: string;
-  status: DemoItemStatus;
-  summary: string;
-  created_at: string;
-  updated_at: string;
-};
-
-export type DemoItemCreate = {
-  title: string;
-  status: DemoItemStatus;
-  summary: string;
-};
-
-export type DemoItemUpdate = Partial<DemoItemCreate>;
-
 export type AuditEventOut = {
   id: string;
   actor_type: string;
@@ -65,6 +44,7 @@ export type AuditEventOut = {
 };
 
 export type WebhookTargetType = "bot_conversation";
+export type GraphTargetKind = "user" | "team" | "channel";
 
 export type WebhookRouteOut = {
   id: string;
@@ -76,6 +56,14 @@ export type WebhookRouteOut = {
   target_name: string;
   bot_service_url: string;
   bot_conversation_id: string;
+  graph_target_kind: GraphTargetKind | "";
+  graph_target_id: string;
+  graph_team_id: string;
+  graph_team_name: string;
+  graph_channel_id: string;
+  bot_target_source: string;
+  bot_registered_by_id: string;
+  bot_registered_at: string | null;
   webhook_url: string | null;
   webhook_url_available: boolean;
   last_delivery_status: "delivered" | "failed" | "rejected" | null;
@@ -92,6 +80,12 @@ export type WebhookRouteCreate = {
   target_name: string;
   bot_service_url: string;
   bot_conversation_id: string;
+  graph_target_kind?: GraphTargetKind | null;
+  graph_target_id?: string;
+  graph_team_id?: string;
+  graph_team_name?: string;
+  graph_channel_id?: string;
+  bot_target_source?: string;
 };
 
 export type WebhookRouteUpdate = Partial<WebhookRouteCreate>;
@@ -114,13 +108,46 @@ export type WebhookRouteDefaultsOut = {
   bot_default_service_url: string;
 };
 
+export type WebhookDeliveryStatus = "delivered" | "failed" | "rejected";
+
 export type WebhookDeliveryEventOut = {
   id: string;
   route_id: string | null;
-  status: "delivered" | "failed" | "rejected";
+  status: WebhookDeliveryStatus;
   request_metadata: Record<string, unknown>;
   normalized_message: Record<string, unknown>;
   delivery_result: Record<string, unknown>;
   error: string;
   created_at: string;
+};
+
+export type TeamsTargetSearchResult = {
+  kind: GraphTargetKind;
+  id: string;
+  display_name: string;
+  subtitle: string;
+  team_id: string | null;
+  team_name: string | null;
+  channel_id: string | null;
+};
+
+export type BotConversationReferenceOut = {
+  id: string;
+  scope: string;
+  service_url: string;
+  conversation_id: string;
+  tenant_id: string;
+  team_id: string;
+  graph_team_id: string;
+  channel_id: string;
+  conversation_type: string;
+  team_name: string;
+  channel_name: string;
+  user_id: string;
+  user_name: string;
+  graph_user_id: string;
+  raw_activity_type: string;
+  last_seen_at: string;
+  created_at: string;
+  updated_at: string;
 };

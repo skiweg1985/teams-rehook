@@ -1,1 +1,1 @@
-"""Codex app skeleton backend package."""
+"""Teams Messenger backend package."""

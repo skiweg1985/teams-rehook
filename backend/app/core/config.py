@@ -8,7 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="", extra="ignore")
 
-    app_name: str = "codex-app-skeleton"
+    app_name: str = "Teams Messenger"
     app_version: str = "0.1.0"
     api_v1_prefix: str = "/api/v1"
     database_url: str = "sqlite:///./app.db"
@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     app_public_base_url: str = "http://localhost:8000"
     frontend_base_url: str = "http://localhost:5173"
 
-    session_cookie_name: str = "codex_app_session"
+    session_cookie_name: str = "teams_messenger_session"
     session_ttl_hours: int = 8
     session_secure_cookie: bool = False
     session_secret: str = "change-me-session-secret"
@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     bot_delivery_mode: str = "mock"
     bot_default_service_url: str = ""
     webhook_max_payload_bytes: int = 64_000
+
+    graph_tenant_id: str = ""
+    graph_client_id: str = ""
+    graph_client_secret: str = ""
+    graph_scope: str = "https://graph.microsoft.com/.default"
 
     @property
     def cors_origin_list(self) -> list[str]:

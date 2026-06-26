@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
@@ -24,6 +26,8 @@ from app.services.teams_bot import BotDeliveryError, send_bot_activity
 from app.services.webhook_payloads import NormalizedMessage, WebhookPayloadError, normalize_webhook_payload, payload_preview
 
 router = APIRouter(tags=["webhook-routes"])
+
+DeliveryStatusFilter = Literal["delivered", "failed", "rejected"]
 
 
 @router.get("/webhook-routes", response_model=list[WebhookRouteOut])
@@ -66,6 +70,12 @@ def create_webhook_route(
         target_name=payload.target_name.strip(),
         bot_service_url=payload.bot_service_url.strip(),
         bot_conversation_id=payload.bot_conversation_id.strip(),
+        graph_target_kind=payload.graph_target_kind or "",
+        graph_target_id=payload.graph_target_id.strip(),
+        graph_team_id=payload.graph_team_id.strip(),
+        graph_team_name=payload.graph_team_name.strip(),
+        graph_channel_id=payload.graph_channel_id.strip(),
+        bot_target_source=payload.bot_target_source.strip(),
     )
     _validate_target(route)
     db.add(route)
@@ -109,6 +119,18 @@ def update_webhook_route(
         route.bot_service_url = payload.bot_service_url.strip()
     if payload.bot_conversation_id is not None:
         route.bot_conversation_id = payload.bot_conversation_id.strip()
+    if payload.graph_target_kind is not None:
+        route.graph_target_kind = payload.graph_target_kind
+    if payload.graph_target_id is not None:
+        route.graph_target_id = payload.graph_target_id.strip()
+    if payload.graph_team_id is not None:
+        route.graph_team_id = payload.graph_team_id.strip()
+    if payload.graph_team_name is not None:
+        route.graph_team_name = payload.graph_team_name.strip()
+    if payload.graph_channel_id is not None:
+        route.graph_channel_id = payload.graph_channel_id.strip()
+    if payload.bot_target_source is not None:
+        route.bot_target_source = payload.bot_target_source.strip()
     _validate_target(route)
     record_audit(
         db,
@@ -175,16 +197,15 @@ def regenerate_webhook_route_url(
 def list_webhook_route_deliveries(
     route_id: str,
     limit: int = Query(default=25, ge=1, le=100),
+    status_filter: DeliveryStatusFilter | None = Query(default=None, alias="status"),
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     route = _get_org_route(db, admin.organization_id, route_id)
-    events = db.scalars(
-        select(WebhookDeliveryEvent)
-        .where(WebhookDeliveryEvent.route_id == route.id)
-        .order_by(WebhookDeliveryEvent.created_at.desc())
-        .limit(limit)
-    ).all()
+    query = select(WebhookDeliveryEvent).where(WebhookDeliveryEvent.route_id == route.id)
+    if status_filter:
+        query = query.where(WebhookDeliveryEvent.status == status_filter)
+    events = db.scalars(query.order_by(WebhookDeliveryEvent.created_at.desc()).limit(limit)).all()
     return [_delivery_event_out(event) for event in events]
 
 
@@ -203,7 +224,7 @@ def test_webhook_route(
         source=route.source_system or "relay-test",
         raw_type="test",
     )
-    delivery = _deliver_to_route(db, route, message, request_metadata={"trigger": "manual_test"})
+    delivery = _deliver_to_route(db, route, message, request_metadata=_manual_test_metadata(route))
     record_audit(
         db,
         action="webhook_route.tested",
@@ -386,6 +407,24 @@ def _request_metadata(request: Request, body: bytes) -> dict:
     }
 
 
+def _manual_test_metadata(route: WebhookRoute) -> dict:
+    return {
+        "trigger": "manual_test",
+        "graph_target": {
+            "kind": route.graph_target_kind,
+            "target_name": route.target_name,
+            "target_id": route.graph_target_id,
+            "team_id": route.graph_team_id,
+            "team_name": route.graph_team_name,
+            "channel_id": route.graph_channel_id,
+        },
+        "bot_target": {
+            "service_url": route.bot_service_url,
+            "conversation_id": route.bot_conversation_id,
+        },
+    }
+
+
 def _route_out(
     route: WebhookRoute,
     *,
@@ -402,6 +441,14 @@ def _route_out(
         "target_name": route.target_name,
         "bot_service_url": route.bot_service_url,
         "bot_conversation_id": route.bot_conversation_id,
+        "graph_target_kind": route.graph_target_kind,
+        "graph_target_id": route.graph_target_id,
+        "graph_team_id": route.graph_team_id,
+        "graph_team_name": route.graph_team_name,
+        "graph_channel_id": route.graph_channel_id,
+        "bot_target_source": route.bot_target_source,
+        "bot_registered_by_id": route.bot_registered_by_id,
+        "bot_registered_at": route.bot_registered_at,
         "webhook_url": webhook_url,
         "webhook_url_available": webhook_url is not None,
         "last_delivery_status": route.last_delivery_status,

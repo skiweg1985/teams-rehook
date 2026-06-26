@@ -55,19 +55,6 @@ class Session(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
-class DemoItem(Base):
-    __tablename__ = "demo_items"
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
-    owner_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
-    title: Mapped[str] = mapped_column(String(255))
-    status: Mapped[str] = mapped_column(String(32), default="todo", index=True)
-    summary: Mapped[str] = mapped_column(Text, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
-
-
 class WebhookRoute(Base):
     __tablename__ = "webhook_routes"
 
@@ -83,6 +70,14 @@ class WebhookRoute(Base):
     target_name: Mapped[str] = mapped_column(String(200))
     bot_service_url: Mapped[str] = mapped_column(Text, default="")
     bot_conversation_id: Mapped[str] = mapped_column(Text, default="")
+    graph_target_kind: Mapped[str] = mapped_column(String(32), default="")
+    graph_target_id: Mapped[str] = mapped_column(Text, default="")
+    graph_team_id: Mapped[str] = mapped_column(Text, default="")
+    graph_team_name: Mapped[str] = mapped_column(String(200), default="")
+    graph_channel_id: Mapped[str] = mapped_column(Text, default="")
+    bot_target_source: Mapped[str] = mapped_column(String(40), default="")
+    bot_registered_by_id: Mapped[str] = mapped_column(Text, default="")
+    bot_registered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_delivery_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     last_delivery_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
@@ -104,6 +99,55 @@ class WebhookDeliveryEvent(Base):
     delivery_result_json: Mapped[str] = mapped_column(Text, default="{}")
     error: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
+
+
+class BotActivityEvent(Base):
+    __tablename__ = "bot_activity_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    activity_type: Mapped[str] = mapped_column(String(80), default="", index=True)
+    service_url: Mapped[str] = mapped_column(Text, default="")
+    conversation_id: Mapped[str] = mapped_column(Text, default="", index=True)
+    tenant_id: Mapped[str] = mapped_column(Text, default="", index=True)
+    team_id: Mapped[str] = mapped_column(Text, default="", index=True)
+    graph_team_id: Mapped[str] = mapped_column(Text, default="", index=True)
+    channel_id: Mapped[str] = mapped_column(Text, default="", index=True)
+    conversation_type: Mapped[str] = mapped_column(String(40), default="")
+    team_name: Mapped[str] = mapped_column(String(200), default="")
+    channel_name: Mapped[str] = mapped_column(String(200), default="")
+    from_id: Mapped[str] = mapped_column(Text, default="")
+    user_name: Mapped[str] = mapped_column(String(200), default="")
+    graph_user_id: Mapped[str] = mapped_column(Text, default="", index=True)
+    recipient_id: Mapped[str] = mapped_column(Text, default="")
+    raw_activity_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
+
+
+class BotConversationReference(Base):
+    __tablename__ = "bot_conversation_references"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    scope: Mapped[str] = mapped_column(String(32), default="", index=True)
+    service_url: Mapped[str] = mapped_column(Text, default="")
+    conversation_id: Mapped[str] = mapped_column(Text, default="", index=True)
+    tenant_id: Mapped[str] = mapped_column(Text, default="", index=True)
+    team_id: Mapped[str] = mapped_column(Text, default="", index=True)
+    graph_team_id: Mapped[str] = mapped_column(Text, default="", index=True)
+    channel_id: Mapped[str] = mapped_column(Text, default="", index=True)
+    conversation_type: Mapped[str] = mapped_column(String(40), default="")
+    team_name: Mapped[str] = mapped_column(String(200), default="")
+    channel_name: Mapped[str] = mapped_column(String(200), default="")
+    user_id: Mapped[str] = mapped_column(Text, default="", index=True)
+    user_name: Mapped[str] = mapped_column(String(200), default="")
+    graph_user_id: Mapped[str] = mapped_column(Text, default="", index=True)
+    raw_activity_type: Mapped[str] = mapped_column(String(80), default="")
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+    __table_args__ = (
+        UniqueConstraint("conversation_id", name="uq_bot_conversation_references_conversation_id"),
+    )
 
 
 class AuditEvent(Base):

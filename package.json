@@ -1,7 +1,7 @@
 {
-  "name": "codex-app-skeleton",
+  "name": "teams-messenger",
   "version": "0.1.0",
-  "description": "Template for authenticated internal tools with FastAPI, Postgres, React and Vite",
+  "description": "Teams webhook relay for forwarding operational messages into Microsoft Teams",
   "private": true,
   "type": "module",
   "scripts": {

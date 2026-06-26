@@ -19,7 +19,7 @@ services:
   proxy:
     build:
       context: ./haproxy
-    container_name: codex-app-proxy
+    container_name: teams-messenger-proxy
     depends_on:
       - frontend
       - backend
@@ -33,13 +33,13 @@ services:
   frontend:
     build:
       context: ./frontend
-    container_name: codex-app-frontend
+    container_name: teams-messenger-frontend
     restart: unless-stopped
 
   backend:
     build:
       context: ./backend
-    container_name: codex-app-backend
+    container_name: teams-messenger-backend
     env_file:
       - .env
     environment:

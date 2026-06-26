@@ -3,11 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>codex-app-skeleton</title>
+    <title>Teams Messenger</title>
     <script>
       (function () {
         try {
-          var p = localStorage.getItem("codex-app-theme") || "system";
+          var p = localStorage.getItem("teams-messenger-theme") || "system";
           var dark = p === "dark" || (p === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
           document.documentElement.classList.toggle("dark", dark);
           document.documentElement.dataset.themePreference = p;

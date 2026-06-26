@@ -1,0 +1,59 @@
+# Graph Autocomplete Spike
+
+## Decision
+
+The target lookup spike uses Microsoft Graph with app-only credentials. This keeps the relay service aligned with the service-owned operating model and avoids coupling route administration to a personal Microsoft 365 user session.
+
+The Graph lookup is only target discovery metadata for now. Bot delivery still uses the configured Bot Framework service URL and conversation ID, and each route must be validated with a test message before it is treated as reachable.
+
+## Required Configuration
+
+```text
+GRAPH_TENANT_ID=
+GRAPH_CLIENT_ID=
+GRAPH_CLIENT_SECRET=
+GRAPH_SCOPE=https://graph.microsoft.com/.default
+```
+
+`GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID`, and `GRAPH_CLIENT_SECRET` may be left empty when the same Entra app registration is used for Bot Framework delivery and Graph lookup. In that case the service reuses `BOT_TENANT_ID`, `BOT_CLIENT_ID`, and `BOT_CLIENT_SECRET` for the Graph token request while keeping the Graph scope separate.
+
+## Starting Permissions
+
+- `User.Read.All` for user search.
+- `Team.ReadBasic.All` for Teams search.
+- `Channel.ReadBasic.All` for channel listing.
+
+Admin consent is expected for the app-only permissions.
+
+## Implemented API Surface
+
+- `GET /api/v1/teams-targets/search?kind=user|team&q=...`
+- `GET /api/v1/teams-targets/teams/{team_id}/channels?q=...`
+
+Responses use one shape:
+
+```json
+{
+  "kind": "channel",
+  "id": "channel-id",
+  "display_name": "Alerts",
+  "subtitle": "standard",
+  "team_id": "team-id",
+  "team_name": "Operations",
+  "channel_id": "channel-id"
+}
+```
+
+## Open Microsoft Questions
+
+- Whether the existing Teams app/bot is installed in each selected target context.
+- Whether a selected Graph channel can be turned into a Bot Framework conversation reference without prior bot installation or interaction.
+- Whether proactive installation or proactive conversation creation should be added later, and which Teams app installation permissions would be acceptable for that path.
+
+## References
+
+- Microsoft Graph list users: https://learn.microsoft.com/en-us/graph/api/user-list
+- Microsoft Graph list teams: https://learn.microsoft.com/en-us/graph/api/teams-list
+- Microsoft Graph list channels: https://learn.microsoft.com/en-us/graph/api/channel-list
+- Microsoft Graph service app authentication: https://learn.microsoft.com/en-us/graph/auth-v2-service
+- Teams proactive bot messages: https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/send-proactive-messages

@@ -70,12 +70,16 @@ export function DataTable({
   emptyTitle,
   emptyBody,
   rowKey,
+  rowClassName,
+  onRowClick,
 }: {
   columns: string[];
   rows: ReactNode[][];
   emptyTitle: string;
   emptyBody: string;
   rowKey?: (rowIndex: number) => Key;
+  rowClassName?: (rowIndex: number) => string | false | null | undefined;
+  onRowClick?: (rowIndex: number) => void;
 }) {
   if (!rows.length) return <EmptyState title={emptyTitle} body={emptyBody} />;
   return (
@@ -90,7 +94,23 @@ export function DataTable({
         </thead>
         <tbody>
           {rows.map((row, rowIndex) => (
-            <tr key={rowKey?.(rowIndex) ?? rowIndex}>
+            <tr
+              key={rowKey?.(rowIndex) ?? rowIndex}
+              className={classNames(rowClassName?.(rowIndex), onRowClick ? "data-table-row--interactive" : null)}
+              role={onRowClick ? "button" : undefined}
+              tabIndex={onRowClick ? 0 : undefined}
+              onClick={onRowClick ? () => onRowClick(rowIndex) : undefined}
+              onKeyDown={
+                onRowClick
+                  ? (event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        onRowClick(rowIndex);
+                      }
+                    }
+                  : undefined
+              }
+            >
               {row.map((cell, cellIndex) => (
                 <td key={`${rowIndex}-${cellIndex}`}>{cell}</td>
               ))}
@@ -112,13 +132,21 @@ export function EmptyState({ title, body }: { title: string; body: string }) {
 }
 
 export function StatusBadge({
+  ariaLabel,
   label,
+  title,
   tone = "neutral",
 }: {
+  ariaLabel?: string;
   label: string;
+  title?: string;
   tone?: "neutral" | "success" | "warn" | "danger";
 }) {
-  return <span className={classNames("status-badge", `status-badge--${tone}`)}>{label}</span>;
+  return (
+    <span className={classNames("status-badge", `status-badge--${tone}`)} aria-label={ariaLabel} title={title}>
+      {label}
+    </span>
+  );
 }
 
 export function Field({
@@ -142,11 +170,13 @@ export function Field({
 export function Modal({
   title,
   description,
+  panelClassName,
   onClose,
   children,
 }: {
   title: string;
   description?: string;
+  panelClassName?: string;
   onClose: () => void;
   children: ReactNode;
 }) {
@@ -162,7 +192,7 @@ export function Modal({
   return (
     <div className="modal-root" role="dialog" aria-modal="true" aria-labelledby={titleId}>
       <button type="button" className="modal-backdrop" aria-label="Dismiss" onClick={onClose} />
-      <div className="modal-panel">
+      <div className={classNames("modal-panel", panelClassName)}>
         <div className="modal-panel-header">
           <h2 id={titleId}>{title}</h2>
         </div>

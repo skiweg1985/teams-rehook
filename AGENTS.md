@@ -1,6 +1,6 @@
 # Agent Notes
 
-This repository is `codex-app-skeleton`, a template for authenticated internal tools.
+This repository is `teams-messenger`, an authenticated internal tool for relaying webhook messages into Microsoft Teams.
 
 ## Stack
 
@@ -19,6 +19,6 @@ This repository is `codex-app-skeleton`, a template for authenticated internal t
 ## Implementation Notes
 
 - Keep authenticated writes behind `require_csrf` on the backend and `X-CSRF-Token` in the frontend API client.
-- Replace `DemoItem` with the app's first real domain object when creating a concrete project from this template.
+- The app's primary domain objects are webhook routes, Teams bot conversation references and webhook delivery events.
 - Preserve the neutral CSS-token design language unless a concrete product has a stronger brand direction.
 - Avoid reintroducing third-party integration domain concepts unless the new app explicitly needs them.

@@ -1,13 +1,13 @@
 import type {
   ApiError,
   AuditEventOut,
-  DemoItemCreate,
-  DemoItemOut,
-  DemoItemUpdate,
+  BotConversationReferenceOut,
   SessionResponse,
+  TeamsTargetSearchResult,
   UserOut,
   WebhookDeliveryEventOut,
   WebhookDeliveryOut,
+  WebhookDeliveryStatus,
   WebhookRouteCreate,
   WebhookRouteDefaultsOut,
   WebhookRouteOut,
@@ -72,29 +72,6 @@ export const api = {
       csrfToken,
     });
   },
-  demoItems() {
-    return request<DemoItemOut[]>("/api/v1/demo-items");
-  },
-  createDemoItem(csrfToken: string, body: DemoItemCreate) {
-    return request<DemoItemOut>("/api/v1/demo-items", {
-      method: "POST",
-      csrfToken,
-      body,
-    });
-  },
-  updateDemoItem(csrfToken: string, id: string, body: DemoItemUpdate) {
-    return request<DemoItemOut>(`/api/v1/demo-items/${encodeURIComponent(id)}`, {
-      method: "PATCH",
-      csrfToken,
-      body,
-    });
-  },
-  deleteDemoItem(csrfToken: string, id: string) {
-    return request<void>(`/api/v1/demo-items/${encodeURIComponent(id)}`, {
-      method: "DELETE",
-      csrfToken,
-    });
-  },
   adminUsers(csrfToken: string) {
     return request<UserOut[]>("/api/v1/admin/users", { csrfToken });
   },
@@ -106,6 +83,9 @@ export const api = {
   },
   webhookRouteDefaults() {
     return request<WebhookRouteDefaultsOut>("/api/v1/webhook-routes/defaults");
+  },
+  botConversationReferences() {
+    return request<BotConversationReferenceOut[]>("/api/v1/bot/conversation-references");
   },
   createWebhookRoute(csrfToken: string, body: WebhookRouteCreate) {
     return request<WebhookRouteOut>("/api/v1/webhook-routes", {
@@ -133,8 +113,13 @@ export const api = {
       csrfToken,
     });
   },
-  webhookRouteDeliveries(id: string) {
-    return request<WebhookDeliveryEventOut[]>(`/api/v1/webhook-routes/${encodeURIComponent(id)}/deliveries`);
+  webhookRouteDeliveries(id: string, status?: WebhookDeliveryStatus) {
+    const params = new URLSearchParams();
+    if (status) params.set("status", status);
+    const query = params.toString();
+    return request<WebhookDeliveryEventOut[]>(
+      `/api/v1/webhook-routes/${encodeURIComponent(id)}/deliveries${query ? `?${query}` : ""}`,
+    );
   },
   testWebhookRoute(csrfToken: string, id: string, body: WebhookRouteTestRequest) {
     return request<WebhookDeliveryOut>(`/api/v1/webhook-routes/${encodeURIComponent(id)}/test`, {
@@ -142,5 +127,15 @@ export const api = {
       csrfToken,
       body,
     });
+  },
+  searchTeamsTargets(kind: "user" | "team", query: string) {
+    const params = new URLSearchParams({ kind, q: query });
+    return request<TeamsTargetSearchResult[]>(`/api/v1/teams-targets/search?${params.toString()}`);
+  },
+  teamChannels(teamId: string, query: string) {
+    const params = new URLSearchParams({ q: query });
+    return request<TeamsTargetSearchResult[]>(
+      `/api/v1/teams-targets/teams/${encodeURIComponent(teamId)}/channels?${params.toString()}`,
+    );
   },
 };

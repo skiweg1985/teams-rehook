@@ -19,6 +19,26 @@ export function formatDateTime(value: string | null): string {
   }).format(date);
 }
 
+export function formatRelativeTime(value: string | null, now = new Date()): string {
+  if (!value) return "Never";
+  const date = parseApiDateTime(value);
+  if (Number.isNaN(date.getTime())) return value;
+
+  const seconds = Math.round((date.getTime() - now.getTime()) / 1000);
+  const absSeconds = Math.abs(seconds);
+  if (absSeconds < 45) return "now";
+
+  const [suffix, size]: [string, number] =
+    absSeconds < 60 * 60
+      ? ["m", 60]
+      : absSeconds < 60 * 60 * 24
+        ? ["h", 60 * 60]
+        : ["d", 60 * 60 * 24];
+
+  const amount = Math.max(1, Math.round(absSeconds / size));
+  return seconds < 0 ? `${amount}${suffix} ago` : `in ${amount}${suffix}`;
+}
+
 export function compactJson(value: Record<string, unknown>): string {
   const keys = Object.keys(value);
   if (!keys.length) return "-";

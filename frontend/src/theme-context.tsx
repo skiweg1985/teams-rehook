@@ -8,7 +8,7 @@ import {
   type PropsWithChildren,
 } from "react";
 
-const STORAGE_KEY = "codex-app-theme";
+const STORAGE_KEY = "teams-messenger-theme";
 
 export type ThemePreference = "light" | "dark" | "system";
 
