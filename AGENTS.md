@@ -1,6 +1,6 @@
 # Agent Notes
 
-This repository is `teams-messenger`, an authenticated internal tool for relaying webhook messages into Microsoft Teams.
+This repository is `teams-rehook`, an authenticated internal tool for relaying webhook messages into Microsoft Teams.
 
 ## Stack
 

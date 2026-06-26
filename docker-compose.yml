@@ -19,7 +19,7 @@ services:
   proxy:
     build:
       context: ./haproxy
-    container_name: teams-messenger-proxy
+    container_name: teams-rehook-proxy
     depends_on:
       - frontend
       - backend
@@ -33,13 +33,13 @@ services:
   frontend:
     build:
       context: ./frontend
-    container_name: teams-messenger-frontend
+    container_name: teams-rehook-frontend
     restart: unless-stopped
 
   backend:
     build:
       context: ./backend
-    container_name: teams-messenger-backend
+    container_name: teams-rehook-backend
     env_file:
       - .env
     environment:

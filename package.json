@@ -1,5 +1,5 @@
 {
-  "name": "teams-messenger",
+  "name": "teams-rehook",
   "version": "0.1.0",
   "description": "Teams webhook relay for forwarding operational messages into Microsoft Teams",
   "private": true,

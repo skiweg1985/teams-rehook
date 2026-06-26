@@ -103,7 +103,7 @@ class CommandResult:
     handled: bool = False
     command: str | None = None
     reply_text: str | None = None
-    title: str = "Teams Relay"
+    title: str = "Teams Rehook"
     severity: str = "info"
     activity: dict[str, Any] | None = None
 

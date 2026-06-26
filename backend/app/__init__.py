@@ -1,1 +1,1 @@
-"""Teams Messenger backend package."""
+"""Teams Rehook backend package."""

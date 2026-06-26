@@ -8,7 +8,7 @@ import {
   type PropsWithChildren,
 } from "react";
 
-const STORAGE_KEY = "teams-messenger-theme";
+const STORAGE_KEY = "teams-rehook-theme";
 
 export type ThemePreference = "light" | "dark" | "system";
 

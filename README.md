@@ -1,15 +1,27 @@
-# Teams Messenger User Guide
+# Teams Rehook User Guide
 
-Teams Messenger relays webhook messages from internal systems into Microsoft Teams. Administrators create stable relay URLs, connect those URLs to Teams conversations, and review whether messages were delivered successfully.
+Teams Rehook relays webhook messages from internal systems into Microsoft Teams. Administrators create stable relay URLs, connect those URLs to captured Teams bot conversations, test delivery, and monitor webhook outcomes from one operations UI.
 
-## What Teams Messenger Is For
+Teams Rehook is currently an internal MVP/evaluation-stage tool. The core relay flow is implemented, but production rollout still depends on tenant-specific Bot Framework setup, Microsoft Graph permissions, operational ownership, and hardening decisions.
+
+## What Teams Rehook Is For
 
 - Connect webhook sources such as monitoring, firewall events, or operations systems to Teams
-- Manage one stable relay URL per source
-- Select Teams targets from known bot conversations
+- Manage one stable relay URL per source system or event stream
+- Capture Teams bot conversations and use them as delivery targets
 - Send test messages before enabling a source in production
 - Review delivered, failed, and rejected webhook attempts
 - Regenerate relay URLs when a URL must be rotated or has been exposed
+
+## Prerequisites
+
+- Docker and Docker Compose for the default local stack
+- A Teams bot/app registration for real Teams delivery
+- Bot Framework credentials for `BOT_DELIVERY_MODE=real`
+- Optional Microsoft Graph app credentials for target search and display-name resolution
+- A Teams chat or channel where the bot is installed and allowed to receive at least one activity
+
+Graph search helps find Teams, channels, and users. It does not prove that the bot can send to that target. A route is sendable only after Teams Rehook has a valid Bot Framework service URL and conversation ID, usually captured from an inbound bot activity.
 
 ## Start The Application
 
@@ -25,7 +37,7 @@ Teams Messenger relays webhook messages from internal systems into Microsoft Tea
    docker compose up -d --build
    ```
 
-3. Open the application in your browser:
+3. Open the application:
 
    ```text
    http://localhost:8080
@@ -33,18 +45,18 @@ Teams Messenger relays webhook messages from internal systems into Microsoft Tea
 
 The API documentation is available at `http://localhost:8080/api/v1/docs`.
 
-If you need different ports, update `PROXY_HTTP_PORT` and `PROXY_HTTPS_PORT` in `.env`.
+If port `8080` or `8443` is already in use, update `PROXY_HTTP_PORT` and `PROXY_HTTPS_PORT` in `.env`.
 
 ## First Sign-In
 
-On first start, the application creates an admin user from `.env`. The default values from `.env.example` are:
+On first start, the application creates an admin user from `.env`. The defaults from `.env.example` are:
 
 ```text
 Email: admin@example.com
 Password: change-me-admin-password
 ```
 
-Change these values before production use:
+Change these before production-like use:
 
 ```text
 BOOTSTRAP_ADMIN_EMAIL=
@@ -55,20 +67,45 @@ SESSION_SECRET=
 
 Restart the containers after changing configuration.
 
-## Prepare Teams Targets
+## Delivery Modes
 
-A webhook route needs a Teams conversation where the bot is allowed to send messages. The easiest setup is to use a conversation the bot has already seen.
+Local validation uses mock delivery by default:
 
-1. Install or add the Teams bot to the target conversation.
-2. Send the bot a message or mention it in the target channel.
-3. Open **Webhooks** in Teams Messenger.
-4. Click **Known conversations** to review captured conversations.
+```text
+BOT_DELIVERY_MODE=mock
+```
 
-If the conversation is not listed yet, use the advanced target fields when creating a route and enter the Bot Framework details manually:
+Mock mode records successful delivery attempts without sending real Teams messages.
 
-- Teams target name
-- Bot service URL
-- Bot conversation ID
+For real Teams delivery, set:
+
+```text
+BOT_DELIVERY_MODE=real
+BOT_TENANT_ID=
+BOT_CLIENT_ID=
+BOT_CLIENT_SECRET=
+BOT_DEFAULT_SERVICE_URL=
+```
+
+For Microsoft Graph target search and name resolution, configure Graph credentials. If Graph credentials are empty, Teams Rehook attempts to reuse the Bot app registration:
+
+```text
+GRAPH_TENANT_ID=
+GRAPH_CLIENT_ID=
+GRAPH_CLIENT_SECRET=
+```
+
+Use **Settings > Readiness** to verify delivery mode, Bot readiness, Graph readiness, public URLs, payload limits, log retention, and cookie configuration.
+
+## Prepare A Teams Target
+
+1. Install or add the Teams Rehook bot to the target chat or channel.
+2. Send the bot a message or mention it in the channel.
+3. Open **Webhooks** in Teams Rehook.
+4. Click **Known conversations**.
+5. Confirm that the target conversation appears in the list.
+
+If the conversation is not listed, Teams Rehook does not yet have a sendable Bot Framework conversation reference. Use the manual delivery target fields only when you already have a valid service URL and conversation ID.
 
 ## Create A Webhook Route
 
@@ -76,17 +113,19 @@ If the conversation is not listed yet, use the advanced target fields when creat
 2. Click **New route**.
 3. Enter a clear name, for example `PRTG network alerts`.
 4. Optionally enter the source system, for example `PRTG`, `macmon`, or `firewall-events`.
-5. Make sure **Route is active** is enabled.
-6. Select the target under **Teams conversation**.
+5. Keep **Route is active** enabled.
+6. Select the captured Teams conversation.
 7. Click **Create route**.
+8. Use **Send test** and confirm that the message appears in Teams.
+9. Copy the relay URL into the source system.
 
-After saving, Teams Messenger generates a relay URL. The URL is copied to your clipboard automatically. You can also copy it later from the route table with **Copy URL**.
+After saving, Teams Rehook copies the generated relay URL to your clipboard. You can copy it again from the route table with **Copy URL**.
 
-## Use The Webhook URL In A Source System
+## Send Webhook Payloads
 
-Add the generated relay URL as the webhook target in your source system. Treat the URL as a secret: anyone who has it can send messages to the connected Teams conversation.
+Teams Rehook accepts plain text, JSON objects, JSON arrays, and Adaptive Card activities with `application/vnd.microsoft.card.adaptive`.
 
-Teams Messenger accepts text and JSON payloads. For JSON, known fields are normalized into a Teams message, for example:
+Example JSON payload:
 
 ```json
 {
@@ -97,7 +136,7 @@ Teams Messenger accepts text and JSON payloads. For JSON, known fields are norma
 }
 ```
 
-A quick `curl` test looks like this:
+Quick `curl` test:
 
 ```bash
 curl -X POST "YOUR_RELAY_URL" \
@@ -105,121 +144,56 @@ curl -X POST "YOUR_RELAY_URL" \
   -d '{"title":"Test alert","message":"Webhook connected successfully","severity":"info"}'
 ```
 
-Supported inputs:
+Empty payloads, invalid JSON, unknown route tokens, disabled routes, and oversized requests are rejected and recorded in **Messages**.
 
-- plain text
-- JSON objects
-- JSON arrays
-- Adaptive Card activities with `application/vnd.microsoft.card.adaptive`
+## Operate And Troubleshoot
 
-Empty or invalid payloads are rejected and recorded in the logs.
+- **Dashboard** shows route counts, known conversations, failed/rejected routes, inactive routes, and untested active routes.
+- **Webhooks** manages routes, relay URLs, test sends, Graph name refresh, and known conversations.
+- **Messages** shows delivery logs with filters for status, route, and search text.
+- **System logs** shows sign-ins, route changes, admin activity, and Teams bot activity events.
+- **Settings > Readiness** shows non-secret configuration state for Bot, Graph, runtime URLs, payload limits, retention, cleanup, and secure-cookie behavior.
 
-## Test A Route
+Logs are retained for `LOG_RETENTION_DAYS` days, defaulting to 7.
 
-Test every route before using it in production.
-
-1. Open **Webhooks**.
-2. Find the route.
-3. Click **Send test** in the actions column.
-4. Confirm that the test message arrived in Teams.
-5. Open **View delivery logs** if you need delivery details.
-
-The status in the route table shows whether the last delivery was delivered, failed, or rejected.
-
-## Review Deliveries
-
-Open **Messages** to inspect webhook and test messages.
-
-You can filter the view by:
-
-- status: `Delivered`, `Failed`, `Rejected`
-- route
-- search text, such as source, message, error, or payload content
-
-Select a log entry to see details such as the normalized message, request metadata, error text, and bot delivery response.
-
-Logs are kept for 7 days by default. Configure this with `LOG_RETENTION_DAYS` in `.env`.
-
-## Copy Or Rotate A Relay URL
-
-The route table provides two important URL actions:
+## Rotate Or Disable A Relay URL
 
 - **Copy URL** copies the current relay URL.
-- **Regenerate relay URL** creates a new URL for the same route.
-
-When a URL is regenerated, the old URL stops working immediately. Update every source system that still uses the old URL.
-
-## Disable, Edit, Or Delete A Route
-
+- **Regenerate relay URL** creates a new URL and immediately invalidates the old one.
 - Disable a route when it should stop accepting messages but remain available for later.
-- Edit a route when the name, source system, or Teams target changes.
 - Delete a route only when the connection is no longer needed. Incoming requests to the old URL will fail.
 
-## Users And System Logs
+Treat relay URLs as secrets. Anyone with a valid relay URL can send messages to the connected Teams conversation.
 
-The **Users** page shows known users, roles, and account status.
+## Common Setup Blockers
 
-The **System logs** page shows administrative activity such as sign-ins, route changes, and system events. Use **Clean up** to remove old log entries according to the retention period.
+**No known conversations**
 
-## Delivery Modes
+Add the bot to the target Teams chat or channel and send or mention it once. Graph search alone does not create a sendable target.
 
-Local validation uses mock delivery by default:
+**Route test fails in real mode**
 
-```text
-BOT_DELIVERY_MODE=mock
-```
-
-In this mode, deliveries are simulated and no real Teams messages are sent.
-
-For real Teams delivery, set the mode to `real` and configure Bot Framework credentials:
-
-```text
-BOT_DELIVERY_MODE=real
-BOT_TENANT_ID=
-BOT_CLIENT_ID=
-BOT_CLIENT_SECRET=
-BOT_DEFAULT_SERVICE_URL=
-```
-
-If Microsoft Graph should be used for target search and name resolution, optionally configure separate Graph credentials. If left empty, the application attempts to reuse the bot app registration:
-
-```text
-GRAPH_TENANT_ID=
-GRAPH_CLIENT_ID=
-GRAPH_CLIENT_SECRET=
-```
-
-## Troubleshooting
-
-**Sign-in fails**
-
-Check `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD`, and `SESSION_SECRET` in `.env`. Restart the containers after making changes.
-
-**A route is rejected**
-
-Check that the route is active, the relay URL is correct, and the request sends a non-empty payload.
-
-**Delivery fails**
-
-Check the error text in **Messages**. Common causes are invalid bot credentials, an incorrect conversation value, or missing bot permissions in the Teams conversation.
+Check Bot credentials, bot installation in the target conversation, and whether the selected service URL/conversation ID matches the expected Teams context.
 
 **Teams targets are not found**
 
-Check the Microsoft Graph configuration or use the manual target fields when creating the route.
+Check Graph credentials or rely on already captured bot conversations. Graph may require tenant admin consent.
 
-**A relay URL was exposed**
+**Webhook requests are rejected**
 
-Open the route and use **Regenerate relay URL**. Then update all legitimate source systems with the new URL.
+Check that the route is active, the relay URL is current, the payload is non-empty, and the request does not exceed `WEBHOOK_MAX_PAYLOAD_BYTES`.
 
 ## Local Development
 
-To run the backend and frontend without Docker:
+Backend:
 
 ```bash
 cd backend
 pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
+
+Frontend:
 
 ```bash
 cd frontend
@@ -229,7 +203,7 @@ npm run dev
 
 When frontend and backend run separately, keep `CORS_ORIGINS` aligned with the Vite development server origin.
 
-To validate the project:
+Validation:
 
 ```bash
 npm run test

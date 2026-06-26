@@ -1,159 +1,138 @@
-# PRD: Teams Webhook Relay Service
+# PRD: Teams Rehook
 
 ## 1. Kontext / Problem
 
-Bestehende Microsoft Teams Incoming Webhooks bzw. Office 365 Connector-Webhooks sind nicht mehr zuverlässig als langfristiger Integrationsweg nutzbar. Dadurch entsteht ein Risiko für bestehende webhook-basierte Benachrichtigungen, die heute in Teams-Kanäle zugestellt werden.
+Bestehende Microsoft Teams Incoming Webhooks bzw. Office 365 Connector-Webhooks sind kein verlaesslicher langfristiger Integrationsweg fuer betriebliche Benachrichtigungen. Gleichzeitig sind Teams Workflows bzw. Power Automate fuer diesen Zweck nur bedingt geeignet, weil sie haeufig an Benutzer, Owner oder benutzernahe Identitaeten gekoppelt sind.
 
-Aktuell bekannte betroffene Quellen sind unter anderem:
+Teams Rehook adressiert dieses Problem als servicefaehiger Relay-Ansatz: Quellsysteme senden an stabile Relay-URLs, waehrend Teams-Ziele zentral im Relay verwaltet werden.
+
+Aktuell relevante Quellsysteme sind unter anderem:
 
 - macmon
 - Firewalls
 - PRTG
+- weitere Monitoring- oder Operations-Systeme
 
-Weitere bestehende Nutzungen sind noch nicht vollständig inventarisiert. Die offizielle Alternative über Teams Workflows bzw. Power Automate ist für den Einsatzzweck nur bedingt geeignet, weil sie stark an Benutzer, Owner oder benutzernahe Identitäten gekoppelt ist. Für betriebliche Benachrichtigungen wird dagegen ein servicefähiger, nicht personenbezogen abhängiger Ansatz benötigt.
+## 2. Produktziel
 
-## 2. Zielbild
+Teams Rehook soll ein zentraler, intern betriebener Teams Webhook Relay Service werden. Der Dienst nimmt Webhook-Requests entgegen, normalisiert Payloads und sendet daraus Teams-Nachrichten ueber eine Teams-Bot-Integration.
 
-Ziel ist ein zentraler Teams Webhook Relay Service, der eingehende Webhook-Requests aus internen oder quellseitigen Systemen entgegennimmt und an eine geeignete Teams-Zielintegration weiterleitet.
-
-Für den Prototyp wird vorrangig die vorhandene Teams App mit Bot als Zielintegration evaluiert. Der Bot wurde ursprünglich als Chatbot konzipiert, kann aber technisch als servicefähiger Sender für Benachrichtigungen genutzt werden, sofern er in die relevanten Teams-Kontexte schreiben darf.
-
-Der Relay Service soll perspektivisch einen einheitlichen technischen Ansatz für Teams-Benachrichtigungen schaffen:
+Das Produktziel ist:
 
 - zentrale Annahme von Webhook-Requests
-- konfigurierbares Routing eingehender Webhook-URLs zu definierten Teams-Zielkanälen
-- Verwaltung des Webhook-zu-Zielkanal-Mappings im Relay Service statt in den Quellsystemen
-- servicefähiger Betrieb ohne personengebundene Ownership als Zielarchitektur
-- einheitliche Stelle für Logging, Fehlerbehandlung und spätere Erweiterungen
+- stabile Relay-URLs fuer Quellsysteme
+- zentrale Verwaltung von Webhook-zu-Teams-Ziel-Mappings
+- servicefaehiger Betrieb ohne personengebundene Zielarchitektur
+- nachvollziehbares Logging von Annahme, Routing und Zustellung
+- sichere URL-Rotation fuer Relay-Ziele
+- klare Operations-Oberflaeche fuer Setup, Tests, Readiness und Fehleranalyse
 
-## 3. Ziele
+## 3. Aktueller Status
 
-- Technische Machbarkeit eines zentralen Relay Service prüfen.
-- Eignung als möglicher Standardweg zur Ablösung bestehender Teams-Webhooks bewerten.
-- Personenbezogene Abhängigkeiten bei Teams-Benachrichtigungen reduzieren.
-- Routing, Logging und Fehlerbehandlung für Teams-Benachrichtigungen zentralisieren.
-- Aufwand für die Umstellung bestehender Quellen exemplarisch bewerten.
-- Bestehende Webhook-Aufrufer möglichst ohne fachliche Anpassung weiterbetreiben, indem primär die Ziel-URL auf den Relay Service geändert wird.
-- Fachliche Zieländerungen zentral im Relay Service ermöglichen, ohne bestehende Quellsysteme anpassen zu müssen.
-- Vorhandene Teams App/Bot-Integration als primären Versandweg für den Prototyp bewerten.
+Teams Rehook ist ein implementierter MVP im Evaluation-Status. Der Kernflow ist vorhanden:
 
-## 4. Nicht-Ziele
+`source webhook -> relay URL -> route -> captured Teams bot conversation -> delivery test/logs`
 
-- Keine vollständige Produktivlösung im ersten Schritt.
-- Keine vollständige Ablösung aller bestehenden Quellen im Prototyp.
-- Keine finale Festlegung auf die endgültige Teams-Zieltechnik, sofern diese im Prototyp erst evaluiert wird.
-- Kein vollständiges Enterprise-Hardening im ersten Schritt.
-- Keine vollständige Inventarisierung aller bestehenden Webhook-Nutzungen als Bestandteil des Prototyps.
-- Keine Neuentwicklung einer separaten Teams App, solange der vorhandene Bot für den Prototyp ausreichend nutzbar ist.
+Bereits umgesetzt:
+
+- FastAPI-Backend mit SQLAlchemy, Sessions, CSRF-Schutz und Bootstrap-Admin
+- Docker-Compose-Stack mit Postgres, Backend, Frontend und HAProxy
+- authentifizierte Admin-Oberflaeche mit Dashboard, Webhooks, Messages, Users, Settings und System logs
+- stabile Relay-URLs pro Webhook-Route
+- URL-Regeneration mit sofortiger Invalidierung alter URLs
+- Aktiv-/Inaktiv-Status pro Route
+- Bot-Conversation-Capture aus eingehenden Teams Bot Activities
+- Auswahl bekannter Teams-Bot-Unterhaltungen beim Anlegen einer Route
+- manuelle Fallback-Felder fuer Bot service URL und conversation ID
+- Microsoft-Graph-Suche und Namensauflösung fuer Teams-Ziele, sofern konfiguriert
+- Mock-Delivery-Modus fuer lokale Validierung
+- Real-Delivery-Modus ueber Bot Framework Credentials
+- Delivery Logs mit normalisiertem Payload, Request-Metadaten, Zustellantwort und Fehlern
+- Log-Retention und manuelle Cleanup-Funktion
+- Settings-/Readiness-Ansicht fuer nicht geheime Betriebs- und Integrationszustaende
+
+## 4. Zielgruppen
+
+- Administratoren, die Relay-Routen und Teams-Ziele verwalten
+- Betriebsteams, die Webhook-Zustellungen pruefen und Fehler analysieren
+- Projektverantwortliche, die die Eignung als Standardweg fuer Teams-Benachrichtigungen bewerten
 
 ## 5. Funktionale Anforderungen
 
-Der Prototyp soll mindestens folgende Funktionen abdecken:
+Teams Rehook muss folgende Funktionen bereitstellen:
 
-- HTTP-Endpoint zur Annahme eingehender Webhook-Requests.
-- Unterstützung mehrerer eingehender Webhook-URLs oder Webhook-Identitäten.
-- Kompatibilitätsmodus für bestehende Incoming-Webhook-Requests, damit vorhandene Payload-Strukturen aus Bestandsanwendungen weiter angenommen werden können.
-- Einfache Authentisierung oder Zugriffsbeschränkung für Testquellen, soweit für den Prototyp erforderlich.
-- Konfigurierbares Routing von eingehenden Requests zu definierten Teams-Zielkanälen.
-- UI zur Verwaltung des Mappings von eingehendem Webhook zu Teams-Zielkanal.
-- Anzeige und Bearbeitung einfacher Webhook-Routen im UI, z. B. Name, Quellsystem, Relay-URL, Teams-Ziel, Aktivstatus und Zieltyp.
-- Hinterlegung eines Teams-Bot-Ziels je Route, mindestens mit sprechendem Zielnamen und technischer Zielreferenz.
-- Autocomplete-Suche für Teams-Ziele im UI, damit Administratoren Teams, Kanäle oder Benutzer über Microsoft Graph suchen und auswählen können, statt technische IDs manuell einzutragen.
-- Speicherung der ausgewählten Zielreferenz mit Anzeigename und technischen Identifikatoren, z. B. Team-ID, Channel-ID oder User-ID.
-- Möglichkeit, eine konfigurierte Zielroute per Testnachricht zu validieren.
-- Unterstützung einfacher Nachrichtentypen, z. B. Textnachricht mit Quelle, Titel, Status und Detailtext.
-- Normalisierung unterschiedlicher Quellpayloads auf ein internes Nachrichtenformat, ohne dass Bestandsquellen im ersten Schritt zwingend ihre Request-Struktur ändern müssen.
-- Versand normalisierter Nachrichten als Bot-Framework-Activity über den vorhandenen Teams Bot.
-- Nachvollziehbares Logging von Annahme, Routing-Entscheidung, Zustellversuch und Ergebnis.
-- Fehlerbehandlung bei ungültigen Requests, unbekannten Routen und Zustellfehlern zur Teams-Zielintegration.
-- Einfache Konfigurierbarkeit für Testquellen wie macmon, Firewall-Events oder PRTG.
+- eingehende Webhook-Requests ueber route-spezifische URLs annehmen
+- unbekannte, deaktivierte, leere, ungueltige oder zu grosse Requests kontrolliert ablehnen
+- Payloads aus Text, JSON-Objekten, JSON-Arrays und Adaptive-Card-Aktivitaeten annehmen
+- Payloads auf ein internes Nachrichtenformat normalisieren
+- Webhook-Routen mit Name, Quellsystem, Aktivstatus, Teams-Ziel und Relay-URL verwalten
+- Relay-URLs generieren, kopieren und rotieren
+- Teams Bot Conversations aus eingehenden Bot Activities erfassen
+- bekannte Conversations als Route-Ziel auswählbar machen
+- manuelle Zielkonfiguration erlauben, wenn eine gueltige Bot Framework Conversation Reference bereits bekannt ist
+- Graph-Zielsuche und Graph-Namensauflösung verwenden, wenn Graph-Credentials verfuegbar sind
+- klar vermitteln, dass ein Graph-Ziel nicht automatisch ein sendbares Bot-Ziel ist
+- Testnachrichten pro Route senden
+- Zustellungen, Fehler und abgelehnte Requests nachvollziehbar loggen
+- Dashboard-Signale fuer fehlgeschlagene, abgelehnte, inaktive und ungetestete Routen anzeigen
+- Readiness fuer Bot, Graph, Delivery Mode, Runtime-URLs, Payload-Limit und Log-Retention anzeigen
 
 ## 6. Nicht-funktionale Anforderungen
 
-- Einfacher und wartbarer Betrieb des Prototyps.
-- Servicefähige technische Identität als Zielarchitektur.
-- Keine Bindung der Zielarchitektur an einen persönlichen Benutzeraccount.
-- Bot-Credentials und Secrets dürfen nicht im UI oder in versionierten Konfigurationsdateien gespeichert werden.
-- OAuth-Zugriffstoken für den Bot Framework Connector müssen serverseitig verwaltet und bis kurz vor Ablauf wiederverwendet werden.
-- Access Tokens, Client Secrets und vergleichbare sensible Werte dürfen nicht im Frontend, in Logs oder in fachlichen Routing-Daten erscheinen.
-- Nachvollziehbare Konfiguration der Testquellen und Zielrouten.
-- UI-Änderungen am Routing müssen für den Testbetrieb nachvollziehbar bleiben.
-- Geringer Betriebsaufwand für Aufbau, Test und Anpassung des Prototyps.
-- Ausreichende Transparenz für Fehlersuche im Testbetrieb.
-- Keine unnötige Komplexität bei Persistenz, Queueing oder Mandantentrennung, solange diese für die Machbarkeitsbewertung nicht erforderlich ist.
+- Bot-Credentials, Client Secrets, Route Tokens und Conversation IDs duerfen nicht unnoetig im UI oder in Logs offengelegt werden.
+- Readiness-Ausgaben duerfen nur Konfigurationszustaende, keine Secret-Werte enthalten.
+- Session-aendernde und administrative Requests muessen gegen CSRF geschuetzt bleiben.
+- Der Mock-Modus muss lokale Tests ohne echte Teams-Zustellung erlauben.
+- Der Real-Modus muss fehlende Bot-Credentials eindeutig als nicht bereit anzeigen.
+- Logs muessen zeitlich begrenzt aufbewahrt und bereinigbar sein.
+- Die UI muss fuer wiederholte Operator-Aufgaben schnell scanbar, ruhig und handlungsorientiert bleiben.
+- Bestehende Quellsysteme sollen moeglichst nur ihre Ziel-URL aendern muessen.
 
-## 7. Architekturidee / Lösungsansatz
+## 7. Architektur
 
-Der Prototyp folgt einem pragmatischen Relay-Ansatz:
+Teams Rehook folgt einem pragmatischen Relay-Ansatz:
 
-1. Quellsysteme senden Webhook-Requests an einen HTTP-Endpoint des Relay Service.
-2. Das Relay ermittelt anhand der Webhook-URL oder Webhook-Identität die konfigurierte Zielroute.
-3. Das Relay validiert Request, Route und Payload.
-4. Das Relay erkennt bekannte Bestandsformate und normalisiert den Payload auf ein internes Nachrichtenformat.
-5. Das Relay holt mit den Bot-Credentials ein Zugriffstoken für den Bot Framework Connector.
-6. Das Relay sendet die Nachricht als Bot-Framework-Activity an die im Relay konfigurierte Teams-Zielreferenz.
-7. Das Relay protokolliert Annahme, Routing, Zustellstatus und Fehler.
+1. Ein Quellsystem sendet einen Webhook-Request an eine Relay-URL.
+2. Das Backend findet die Route ueber den geheimen Route Token Hash.
+3. Route, Aktivstatus und Payload werden validiert.
+4. Der Payload wird normalisiert.
+5. Im Mock-Modus wird die Zustellung simuliert.
+6. Im Real-Modus sendet der Teams-Bot-Adapter ueber Bot Framework an die gespeicherte Conversation.
+7. Das Ergebnis wird als Delivery Event gespeichert.
 
-Für den Prototyp kann die Teams-Zielreferenz zunächst technisch hinterlegt werden, z. B. als Bot-Framework-Service-URL und Conversation-ID aus einer bereits bekannten Bot-Konversation. Perspektivisch soll die Zielerfassung im UI verständlicher werden, damit Administratoren fachliche Zielnamen verwalten können und technische Zielwerte nicht frei zusammensuchen müssen.
+Microsoft Graph ist eine Hilfsintegration fuer Suche und Namensauflösung. Der Versand erfolgt weiterhin ueber die Bot Conversation Reference. Deshalb muss jede Route mit **Send test** validiert werden.
 
-Der initiale Zieladapter ist ein Teams-Bot-Adapter:
+## 8. Akzeptanzkriterien fuer den aktuellen MVP
 
-- Er verwendet die vorhandene App-/Bot-Registrierung.
-- Er authentisiert sich mit Client Credentials gegen den Bot Framework Connector.
-- Er verwaltet Zugriffstoken serverseitig, cached gültige Tokens und erneuert sie erst bei Ablauf oder kurz davor.
-- Er sendet einfache Text- oder Card-Activities an eine konfigurierte Conversation.
-- Er kapselt Bot-spezifische Details, damit das Relay intern weiterhin mit einem normalisierten Nachrichtenformat arbeiten kann.
+Der MVP ist fuer die weitere Evaluation geeignet, wenn:
 
-Für die Zielauswahl im UI soll zusätzlich Microsoft Graph als Such- und Verzeichnisintegration genutzt werden. Graph dient dabei zur Suche nach Teams, Kanälen und Benutzern; der eigentliche Nachrichtenversand erfolgt im Prototyp weiterhin über den Teams-Bot-Adapter. Da ein gefundenes Graph-Ziel nicht automatisch bedeutet, dass der Bot dort senden darf, muss die Route nach der Auswahl per Testnachricht validiert werden.
+- die Anwendung lokal per Docker Compose startet,
+- ein Admin sich anmelden und Routen verwalten kann,
+- mindestens eine Teams Bot Conversation erfasst oder manuell hinterlegt werden kann,
+- eine Webhook-Route erstellt und getestet werden kann,
+- eine reale oder simulierte Zustellung nachvollziehbar geloggt wird,
+- abgelehnte und fehlgeschlagene Requests mit Fehlerursache sichtbar sind,
+- Relay-URLs kopiert und rotiert werden koennen,
+- Dashboard und Empty States Operatoren zum naechsten sinnvollen Schritt fuehren,
+- Settings die Readiness fuer Bot, Graph und Runtime-Konfiguration ohne Secrets anzeigt,
+- README und PRD den aktuellen Produktstand konsistent beschreiben.
 
-Die Verwaltung der Routen erfolgt im UI des Relay Service. Quellsysteme kennen nur ihre jeweilige Relay-Webhook-URL; die Zuordnung zu Teams-Zielkanälen wird zentral im Relay gepflegt.
+## 9. Bekannte Limitierungen
 
-Die vorhandene Teams App mit Bot ist der bevorzugte Prototyp-Pfad. Graph-basierte Integration oder andere Microsoft-365-Integrationswege bleiben Vergleichs- oder Fallback-Optionen, falls der Bot-Weg technische oder organisatorische Grenzen zeigt.
+- Der MVP ersetzt noch keine vollstaendige produktive Betriebsplattform.
+- Hochverfuegbarkeit, Backup/Restore, Monitoring, Alerting und SLOs sind noch separat festzulegen.
+- Mandanten-/Organisationsmodell ist minimal und fuer die Evaluation ausgelegt.
+- Graph-Berechtigungen und Admin Consent muessen tenant-spezifisch geklaert werden.
+- Ein Graph-Suchergebnis ist keine Garantie fuer Bot-Sendeberechtigung.
+- Der Bot muss im Zielkontext installiert sein und mindestens eine gueltige Conversation Reference liefern.
+- Nicht alle historischen Incoming-Webhook-Payloads sind garantiert 1:1 abbildbar.
+- Secret-Rotation, Betriebshandbuch und Ownership muessen vor Produktivbetrieb finalisiert werden.
 
-## 8. Bewertungsfragen für den Prototyp
+## 10. Offene Produktfragen
 
-- Ist ein zentraler Relay Service technisch praktikabel?
-- Lässt sich eine Teams-Integration ohne problematische Personenabhängigkeit sinnvoll anbinden?
-- Kann der vorhandene Teams Bot als servicefähiger Sender für Relay-Benachrichtigungen genutzt werden?
-- Kann der Bot zuverlässig in die relevanten Zielkanäle schreiben?
-- Wie wird der technische Absender in Teams dargestellt und ist diese Darstellung akzeptabel?
-- Wie hoch ist der Umstellungsaufwand für bestehende Quellen wie macmon, Firewalls und PRTG?
-- Können bestehende Webhook-Requests mit reiner URL-Umstellung weiterverwendet werden?
-- Ist die Verwaltung des Webhook-zu-Zielkanal-Mappings im UI ausreichend einfach und nachvollziehbar?
-- Ist eine Graph-basierte Autocomplete-Suche nach Teams, Kanälen und Benutzern mit vertretbaren Berechtigungen umsetzbar?
-- Lässt sich nach Auswahl eines Graph-Ziels zuverlässig validieren, ob der Bot dort tatsächlich senden kann?
-- Welche Payload-Unterschiede der Quellen müssen bereits im Prototyp berücksichtigt werden?
-- Welche offenen Punkte und Risiken bleiben für einen späteren Produktivbetrieb?
-
-## 9. Akzeptanzkriterien für den Prototyp
-
-Der Prototyp gilt als erfolgreich evaluiert, wenn:
-
-- ein lauffähiger Relay-Service erstellt wurde,
-- mindestens ein Beispiel-Webhook im bestehenden Request-Format entgegengenommen werden konnte,
-- mindestens eine Nachricht erfolgreich an Teams weitergeleitet wurde,
-- die Weiterleitung im Prototyp über den vorhandenen Teams Bot getestet wurde,
-- für die getestete Quelle nur die Webhook-Ziel-URL angepasst werden musste,
-- mindestens eine Webhook-Route im UI angelegt oder geändert und für die Zustellung genutzt werden konnte,
-- mindestens ein Teams-Ziel im UI gesucht, ausgewählt und per Testnachricht validiert werden konnte,
-- Annahme, Routing und Zustellergebnis nachvollziehbar geloggt wurden,
-- fehlerhafte Requests oder Zustellfehler kontrolliert behandelt wurden,
-- offene Punkte und Risiken dokumentiert wurden,
-- eine Einschätzung zur Eignung als servicefähige Standardlösung vorliegt.
-
-## 10. Bekannte Risiken / offene Punkte
-
-- Teams-seitige Authentisierung, App-, Bot- oder Graph-Berechtigungen sind noch zu klären.
-- Der vorhandene Bot wurde ursprünglich für einen anderen Zweck gebaut; seine Eignung als Benachrichtigungssender muss validiert werden.
-- Für Kanalzustellung müssen geeignete Conversation-Referenzen bzw. Zieladressen verfügbar sein.
-- Graph-Suche und Bot-Versand haben unterschiedliche Berechtigungs- und Zugriffsvoraussetzungen; ein gefundenes Ziel ist nicht automatisch ein erreichbares Sendeziel.
-- Tenantweite Suche nach Teams, Kanälen oder Benutzern kann zusätzliche Microsoft-Graph-Berechtigungen und Admin Consent erfordern.
-- Fehler im Token-Lifecycle oder Secret Handling können zu Zustellfehlern oder Sicherheitsrisiken führen.
-- Die Darstellung des technischen Absenders in Teams kann fachlich oder organisatorisch relevant sein.
-- Unterschiedliche Quellpayloads können Mapping- und Normalisierungsaufwand verursachen.
-- Nicht alle bisherigen Incoming-Webhook-Payloads lassen sich möglicherweise 1:1 in die neue Teams-Zielintegration übertragen.
-- Bereits sichtbare oder geteilte Bot-Secrets müssen rotiert und künftig sicher verwaltet werden.
-- Governance, Betrieb, Ownership und Verantwortlichkeiten für den Relay Service sind noch festzulegen.
-- Die Inventarisierung bestehender Webhook-Nutzungen ist noch unvollständig.
-- Microsoft-365- und Teams-Plattformänderungen können die gewählte Zielintegration beeinflussen.
-- Anforderungen an Monitoring, Alerting, Skalierung und Hochverfügbarkeit sind für eine Produktivlösung separat zu bewerten.
+- Welche Quellsysteme werden zuerst migriert?
+- Welche Teams-Kontexte duerfen als Ziel genutzt werden?
+- Welche Graph-Permissions werden organisatorisch akzeptiert?
+- Welche Retention- und Audit-Anforderungen gelten produktiv?
+- Welche Betriebsverantwortung uebernimmt Teams Rehook nach der Evaluation?
+- Wird ein Queue-/Retry-Modell fuer temporaere Teams- oder Bot-Framework-Fehler benoetigt?

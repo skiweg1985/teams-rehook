@@ -157,7 +157,7 @@ class WebhookRouteCreatedOut(WebhookRouteOut):
 
 
 class WebhookRouteTestRequest(BaseModel):
-    title: str = Field(default="Teams Webhook Relay test", min_length=1, max_length=255)
+    title: str = Field(default="Teams Rehook test", min_length=1, max_length=255)
     text: str = Field(default="This is a test message from the relay service.", min_length=1, max_length=2000)
     severity: str = Field(default="info", max_length=40)
 
@@ -232,6 +232,41 @@ class LogCleanupOut(BaseModel):
     deleted_bot_activity_events: int
     retention_days: int
     cutoff: datetime
+
+
+class ReadinessComponentOut(BaseModel):
+    ready: bool
+    message: str
+
+
+class BotReadinessOut(ReadinessComponentOut):
+    mode: str
+    credentials_configured: bool
+    default_service_url_configured: bool
+
+
+class GraphReadinessOut(ReadinessComponentOut):
+    configured: bool
+    credential_source: str
+
+
+class RuntimeReadinessOut(BaseModel):
+    app_public_base_url: str
+    frontend_base_url: str
+    cors_origins: list[str]
+    webhook_max_payload_bytes: int
+    log_retention_days: int
+    log_cleanup_interval_minutes: int
+    session_secure_cookie: bool
+
+
+class AdminReadinessOut(BaseModel):
+    app_name: str
+    app_version: str
+    delivery_mode: str
+    bot: BotReadinessOut
+    graph: GraphReadinessOut
+    runtime: RuntimeReadinessOut
 
 
 class TeamsTargetSearchOut(BaseModel):

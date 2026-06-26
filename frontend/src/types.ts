@@ -188,6 +188,34 @@ export type LogCleanupOut = {
   cutoff: string;
 };
 
+export type AdminReadinessOut = {
+  app_name: string;
+  app_version: string;
+  delivery_mode: "mock" | "real" | string;
+  bot: {
+    ready: boolean;
+    message: string;
+    mode: string;
+    credentials_configured: boolean;
+    default_service_url_configured: boolean;
+  };
+  graph: {
+    ready: boolean;
+    message: string;
+    configured: boolean;
+    credential_source: "graph" | "bot" | "missing" | string;
+  };
+  runtime: {
+    app_public_base_url: string;
+    frontend_base_url: string;
+    cors_origins: string[];
+    webhook_max_payload_bytes: number;
+    log_retention_days: number;
+    log_cleanup_interval_minutes: number;
+    session_secure_cookie: boolean;
+  };
+};
+
 export type TeamsTargetSearchResult = {
   kind: GraphTargetKind;
   id: string;

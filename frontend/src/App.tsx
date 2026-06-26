@@ -31,6 +31,7 @@ import {
 import { isApiError } from "./errors";
 import { ThemeToggle } from "./theme-toggle";
 import type {
+  AdminReadinessOut,
   AuditEventOut,
   BotConversationReferenceOut,
   GraphTargetKind,
@@ -93,6 +94,15 @@ function IconButton({
   );
 }
 
+function EmptyGuidance({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="empty-guidance">
+      <strong>{title}</strong>
+      <p>{body}</p>
+    </div>
+  );
+}
+
 function routeFromPath(pathname: string): RouteName {
   if (pathname === "/" || pathname === "/dashboard") return "dashboard";
   if (pathname === "/webhooks") return "webhooks";
@@ -132,8 +142,8 @@ function LoginScreen() {
           <ThemeToggle />
         </div>
         <div>
-          <p className="eyebrow">Teams Relay Workspace</p>
-          <h1>Teams Messenger</h1>
+          <p className="eyebrow">Teams Rehook Workspace</p>
+          <h1>Teams Rehook</h1>
           <p className="lede">Manage stable webhook routes that forward operational messages into Microsoft Teams conversations.</p>
         </div>
         <form className="compact-form" onSubmit={submit}>
@@ -191,7 +201,7 @@ function WebhookCopyPage() {
           <ThemeToggle />
         </div>
         <div>
-          <p className="eyebrow">Teams Messenger</p>
+          <p className="eyebrow">Teams Rehook</p>
           <h1>Copy webhook URL</h1>
         </div>
         <div className="copy-url-field">
@@ -247,7 +257,7 @@ function AppShell() {
         <div className="brand-row">
           <div className="app-mark">T</div>
           <div>
-            <strong>Teams Messenger</strong>
+            <strong>Teams Rehook</strong>
             <span>Webhook Relay</span>
           </div>
         </div>
@@ -324,13 +334,19 @@ function DashboardPage() {
     [routes, references],
   );
   const recentRoutes = useMemo(() => routes.slice(0, 5), [routes]);
+  const attentionRoutes = useMemo(
+    () => routes.filter((route) => route.last_delivery_status === "failed" || route.last_delivery_status === "rejected").slice(0, 5),
+    [routes],
+  );
+  const inactiveRoutes = useMemo(() => routes.filter((route) => !route.is_active).slice(0, 5), [routes]);
+  const untestedRoutes = useMemo(() => routes.filter((route) => route.is_active && !route.last_delivery_status).slice(0, 5), [routes]);
   const metricValue = (value: number) => (loading ? "..." : error ? "-" : value);
 
   return (
     <>
       <PageIntro
         eyebrow="Overview"
-        title="Teams relay dashboard"
+        title="Teams Rehook dashboard"
         description="Monitor relay routes, Teams conversations and recent delivery health from one operational view."
       />
       <div className="metric-grid">
@@ -351,6 +367,53 @@ function DashboardPage() {
           <strong>{metricValue(counts.conversations)}</strong>
         </Card>
       </div>
+      <div className="attention-grid">
+        <Card title="Needs attention" description="Routes with failed or rejected last delivery status.">
+          {attentionRoutes.length ? (
+            <ul className="compact-list">
+              {attentionRoutes.map((route) => (
+                <li key={route.id}>
+                  <strong>{route.name}</strong>
+                  <span>{route.last_delivery_status === "failed" ? "Last delivery failed" : "Last request was rejected"}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyGuidance
+              title="No delivery problems"
+              body="Failed or rejected route status will appear here after webhook requests or manual tests."
+            />
+          )}
+        </Card>
+        <Card title="Setup gaps" description="Routes and conversations that still need operator action.">
+          <ul className="compact-list">
+            {!references.length ? (
+              <li>
+                <strong>No known conversations</strong>
+                <span>Add the bot to a Teams chat or channel, then send or mention the bot once.</span>
+              </li>
+            ) : null}
+            {untestedRoutes.map((route) => (
+              <li key={route.id}>
+                <strong>{route.name}</strong>
+                <span>Send a test message before giving the relay URL to a source system.</span>
+              </li>
+            ))}
+            {inactiveRoutes.map((route) => (
+              <li key={route.id}>
+                <strong>{route.name}</strong>
+                <span>Route is disabled and will reject incoming webhook requests.</span>
+              </li>
+            ))}
+            {references.length && !untestedRoutes.length && !inactiveRoutes.length ? (
+              <li>
+                <strong>No setup gaps</strong>
+                <span>Active routes have delivery history and known conversations are available.</span>
+              </li>
+            ) : null}
+          </ul>
+        </Card>
+      </div>
       <Card title="Recent webhook routes" description="Latest relay routes and their current delivery status.">
         <DataTable
           columns={["Route", "Target", "Active", "Last delivery", "Updated"]}
@@ -365,7 +428,7 @@ function DashboardPage() {
             formatDateTime(route.updated_at),
           ])}
           emptyTitle="No webhook routes"
-          emptyBody="Create a webhook route to start relaying messages into Teams."
+          emptyBody="Start by adding the bot to a Teams conversation, capture that conversation, create a route, then send a test message."
           loading={loading}
           loadingLabel="Loading recent webhook routes..."
           error={error}
@@ -440,7 +503,7 @@ function WebhooksPage() {
     try {
       await api.testWebhookRoute(csrfToken, route.id, {
         title: `Relay test: ${route.name}`,
-        text: "This test message was sent from the Teams Webhook Relay.",
+        text: "This test message was sent from Teams Rehook.",
         severity: "info",
       });
       setTestResult(route);
@@ -544,7 +607,7 @@ function WebhooksPage() {
   return (
     <>
       <PageIntro
-        eyebrow="Teams relay"
+        eyebrow="Teams Rehook"
         title="Webhook routes"
         description="Map stable relay webhook URLs to Teams bot targets and validate delivery with deterministic test sends."
         actions={
@@ -644,7 +707,7 @@ function WebhooksPage() {
             </div>,
           ])}
           emptyTitle="No webhook routes"
-          emptyBody="Create a route to receive webhook requests and forward them through the Teams bot adapter."
+          emptyBody="Add the bot to a Teams chat or channel, open Known conversations to confirm capture, create a route, send a test, then copy the relay URL into the source system."
           loading={loading}
           loadingLabel="Loading webhook routes..."
           error={error}
@@ -865,15 +928,19 @@ function BotConversationReferencesModal({
 
   return (
     <Modal
-      title="Known bot conversations"
-      description="Recently captured Teams conversations from inbound bot activities."
+      title="Known Teams conversations"
+      description="Conversations captured from inbound Teams bot activities. Graph-discovered targets are not sendable until the bot has a valid conversation reference."
       panelClassName="delivery-logs-modal"
       onClose={onClose}
     >
       {loading ? <p className="muted">Loading bot conversations...</p> : null}
       {error ? <p className="form-error">{error}</p> : null}
       {!loading && !error && references.length === 0 ? (
-        <EmptyState title="No bot conversations captured" body="Send a message to the bot or install it in a Teams channel." />
+        <div className="guidance-box">
+          <strong>No bot conversations captured yet.</strong>
+          <p>Add Teams Rehook to a chat or channel, then send a message or mention the bot. The next inbound bot activity stores the service URL and conversation ID needed for delivery.</p>
+          <p>After a conversation appears here, create a route from it and use Send test before sharing the relay URL with a source system.</p>
+        </div>
       ) : null}
       {references.length ? (
         <div className="conversation-reference-list">
@@ -1182,7 +1249,7 @@ function WebhookRouteModal({
   return (
     <Modal
       title={route ? "Edit webhook route" : "New webhook route"}
-      description="Create stable relay URLs from conversations the Teams bot has already seen."
+      description="Create stable relay URLs from Teams conversations the bot has already captured."
       onClose={onClose}
     >
       <form className="compact-form" onSubmit={submit}>
@@ -1222,9 +1289,11 @@ function WebhookRouteModal({
             </div>
           ) : null}
           {!referencesLoading && !referencesError && references.length === 0 ? (
-            <p className="muted">
-              No bot conversations captured yet. Send the bot a message, install it in a channel, or use the manual fallback fields below.
-            </p>
+            <div className="guidance-box">
+              <strong>No bot conversations captured yet.</strong>
+              <p>Add the bot to a Teams chat or channel, then send or mention the bot once. Graph search can help identify Teams targets, but the bot still needs a captured conversation before Teams Rehook can send there.</p>
+              <p>Use the manual delivery target only when you already have a valid Bot Framework service URL and conversation ID.</p>
+            </div>
           ) : null}
           {references.length ? (
             <>
@@ -1275,7 +1344,7 @@ function WebhookRouteModal({
             <div className="graph-target-picker-header">
               <div>
                 <strong>Manual delivery target</strong>
-                <p>Use this only when the bot conversation is known but has not been captured in the list above.</p>
+                <p>Use this only when you already have a valid Bot Framework service URL and conversation ID for the target conversation.</p>
               </div>
               <StatusBadge label="Manual fallback" tone="warn" />
             </div>
@@ -1559,7 +1628,7 @@ function UsersPage() {
       <PageIntro
         eyebrow="Admin"
         title="Users"
-        description="Manage administrator access for Teams Messenger operations."
+        description="Manage administrator access for Teams Rehook operations."
       />
       <Card>
         <DataTable
@@ -1585,34 +1654,124 @@ function UsersPage() {
 }
 
 function SettingsPage() {
+  const { session } = useAppContext();
+  const [readiness, setReadiness] = useState<AdminReadinessOut | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      setReadiness(await api.adminReadiness(csrfToken));
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Readiness data could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
+  }, [csrfToken]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
   return (
     <>
       <PageIntro
         eyebrow="Configuration"
-        title="Settings"
-        description="Review the relay runtime, delivery mode and Teams integration defaults."
+        title="Readiness"
+        description="Review delivery mode, integration readiness and runtime settings without exposing secrets."
       />
-      <div className="settings-grid">
-        <Card title="Application" description="General app metadata and runtime stack.">
-          <dl className="definition-list">
-            <dt>Application</dt>
-            <dd>Teams Messenger</dd>
-            <dt>Stack</dt>
-            <dd>FastAPI, Postgres, React, Vite</dd>
-            <dt>Theme</dt>
-            <dd>Light, dark and system preference</dd>
-          </dl>
+      {loading ? (
+        <Card>
+          <div className="table-state" role="status" aria-live="polite">
+            <div className="spinner spinner--small" aria-hidden="true" />
+            <p>Loading readiness...</p>
+          </div>
         </Card>
-        <Card title="Relay operations" description="Core capabilities available in this workspace.">
-          <ul className="check-list">
-            <li>Create stable relay URLs for known Teams bot conversations.</li>
-            <li>Regenerate route URLs when a source system credential needs rotation.</li>
-            <li>Inspect delivery logs, normalized payloads and bot activity responses.</li>
-          </ul>
+      ) : error ? (
+        <Card>
+          <div className="table-state table-state--error" role="alert">
+            <h3>Could not load readiness</h3>
+            <p>{error}</p>
+            <button className="secondary-button secondary-button--small" type="button" onClick={() => void refresh()}>
+              Retry
+            </button>
+          </div>
         </Card>
-      </div>
+      ) : readiness ? (
+        <div className="settings-grid">
+          <Card title="Delivery" description="Teams delivery mode and Bot Framework readiness.">
+            <div className="readiness-header">
+              <StatusBadge label={readiness.bot.ready ? "Ready" : "Action needed"} tone={readiness.bot.ready ? "success" : "warn"} />
+              <StatusBadge label={readiness.delivery_mode} tone={readiness.delivery_mode === "real" ? "success" : "neutral"} />
+            </div>
+            <p className="muted">{readiness.bot.message}</p>
+            <dl className="definition-list">
+              <dt>Bot credentials</dt>
+              <dd>{yesNo(readiness.bot.credentials_configured)}</dd>
+              <dt>Default service URL</dt>
+              <dd>{yesNo(readiness.bot.default_service_url_configured)}</dd>
+            </dl>
+          </Card>
+          <Card title="Microsoft Graph" description="Target search and display-name resolution readiness.">
+            <div className="readiness-header">
+              <StatusBadge label={readiness.graph.ready ? "Ready" : "Not configured"} tone={readiness.graph.ready ? "success" : "warn"} />
+              <StatusBadge label={graphCredentialLabel(readiness.graph.credential_source)} />
+            </div>
+            <p className="muted">{readiness.graph.message}</p>
+            <p className="muted">Graph helps find Teams, channels and users. It does not prove that the bot can send there; validate each route with Send test.</p>
+          </Card>
+          <Card title="Runtime" description="Public URLs, limits and retention used by relay operations.">
+            <dl className="definition-list">
+              <dt>Application</dt>
+              <dd>{readiness.app_name} {readiness.app_version}</dd>
+              <dt>Public URL</dt>
+              <dd>{readiness.runtime.app_public_base_url}</dd>
+              <dt>Frontend URL</dt>
+              <dd>{readiness.runtime.frontend_base_url}</dd>
+              <dt>CORS origins</dt>
+              <dd>{readiness.runtime.cors_origins.join(", ") || "-"}</dd>
+              <dt>Payload limit</dt>
+              <dd>{formatBytes(readiness.runtime.webhook_max_payload_bytes)}</dd>
+              <dt>Log retention</dt>
+              <dd>{readiness.runtime.log_retention_days} days</dd>
+              <dt>Cleanup interval</dt>
+              <dd>{readiness.runtime.log_cleanup_interval_minutes} minutes</dd>
+              <dt>Secure session cookie</dt>
+              <dd>{yesNo(readiness.runtime.session_secure_cookie)}</dd>
+            </dl>
+          </Card>
+          <Card title="Operator checklist" description="Minimum path to a working relay route.">
+            <ol className="check-list">
+              <li>Add the bot to the target Teams chat or channel.</li>
+              <li>Send or mention the bot once so Teams Rehook captures the conversation.</li>
+              <li>Create a webhook route from that known conversation.</li>
+              <li>Use Send test and confirm the message appears in Teams.</li>
+              <li>Copy the relay URL into the source system and monitor Messages.</li>
+            </ol>
+          </Card>
+        </div>
+      ) : null}
     </>
   );
+}
+
+function yesNo(value: boolean): string {
+  return value ? "Yes" : "No";
+}
+
+function graphCredentialLabel(source: string): string {
+  if (source === "graph") return "Graph credentials";
+  if (source === "bot") return "Bot fallback";
+  return "Missing";
+}
+
+function formatBytes(value: number): string {
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  if (value >= 1024) return `${Math.round(value / 1024)} KB`;
+  return `${value} B`;
 }
 
 function MessageLogsPage() {
@@ -1773,7 +1932,7 @@ function MessageLogsPage() {
                 event.error ? <span className="form-error">{event.error}</span> : <span className="muted">-</span>,
               ])}
               emptyTitle="No webhook message logs"
-              emptyBody="Incoming webhooks and manual test sends will appear here."
+              emptyBody="Send a route test or post to a relay URL. Delivered, failed and rejected attempts will appear here with payload and delivery details."
               loading={loading}
               loadingLabel="Loading webhook message logs..."
               error={error}

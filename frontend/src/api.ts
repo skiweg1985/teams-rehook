@@ -1,4 +1,5 @@
 import type {
+  AdminReadinessOut,
   ApiError,
   AuditEventOut,
   BotConversationReferenceOut,
@@ -85,6 +86,9 @@ export const api = {
   },
   adminSystemLogs(csrfToken: string) {
     return request<SystemLogEventOut[]>("/api/v1/admin/system-logs", { csrfToken });
+  },
+  adminReadiness(csrfToken: string) {
+    return request<AdminReadinessOut>("/api/v1/admin/readiness", { csrfToken });
   },
   cleanupLogs(csrfToken: string) {
     return request<LogCleanupOut>("/api/v1/admin/logs/cleanup", {

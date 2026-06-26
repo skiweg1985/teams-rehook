@@ -4,10 +4,20 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.database import get_db
 from app.deps import require_admin, require_csrf
 from app.models import AuditEvent, BotActivityEvent, User
-from app.schemas import AuditEventOut, LogCleanupOut, SystemLogEventOut, UserOut
+from app.schemas import (
+    AdminReadinessOut,
+    AuditEventOut,
+    BotReadinessOut,
+    GraphReadinessOut,
+    LogCleanupOut,
+    RuntimeReadinessOut,
+    SystemLogEventOut,
+    UserOut,
+)
 from app.security import loads_json
 from app.services.log_retention import cleanup_log_events
 
@@ -21,6 +31,66 @@ def list_users(admin: User = Depends(require_admin), db: Session = Depends(get_d
         .where(User.organization_id == admin.organization_id)
         .order_by(User.created_at.desc())
     ).all()
+
+
+@router.get("/readiness", response_model=AdminReadinessOut, dependencies=[Depends(require_csrf)])
+def readiness(admin: User = Depends(require_admin)):
+    _ = admin
+    settings = get_settings()
+    delivery_mode = settings.bot_delivery_mode_normalized
+    bot_credentials_configured = all(
+        value.strip()
+        for value in [settings.bot_tenant_id, settings.bot_client_id, settings.bot_client_secret]
+    )
+    bot_ready = delivery_mode == "mock" or bot_credentials_configured
+    if delivery_mode == "mock":
+        bot_message = "Mock delivery is active. Teams messages are simulated."
+    elif bot_ready:
+        bot_message = "Bot Framework credentials are configured for real Teams delivery."
+    else:
+        bot_message = "Real delivery requires BOT_TENANT_ID, BOT_CLIENT_ID and BOT_CLIENT_SECRET."
+
+    graph_credentials_configured = all(
+        value.strip()
+        for value in [settings.graph_tenant_id, settings.graph_client_id, settings.graph_client_secret]
+    )
+    if graph_credentials_configured:
+        graph_source = "graph"
+        graph_message = "Microsoft Graph credentials are configured for target search and name resolution."
+    elif bot_credentials_configured:
+        graph_source = "bot"
+        graph_message = "Microsoft Graph will reuse the Bot app registration credentials."
+    else:
+        graph_source = "missing"
+        graph_message = "Graph target search requires Graph credentials or reusable Bot credentials."
+
+    return AdminReadinessOut(
+        app_name=settings.app_name,
+        app_version=settings.app_version,
+        delivery_mode=delivery_mode,
+        bot=BotReadinessOut(
+            ready=bot_ready,
+            mode=delivery_mode,
+            credentials_configured=bot_credentials_configured,
+            default_service_url_configured=bool(settings.bot_default_service_url.strip()),
+            message=bot_message,
+        ),
+        graph=GraphReadinessOut(
+            ready=graph_credentials_configured or bot_credentials_configured,
+            configured=graph_credentials_configured or bot_credentials_configured,
+            credential_source=graph_source,
+            message=graph_message,
+        ),
+        runtime=RuntimeReadinessOut(
+            app_public_base_url=settings.app_public_base_url,
+            frontend_base_url=settings.frontend_base_url,
+            cors_origins=settings.cors_origin_list,
+            webhook_max_payload_bytes=settings.webhook_max_payload_bytes,
+            log_retention_days=settings.log_retention_days,
+            log_cleanup_interval_minutes=settings.log_cleanup_interval_minutes,
+            session_secure_cookie=settings.session_secure_cookie,
+        ),
+    )
 
 
 @router.get("/logs", response_model=list[AuditEventOut], dependencies=[Depends(require_csrf)])
