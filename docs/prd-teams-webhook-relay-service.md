@@ -41,7 +41,9 @@ Bereits umgesetzt:
 - stabile Relay-URLs pro Webhook-Route
 - URL-Regeneration mit sofortiger Invalidierung alter URLs
 - Aktiv-/Inaktiv-Status pro Route
+- Payload Generator fuer Text- und Adaptive-Card-Beispielpayloads
 - Bot-Conversation-Capture aus eingehenden Teams Bot Activities
+- Teams-Bot-Slash-Commands fuer Registrierung, URL-Abfrage, Aktivierung, Deaktivierung, Loeschung und Info
 - Auswahl bekannter Teams-Bot-Unterhaltungen beim Anlegen einer Route
 - manuelle Fallback-Felder fuer Bot service URL und conversation ID
 - Microsoft-Graph-Suche und Namensauflösung fuer Teams-Ziele, sofern konfiguriert
@@ -72,6 +74,8 @@ Teams Rehook muss folgende Funktionen bereitstellen:
 - manuelle Zielkonfiguration erlauben, wenn eine gueltige Bot Framework Conversation Reference bereits bekannt ist
 - Graph-Zielsuche und Graph-Namensauflösung verwenden, wenn Graph-Credentials verfuegbar sind
 - klar vermitteln, dass ein Graph-Ziel nicht automatisch ein sendbares Bot-Ziel ist
+- Payload-Beispiele fuer einfache Textnachrichten und Adaptive-Card-Aktivitaeten erzeugen
+- Teams-Bot-Commands fuer route-nahe Administration aus einem installierten Teams-Kontext bereitstellen
 - Testnachrichten pro Route senden
 - Zustellungen, Fehler und abgelehnte Requests nachvollziehbar loggen
 - Dashboard-Signale fuer fehlgeschlagene, abgelehnte, inaktive und ungetestete Routen anzeigen
@@ -122,6 +126,7 @@ Der MVP ist fuer die weitere Evaluation geeignet, wenn:
 - Der MVP ersetzt noch keine vollstaendige produktive Betriebsplattform.
 - Hochverfuegbarkeit, Backup/Restore, Monitoring, Alerting und SLOs sind noch separat festzulegen.
 - Mandanten-/Organisationsmodell ist minimal und fuer die Evaluation ausgelegt.
+- Die Users-Ansicht listet vorhandene Benutzer; Einladung, Anlage und Bearbeitung von Benutzern sind im aktuellen UI nicht umgesetzt.
 - Graph-Berechtigungen und Admin Consent muessen tenant-spezifisch geklaert werden.
 - Ein Graph-Suchergebnis ist keine Garantie fuer Bot-Sendeberechtigung.
 - Der Bot muss im Zielkontext installiert sein und mindestens eine gueltige Conversation Reference liefern.

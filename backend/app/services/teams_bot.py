@@ -125,15 +125,6 @@ def build_activity(message: NormalizedMessage) -> dict:
         activity.setdefault("type", "message")
         return activity
     lines = [f"**{message.title}**", message.text]
-    if message.severity or message.status or message.source:
-        metadata = []
-        if message.severity:
-            metadata.append(f"severity: {message.severity}")
-        if message.status:
-            metadata.append(f"status: {message.status}")
-        if message.source:
-            metadata.append(f"source: {message.source}")
-        lines.append("_" + " | ".join(metadata) + "_")
     return {"type": "message", "text": "\n\n".join([line for line in lines if line])}
 
 

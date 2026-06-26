@@ -4,6 +4,8 @@
 
 ### Added
 
+- Documentation audit report covering updated files, removed obsolete content, remaining gaps and manual-review items.
+- README coverage for the Payload Generator, Teams bot slash commands, Users page limitations and local Vite proxy behavior.
 - Admin settings API and UI for runtime overrides with per-field reset to environment defaults.
 - `app_settings` table for persisted overrides; secrets encrypted at rest.
 - Technical documentation for configuration layers and the settings API contract.
@@ -17,8 +19,8 @@
 - Settings overrides grouped by area with field descriptions, units, monospace technical values, an active-override counter, dirty-state save, and inline reset to default.
 - Webhook route actions consolidated into an overflow menu; route list and edit modal visuals unified.
 - Dashboard metric cards redesigned with icons, context lines, tabular figures, and a four-column responsive grid; the "Needs attention" card highlights in a warning tone when problems exist.
-
 - Default bot delivery mode changed from `mock` to `real`; set `BOT_DELIVERY_MODE=mock` for credential-free local validation.
 - Entra app credentials are configured through `MS_APP_TENANT_ID`, `MS_APP_CLIENT_ID`, and `MS_APP_CLIENT_SECRET` for both Bot Framework delivery and Microsoft Graph lookup.
 - Removed separate `BOT_*` and `GRAPH_*` credential variables and the Graph-to-Bot credential fallback.
 - Readiness diagnostics now report `credential_source=ms_app` instead of separate bot/graph/inherited sources.
+- Renamed the Graph autocomplete spike note to a Graph target lookup implementation note.

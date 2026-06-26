@@ -55,12 +55,30 @@ import type {
 } from "./types";
 import { classNames, compactJson, formatDateTime, formatRelativeTime } from "./utils";
 
-type RouteName = "dashboard" | "webhooks" | "users" | "settings" | "logs" | "system-logs";
+type RouteName = "dashboard" | "webhooks" | "payload-generator" | "users" | "settings" | "logs" | "system-logs";
 type DeliveryStatusFilter = "all" | WebhookDeliveryStatus;
+type PayloadGeneratorMode = "text" | "adaptive";
+type PayloadAccent = "neutral" | "success" | "warning" | "critical";
+type PayloadImageSize = "Auto" | "Stretch";
+type PayloadTitleSize = "Default" | "Medium" | "Large";
+type PayloadTitleWeight = "Default" | "Bolder";
+
+type PayloadFact = {
+  id: string;
+  name: string;
+  value: string;
+};
+
+type PayloadAction = {
+  id: string;
+  title: string;
+  url: string;
+};
 
 const NAV: Array<{ route: RouteName; label: string; path: string; icon: string }> = [
   { route: "dashboard", label: "Dashboard", path: "/dashboard", icon: "D" },
   { route: "webhooks", label: "Webhooks", path: "/webhooks", icon: "W" },
+  { route: "payload-generator", label: "Payload Generator", path: "/payload-generator", icon: "P" },
   { route: "users", label: "Users", path: "/users", icon: "U" },
   { route: "settings", label: "Settings", path: "/settings", icon: "S" },
   { route: "logs", label: "Messages", path: "/logs", icon: "M" },
@@ -72,6 +90,29 @@ const DELIVERY_STATUS_FILTERS: Array<{ value: DeliveryStatusFilter; label: strin
   { value: "delivered", label: "Delivered" },
   { value: "failed", label: "Failed" },
   { value: "rejected", label: "Rejected" },
+];
+
+const PAYLOAD_ACCENTS: Array<{ value: PayloadAccent; label: string }> = [
+  { value: "neutral", label: "Neutral" },
+  { value: "success", label: "Success" },
+  { value: "warning", label: "Warning" },
+  { value: "critical", label: "Critical" },
+];
+
+const PAYLOAD_TITLE_SIZES: Array<{ value: PayloadTitleSize; label: string }> = [
+  { value: "Default", label: "Default" },
+  { value: "Medium", label: "Medium" },
+  { value: "Large", label: "Large" },
+];
+
+const PAYLOAD_TITLE_WEIGHTS: Array<{ value: PayloadTitleWeight; label: string }> = [
+  { value: "Default", label: "Default" },
+  { value: "Bolder", label: "Bolder" },
+];
+
+const PAYLOAD_IMAGE_SIZES: Array<{ value: PayloadImageSize; label: string }> = [
+  { value: "Auto", label: "Auto" },
+  { value: "Stretch", label: "Stretch" },
 ];
 
 function IconButton({
@@ -206,6 +247,7 @@ function EmptyGuidance({ title, body }: { title: string; body: string }) {
 function routeFromPath(pathname: string): RouteName {
   if (pathname === "/" || pathname === "/dashboard") return "dashboard";
   if (pathname === "/webhooks") return "webhooks";
+  if (pathname === "/payload-generator") return "payload-generator";
   if (pathname === "/users") return "users";
   if (pathname === "/settings") return "settings";
   if (pathname === "/system-logs") return "system-logs";
@@ -391,6 +433,7 @@ function AppShell() {
         </header>
         {route === "dashboard" ? <DashboardPage /> : null}
         {route === "webhooks" ? <WebhooksPage /> : null}
+        {route === "payload-generator" ? <PayloadGeneratorPage /> : null}
         {route === "users" ? <UsersPage /> : null}
         {route === "settings" ? <SettingsPage /> : null}
         {route === "logs" ? <MessageLogsPage /> : null}
@@ -561,6 +604,665 @@ function DashboardPage() {
         />
       </Card>
     </>
+  );
+}
+
+function newPayloadFact(name = "", value = ""): PayloadFact {
+  return { id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, name, value };
+}
+
+function newPayloadAction(title = "", url = ""): PayloadAction {
+  return { id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, title, url };
+}
+
+function defaultPayloadFacts(): PayloadFact[] {
+  return [];
+}
+
+function defaultPayloadActions(): PayloadAction[] {
+  return [];
+}
+
+function compactPayloadFacts(facts: PayloadFact[]): Array<{ name: string; value: string }> {
+  return facts
+    .map((fact) => ({ name: fact.name.trim(), value: fact.value.trim() }))
+    .filter((fact) => fact.name || fact.value);
+}
+
+function compactPayloadActions(actions: PayloadAction[]): Array<{ title: string; url: string }> {
+  return actions
+    .map((action) => ({ title: action.title.trim(), url: action.url.trim() }))
+    .filter((action) => action.title && action.url);
+}
+
+function adaptiveCardColor(accent: PayloadAccent): string {
+  if (accent === "success") return "Good";
+  if (accent === "warning") return "Warning";
+  if (accent === "critical") return "Attention";
+  return "Default";
+}
+
+function buildGeneratedPayload({
+  mode,
+  title,
+  message,
+  accent,
+  facts,
+  titleSize,
+  titleWeight,
+  imageUrl,
+  imageAlt,
+  imageSize,
+  fullWidth,
+  actions,
+}: {
+  mode: PayloadGeneratorMode;
+  title: string;
+  message: string;
+  accent: PayloadAccent;
+  facts: PayloadFact[];
+  titleSize: PayloadTitleSize;
+  titleWeight: PayloadTitleWeight;
+  imageUrl: string;
+  imageAlt: string;
+  imageSize: PayloadImageSize;
+  fullWidth: boolean;
+  actions: PayloadAction[];
+}): Record<string, unknown> {
+  const cleanTitle = title.trim() || "Message title";
+  const cleanMessage = message.trim() || "Write the message content here.";
+  const cleanFacts = compactPayloadFacts(facts);
+  const cleanImageUrl = imageUrl.trim();
+  const cleanImageAlt = imageAlt.trim();
+  const cleanActions = compactPayloadActions(actions);
+
+  if (mode === "text") {
+    return {
+      title: cleanTitle,
+      message: cleanMessage,
+      ...(cleanFacts.length ? { facts: cleanFacts } : {}),
+    };
+  }
+
+  const adaptiveFacts = cleanFacts.map((fact) => ({ title: fact.name || "Detail", value: fact.value || "-" }));
+  const cardBody: Array<Record<string, unknown>> = [
+    {
+      type: "TextBlock",
+      text: cleanTitle,
+      weight: titleWeight,
+      size: titleSize,
+      color: adaptiveCardColor(accent),
+      wrap: true,
+    },
+    {
+      type: "TextBlock",
+      text: cleanMessage,
+      wrap: true,
+      spacing: "Small",
+    },
+  ];
+  if (cleanImageUrl) {
+    cardBody.push({
+      type: "Image",
+      url: cleanImageUrl,
+      size: imageSize,
+      ...(cleanImageAlt ? { altText: cleanImageAlt } : {}),
+    });
+  }
+  if (adaptiveFacts.length) {
+    cardBody.push({
+      type: "FactSet",
+      facts: adaptiveFacts,
+    });
+  }
+
+  const cardContent: Record<string, unknown> = {
+    $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+    type: "AdaptiveCard",
+    version: "1.4",
+    body: cardBody,
+    ...(cleanActions.length
+      ? {
+          actions: cleanActions.map((action) => ({
+            type: "Action.OpenUrl",
+            title: action.title,
+            url: action.url,
+          })),
+        }
+      : {}),
+    ...(fullWidth ? { msteams: { width: "Full" } } : {}),
+  };
+
+  return {
+    type: "message",
+    attachments: [
+      {
+        contentType: "application/vnd.microsoft.card.adaptive",
+        content: cardContent,
+      },
+    ],
+  };
+}
+
+function PayloadGeneratorPage() {
+  const { notify } = useAppContext();
+  const messageRef = useRef<HTMLTextAreaElement>(null);
+  const [mode, setMode] = useState<PayloadGeneratorMode>("text");
+  const [title, setTitle] = useState("Message title");
+  const [message, setMessage] = useState("Write the message content here.");
+  const [accent, setAccent] = useState<PayloadAccent>("neutral");
+  const [facts, setFacts] = useState<PayloadFact[]>(() => defaultPayloadFacts());
+  const [titleSize, setTitleSize] = useState<PayloadTitleSize>("Medium");
+  const [titleWeight, setTitleWeight] = useState<PayloadTitleWeight>("Bolder");
+  const [imageUrl, setImageUrl] = useState("");
+  const [imageAlt, setImageAlt] = useState("");
+  const [imageSize, setImageSize] = useState<PayloadImageSize>("Stretch");
+  const [fullWidth, setFullWidth] = useState(true);
+  const [actions, setActions] = useState<PayloadAction[]>(() => defaultPayloadActions());
+
+  const payload = useMemo(
+    () =>
+      buildGeneratedPayload({
+        mode,
+        title,
+        message,
+        accent,
+        facts,
+        titleSize,
+        titleWeight,
+        imageUrl,
+        imageAlt,
+        imageSize,
+        fullWidth,
+        actions,
+      }),
+    [accent, actions, facts, fullWidth, imageAlt, imageSize, imageUrl, message, mode, title, titleSize, titleWeight],
+  );
+  const payloadJson = useMemo(() => JSON.stringify(payload, null, 2), [payload]);
+  const previewFacts = useMemo(() => compactPayloadFacts(facts), [facts]);
+  const previewActions = useMemo(() => compactPayloadActions(actions), [actions]);
+
+  function resetGenerator() {
+    setMode("text");
+    setTitle("Message title");
+    setMessage("Write the message content here.");
+    setAccent("neutral");
+    setFacts(defaultPayloadFacts());
+    setTitleSize("Medium");
+    setTitleWeight("Bolder");
+    setImageUrl("");
+    setImageAlt("");
+    setImageSize("Stretch");
+    setFullWidth(true);
+    setActions(defaultPayloadActions());
+  }
+
+  function updateFact(id: string, patch: Partial<Pick<PayloadFact, "name" | "value">>) {
+    setFacts((current) => current.map((fact) => (fact.id === id ? { ...fact, ...patch } : fact)));
+  }
+
+  function updateAction(id: string, patch: Partial<Pick<PayloadAction, "title" | "url">>) {
+    setActions((current) => current.map((action) => (action.id === id ? { ...action, ...patch } : action)));
+  }
+
+  function applyMarkdown(kind: "bold" | "italic" | "list" | "link") {
+    const textarea = messageRef.current;
+    const start = textarea?.selectionStart ?? message.length;
+    const end = textarea?.selectionEnd ?? message.length;
+    const selected = message.slice(start, end);
+    let insert = "";
+    let selectionOffsetStart = 0;
+    let selectionOffsetEnd = 0;
+
+    if (kind === "bold") {
+      const inner = selected || "bold text";
+      insert = `**${inner}**`;
+      selectionOffsetStart = 2;
+      selectionOffsetEnd = 2 + inner.length;
+    } else if (kind === "italic") {
+      const inner = selected || "italic text";
+      insert = `*${inner}*`;
+      selectionOffsetStart = 1;
+      selectionOffsetEnd = 1 + inner.length;
+    } else if (kind === "link") {
+      const inner = selected || "link label";
+      insert = `[${inner}](https://example.com)`;
+      selectionOffsetStart = 1;
+      selectionOffsetEnd = 1 + inner.length;
+    } else {
+      const inner = selected || "First item\nSecond item";
+      insert = inner
+        .split("\n")
+        .map((line) => (line.trim().startsWith("- ") ? line : `- ${line}`))
+        .join("\n");
+      selectionOffsetStart = 0;
+      selectionOffsetEnd = insert.length;
+    }
+
+    const nextMessage = `${message.slice(0, start)}${insert}${message.slice(end)}`;
+    setMessage(nextMessage);
+    window.requestAnimationFrame(() => {
+      messageRef.current?.focus();
+      messageRef.current?.setSelectionRange(start + selectionOffsetStart, start + selectionOffsetEnd);
+    });
+  }
+
+  async function copyPayload() {
+    try {
+      await navigator.clipboard.writeText(payloadJson);
+      notify({ tone: "success", title: "Payload copied", description: mode === "adaptive" ? "Adaptive Card JSON" : "Text JSON" });
+    } catch {
+      notify({ tone: "error", title: "Copy failed", description: "The payload could not be copied automatically." });
+    }
+  }
+
+  return (
+    <>
+      <PageIntro
+        eyebrow="Webhook helper"
+        title="Payload Generator"
+        description="Build JSON payloads for Teams Rehook webhook routes and preview the Teams message shape before copying it into a source system."
+        actions={
+          <div className="row-actions">
+            <button className="secondary-button button-with-icon" type="button" onClick={resetGenerator}>
+              <RotateCcwKey aria-hidden="true" className="button-icon" focusable="false" />
+              Reset
+            </button>
+            <button className="primary-button button-with-icon" type="button" onClick={() => void copyPayload()}>
+              <ClipboardCopy aria-hidden="true" className="button-icon" focusable="false" />
+              Copy JSON
+            </button>
+          </div>
+        }
+      />
+      <div className="payload-generator-layout">
+        <Card title="Payload details" description="Choose a payload type, then fill in the message fields used by the webhook relay.">
+          <div className="payload-builder-form">
+            <div className="payload-mode-row">
+              <span>Payload type</span>
+              <div className="segmented-control" role="group" aria-label="Payload type">
+                <button
+                  className={classNames("segmented-control-button", mode === "text" && "is-active")}
+                  type="button"
+                  onClick={() => setMode("text")}
+                >
+                  Text
+                </button>
+                <button
+                  className={classNames("segmented-control-button", mode === "adaptive" && "is-active")}
+                  type="button"
+                  onClick={() => setMode("adaptive")}
+                >
+                  Adaptive Card
+                </button>
+              </div>
+            </div>
+            <Field label="Title">
+              <input value={title} placeholder="Message title" onChange={(event) => setTitle(event.target.value)} />
+            </Field>
+            <Field label="Message">
+              <textarea
+                ref={messageRef}
+                value={message}
+                placeholder="Write the message content here."
+                rows={5}
+                onChange={(event) => setMessage(event.target.value)}
+              />
+            </Field>
+            <div className="payload-options-section">
+              <div className="payload-section-header">
+                <strong>Text formatting</strong>
+                <span>Teams Adaptive Cards support a practical subset of Markdown.</span>
+              </div>
+              <div className="payload-format-toolbar" aria-label="Message formatting helpers">
+                <button className="secondary-button secondary-button--small" type="button" onClick={() => applyMarkdown("bold")}>
+                  B
+                </button>
+                <button className="secondary-button secondary-button--small" type="button" onClick={() => applyMarkdown("italic")}>
+                  I
+                </button>
+                <button className="secondary-button secondary-button--small" type="button" onClick={() => applyMarkdown("list")}>
+                  List
+                </button>
+                <button className="secondary-button secondary-button--small" type="button" onClick={() => applyMarkdown("link")}>
+                  Link
+                </button>
+              </div>
+            </div>
+            {mode === "adaptive" ? (
+              <>
+                <div className="payload-options-section">
+                  <div className="payload-section-header">
+                    <strong>Teams display</strong>
+                    <span>Display options that are included in the Adaptive Card content.</span>
+                  </div>
+                  <label className="checkbox-field">
+                    <input type="checkbox" checked={fullWidth} onChange={(event) => setFullWidth(event.target.checked)} />
+                    Full-width card
+                  </label>
+                  <Field label="Card accent" hint="Visual only">
+                    <select value={accent} onChange={(event) => setAccent(event.target.value as PayloadAccent)}>
+                      {PAYLOAD_ACCENTS.map((item) => (
+                        <option key={item.value} value={item.value}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <div className="payload-field-grid">
+                    <Field label="Title size">
+                      <select value={titleSize} onChange={(event) => setTitleSize(event.target.value as PayloadTitleSize)}>
+                        {PAYLOAD_TITLE_SIZES.map((item) => (
+                          <option key={item.value} value={item.value}>
+                            {item.label}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label="Title weight">
+                      <select value={titleWeight} onChange={(event) => setTitleWeight(event.target.value as PayloadTitleWeight)}>
+                        {PAYLOAD_TITLE_WEIGHTS.map((item) => (
+                          <option key={item.value} value={item.value}>
+                            {item.label}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                  </div>
+                </div>
+                <div className="payload-options-section">
+                  <div className="payload-section-header">
+                    <strong>Image</strong>
+                    <span>Optional Adaptive Card image rendered from a public or source-system URL.</span>
+                  </div>
+                  <Field label="Image URL" hint="Optional">
+                    <input value={imageUrl} placeholder="https://example.com/image.png" onChange={(event) => setImageUrl(event.target.value)} />
+                  </Field>
+                  <div className="payload-field-grid">
+                    <Field label="Alt text" hint="Optional">
+                      <input value={imageAlt} placeholder="Message image" onChange={(event) => setImageAlt(event.target.value)} />
+                    </Field>
+                    <Field label="Image size">
+                      <select value={imageSize} onChange={(event) => setImageSize(event.target.value as PayloadImageSize)}>
+                        {PAYLOAD_IMAGE_SIZES.map((item) => (
+                          <option key={item.value} value={item.value}>
+                            {item.label}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                  </div>
+                </div>
+              </>
+            ) : null}
+            <div className="payload-facts-section">
+              <div className="payload-facts-header">
+                <div>
+                  <strong>Details</strong>
+                  <span>Optional name/value details such as Status, Owner, Customer, Ticket or Due date.</span>
+                </div>
+                <button
+                  className="secondary-button secondary-button--small button-with-icon"
+                  type="button"
+                  onClick={() => setFacts((current) => [...current, newPayloadFact()])}
+                >
+                  <Plus aria-hidden="true" className="button-icon" focusable="false" />
+                  Add detail
+                </button>
+              </div>
+              {facts.length ? (
+                <div className="payload-fact-list">
+                  {facts.map((fact) => (
+                    <div className="payload-fact-row" key={fact.id}>
+                      <Field label="Name">
+                        <input value={fact.name} placeholder="Status" onChange={(event) => updateFact(fact.id, { name: event.target.value })} />
+                      </Field>
+                      <Field label="Value">
+                        <input value={fact.value} placeholder="open" onChange={(event) => updateFact(fact.id, { value: event.target.value })} />
+                      </Field>
+                      <button
+                        className="icon-button icon-button--danger payload-fact-remove"
+                        type="button"
+                        aria-label="Remove detail"
+                        title="Remove detail"
+                        onClick={() => setFacts((current) => current.filter((item) => item.id !== fact.id))}
+                      >
+                        <Trash2 aria-hidden="true" className="button-icon" focusable="false" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <EmptyGuidance title="No details" body="Add a detail when the message should include structured name/value information." />
+              )}
+            </div>
+            {mode === "adaptive" ? (
+              <div className="payload-actions-section">
+                <div className="payload-facts-header">
+                  <div>
+                    <strong>Buttons</strong>
+                    <span>OpenURL actions for related pages or source-system details.</span>
+                  </div>
+                  <button
+                    className="secondary-button secondary-button--small button-with-icon"
+                    type="button"
+                    onClick={() => setActions((current) => [...current, newPayloadAction()])}
+                  >
+                    <Plus aria-hidden="true" className="button-icon" focusable="false" />
+                    Add button
+                  </button>
+                </div>
+                {actions.length ? (
+                  <div className="payload-action-list">
+                    {actions.map((action) => (
+                      <div className="payload-action-row" key={action.id}>
+                        <Field label="Label">
+                          <input value={action.title} placeholder="Open link" onChange={(event) => updateAction(action.id, { title: event.target.value })} />
+                        </Field>
+                        <Field label="URL">
+                          <input value={action.url} placeholder="https://example.com/details" onChange={(event) => updateAction(action.id, { url: event.target.value })} />
+                        </Field>
+                        <button
+                          className="icon-button icon-button--danger payload-fact-remove"
+                          type="button"
+                          aria-label="Remove button"
+                          title="Remove button"
+                          onClick={() => setActions((current) => current.filter((item) => item.id !== action.id))}
+                        >
+                          <Trash2 aria-hidden="true" className="button-icon" focusable="false" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyGuidance title="No buttons" body="Add an OpenURL button when the Teams message should link to another system." />
+                )}
+              </div>
+            ) : null}
+          </div>
+        </Card>
+        <div className="payload-output-stack">
+          <Card title="Preview" description="A pragmatic Teams-like preview of the generated message.">
+            <PayloadPreview
+              mode={mode}
+              title={title}
+              message={message}
+              accent={accent}
+              facts={previewFacts}
+              titleSize={titleSize}
+              titleWeight={titleWeight}
+              imageUrl={imageUrl}
+              imageAlt={imageAlt}
+              imageSize={imageSize}
+              fullWidth={fullWidth}
+              actions={previewActions}
+            />
+          </Card>
+          <Card
+            title="Generated JSON"
+            description="Send this as application/json to a relay webhook URL."
+            headerActions={
+              <button className="secondary-button secondary-button--small button-with-icon" type="button" onClick={() => void copyPayload()}>
+                <ClipboardCopy aria-hidden="true" className="button-icon" focusable="false" />
+                Copy
+              </button>
+            }
+          >
+            <textarea className="payload-code-output" value={payloadJson} readOnly spellCheck={false} rows={18} />
+          </Card>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function renderMarkdownInline(value: string): ReactNode[] {
+  const parts: ReactNode[] = [];
+  const pattern = /(\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(value)) !== null) {
+    if (match.index > cursor) parts.push(value.slice(cursor, match.index));
+    const token = match[0];
+    const key = `${match.index}-${token}`;
+    if (token.startsWith("**") && token.endsWith("**")) {
+      parts.push(<strong key={key}>{token.slice(2, -2)}</strong>);
+    } else if (token.startsWith("*") && token.endsWith("*")) {
+      parts.push(<em key={key}>{token.slice(1, -1)}</em>);
+    } else {
+      const linkMatch = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(token);
+      if (linkMatch) {
+        parts.push(
+          <a key={key} href={linkMatch[2]} target="_blank" rel="noreferrer">
+            {linkMatch[1]}
+          </a>,
+        );
+      } else {
+        parts.push(token);
+      }
+    }
+    cursor = pattern.lastIndex;
+  }
+  if (cursor < value.length) parts.push(value.slice(cursor));
+  return parts;
+}
+
+function MarkdownPreview({ text }: { text: string }) {
+  const blocks: ReactNode[] = [];
+  let listItems: string[] = [];
+
+  function flushList() {
+    if (!listItems.length) return;
+    const items = listItems;
+    listItems = [];
+    blocks.push(
+      <ul key={`list-${blocks.length}`}>
+        {items.map((item, index) => (
+          <li key={`${item}-${index}`}>{renderMarkdownInline(item)}</li>
+        ))}
+      </ul>,
+    );
+  }
+
+  text.split("\n").forEach((line, index) => {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("- ")) {
+      listItems.push(trimmed.slice(2));
+      return;
+    }
+    flushList();
+    if (!trimmed) return;
+    blocks.push(<p key={`p-${index}`}>{renderMarkdownInline(line)}</p>);
+  });
+  flushList();
+
+  return <div className="teams-preview-markdown">{blocks.length ? blocks : <p>{text}</p>}</div>;
+}
+
+function PayloadPreview({
+  mode,
+  title,
+  message,
+  accent,
+  facts,
+  titleSize,
+  titleWeight,
+  imageUrl,
+  imageAlt,
+  imageSize,
+  fullWidth,
+  actions,
+}: {
+  mode: PayloadGeneratorMode;
+  title: string;
+  message: string;
+  accent: PayloadAccent;
+  facts: Array<{ name: string; value: string }>;
+  titleSize: PayloadTitleSize;
+  titleWeight: PayloadTitleWeight;
+  imageUrl: string;
+  imageAlt: string;
+  imageSize: PayloadImageSize;
+  fullWidth: boolean;
+  actions: Array<{ title: string; url: string }>;
+}) {
+  const cleanTitle = title.trim() || "Message title";
+  const cleanMessage = message.trim() || "Write the message content here.";
+  const cleanImageUrl = imageUrl.trim();
+  const cleanImageAlt = imageAlt.trim();
+
+  return (
+    <div className={classNames("teams-preview-surface", mode === "adaptive" && fullWidth && "teams-preview-surface--full")}>
+      <div className="teams-preview-message">
+        <div className="teams-preview-avatar" aria-hidden="true">
+          T
+        </div>
+        <div className="teams-preview-content">
+          <div className="teams-preview-meta">
+            <strong>Teams Rehook</strong>
+            <span>Now</span>
+          </div>
+          <article className={classNames("teams-preview-card", `teams-preview-card--${accent}`)}>
+            <span className="teams-preview-type">{mode === "adaptive" ? "Adaptive Card" : "Text payload"}</span>
+            <h2
+              className={classNames(
+                `teams-preview-title--${titleSize.toLowerCase()}`,
+                titleWeight === "Bolder" && "teams-preview-title--bolder",
+              )}
+            >
+              {cleanTitle}
+            </h2>
+            <MarkdownPreview text={cleanMessage} />
+            {mode === "adaptive" && cleanImageUrl ? (
+              <img
+                className={classNames("teams-preview-image", imageSize === "Stretch" && "teams-preview-image--stretch")}
+                src={cleanImageUrl}
+                alt={cleanImageAlt || ""}
+              />
+            ) : null}
+            {facts.length ? (
+              <dl className="teams-preview-facts">
+                {facts.map((fact, index) => (
+                  <div key={`${fact.name}-${index}`}>
+                    <dt>{fact.name || "Detail"}</dt>
+                    <dd>{fact.value || "-"}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : null}
+            {mode === "adaptive" && actions.length ? (
+              <div className="teams-preview-actions">
+                {actions.map((action, index) => (
+                  <a key={`${action.title}-${index}`} href={action.url} target="_blank" rel="noreferrer">
+                    {action.title}
+                  </a>
+                ))}
+              </div>
+            ) : null}
+          </article>
+        </div>
+      </div>
+    </div>
   );
 }
 

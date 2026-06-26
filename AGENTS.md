@@ -12,7 +12,7 @@ This repository is `teams-rehook`, an authenticated internal tool for relaying w
 ## Commands
 
 - Frontend build: `cd frontend && npm run build`
-- Backend syntax check: `python3 -m py_compile backend/app/*.py backend/app/routers/*.py backend/app/core/*.py`
+- Backend syntax check: `python3 -m py_compile backend/app/*.py backend/app/routers/*.py backend/app/core/*.py backend/app/services/*.py`
 - Full validation: `npm run test`
 - Docker stack: `cp .env.example .env && docker compose up -d --build`
 

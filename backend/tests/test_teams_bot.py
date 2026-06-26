@@ -56,7 +56,7 @@ def test_mock_delivery_does_not_require_credentials():
     assert result.activity["type"] == "message"
 
 
-def test_activity_contains_title_text_and_metadata():
+def test_activity_contains_title_and_text_without_metadata_footer():
     message = NormalizedMessage(title="Alert", text="Sensor down", severity="critical", status="down", source="PRTG")
 
     activity = build_activity(message)
@@ -64,7 +64,9 @@ def test_activity_contains_title_text_and_metadata():
     assert activity["type"] == "message"
     assert "Alert" in activity["text"]
     assert "Sensor down" in activity["text"]
-    assert "severity: critical" in activity["text"]
+    assert "severity: critical" not in activity["text"]
+    assert "status: down" not in activity["text"]
+    assert "source: PRTG" not in activity["text"]
 
 
 def test_build_activity_preserves_existing_adaptive_card_activity():

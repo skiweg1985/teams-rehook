@@ -10,6 +10,7 @@ Teams Rehook is currently an internal MVP/evaluation-stage tool. The core relay 
 - Manage one stable relay URL per source system or event stream
 - Capture Teams bot conversations and use them as delivery targets
 - Send test messages before enabling a source in production
+- Build plain JSON and Adaptive Card payload examples for source systems
 - Review delivered, failed, and rejected webhook attempts
 - Regenerate relay URLs when a URL must be rotated or has been exposed
 
@@ -121,6 +122,22 @@ Use **Settings > Readiness** to verify delivery mode, credential completeness, B
 
 If the conversation is not listed, Teams Rehook does not yet have a sendable Bot Framework conversation reference. Use the manual delivery target fields only when you already have a valid service URL and conversation ID.
 
+### Teams Bot Commands
+
+Inbound Teams bot messages also capture or refresh the conversation reference. The bot recognizes slash commands in chats or channels where it is installed:
+
+```text
+/register <route name>  create or update a route for this Teams conversation
+/webhook <route name>   show the relay URL for an existing route
+/disable [route name]   disable a route linked to this conversation
+/enable [route name]    enable a route linked to this conversation
+/delete <route name>    delete a route linked to this conversation
+/info [route name]      show captured IDs and linked route details
+/help                   show the command list
+```
+
+Routes created through `/register` use `source_system=teams-command` and still need the same operational care as UI-created routes. Treat the returned relay URL as a secret.
+
 ## Create A Webhook Route
 
 1. Open **Webhooks**.
@@ -160,10 +177,21 @@ curl -X POST "YOUR_RELAY_URL" \
 
 Empty payloads, invalid JSON, unknown route tokens, disabled routes, and oversized requests are rejected and recorded in **Messages**.
 
+## Build Example Payloads
+
+Open **Payload Generator** to build source-system payload examples without hand-writing JSON. It can generate:
+
+- Plain message JSON with title, message text, severity-style details, and name/value facts.
+- Adaptive Card activity JSON with title formatting, optional image, facts, OpenURL buttons, and Teams full-width card metadata.
+
+Use **Copy JSON**, then paste the generated body into the source system or a `curl` test against the route relay URL.
+
 ## Operate And Troubleshoot
 
 - **Dashboard** shows route counts, known conversations, failed/rejected routes, inactive routes, and untested active routes.
 - **Webhooks** manages routes, relay URLs, test sends, Graph name refresh, and known conversations.
+- **Payload Generator** builds text and Adaptive Card JSON examples for relay testing.
+- **Users** lists the bootstrap or existing users known to the current organization. User invitation and user editing flows are not implemented in the current UI.
 - **Messages** shows delivery logs with filters for status, route, and search text.
 - **System logs** shows sign-ins, route changes, admin activity, and Teams bot activity events.
 - **Settings > Readiness** shows non-secret configuration state for Bot, Graph, OAuth token checks, runtime URLs, payload limits, retention, cleanup, and secure-cookie behavior.
@@ -215,10 +243,18 @@ npm install
 npm run dev
 ```
 
-When frontend and backend run separately, keep `CORS_ORIGINS` aligned with the Vite development server origin.
+The Vite development server proxies `/api` to the port in `PROXY_HTTP_PORT` from the root `.env`, defaulting to `8080`. When running the backend directly on Uvicorn's default port `8000` without HAProxy, set `PROXY_HTTP_PORT=8000` in `.env` or start the backend on the configured proxy port. If the frontend calls the backend directly from another origin, keep `CORS_ORIGINS` aligned with the Vite development server origin.
 
 Validation:
 
 ```bash
 npm run test
+```
+
+Useful individual checks from the repository root:
+
+```bash
+npm run frontend:build
+npm run backend:check
+npm run backend:test
 ```

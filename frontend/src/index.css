@@ -657,6 +657,312 @@ button:disabled {
   color: var(--muted);
 }
 
+.payload-generator-layout,
+.payload-output-stack,
+.payload-builder-form,
+.payload-options-section,
+.payload-facts-section,
+.payload-fact-list,
+.payload-actions-section,
+.payload-action-list,
+.teams-preview-content {
+  display: grid;
+  min-width: 0;
+}
+
+.payload-generator-layout {
+  grid-template-columns: minmax(360px, 0.92fr) minmax(420px, 1.08fr);
+  align-items: start;
+  gap: var(--space-4);
+}
+
+.payload-output-stack,
+.payload-builder-form,
+.payload-options-section,
+.payload-actions-section {
+  gap: var(--space-4);
+}
+
+.payload-mode-row,
+.payload-facts-header,
+.payload-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.payload-mode-row > span,
+.payload-facts-header strong,
+.payload-section-header strong {
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.payload-section-header {
+  align-items: flex-start;
+}
+
+.payload-section-header span {
+  color: var(--muted);
+  font-size: 0.875rem;
+  text-align: right;
+}
+
+.payload-format-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.payload-format-toolbar .secondary-button {
+  min-width: 42px;
+}
+
+.payload-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.payload-facts-section {
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+}
+
+.payload-facts-header span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.payload-fact-list {
+  gap: var(--space-3);
+}
+
+.payload-action-list {
+  gap: var(--space-3);
+}
+
+.payload-fact-row,
+.payload-action-row {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: var(--space-2);
+}
+
+.payload-fact-remove {
+  margin-bottom: 3px;
+}
+
+.payload-code-output {
+  min-height: 420px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  white-space: pre;
+  overflow: auto;
+  resize: vertical;
+}
+
+.teams-preview-surface {
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+}
+
+.teams-preview-surface--full {
+  margin-inline: calc(var(--space-2) * -1);
+}
+
+.teams-preview-message {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: var(--space-3);
+}
+
+.teams-preview-avatar {
+  width: 34px;
+  height: 34px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 800;
+}
+
+.teams-preview-content {
+  gap: var(--space-2);
+}
+
+.teams-preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.teams-preview-meta span,
+.teams-preview-type {
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.teams-preview-card {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-left-width: 4px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.teams-preview-card--neutral {
+  border-left-color: var(--line-strong);
+}
+
+.teams-preview-card--success {
+  border-left-color: var(--success);
+}
+
+.teams-preview-card--warning {
+  border-left-color: var(--warn);
+}
+
+.teams-preview-card--critical {
+  border-left-color: var(--danger);
+}
+
+.teams-preview-card h2,
+.teams-preview-markdown p,
+.teams-preview-markdown ul,
+.teams-preview-facts {
+  margin: 0;
+}
+
+.teams-preview-card h2 {
+  font-size: 1rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.teams-preview-title--default {
+  font-size: 0.95rem;
+}
+
+.teams-preview-title--medium {
+  font-size: 1rem;
+}
+
+.teams-preview-title--large {
+  font-size: 1.18rem;
+}
+
+.teams-preview-title--bolder {
+  font-weight: 800;
+}
+
+.teams-preview-markdown {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.teams-preview-markdown p,
+.teams-preview-markdown li {
+  color: var(--ink-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.teams-preview-markdown ul {
+  display: grid;
+  gap: var(--space-1);
+  padding-left: var(--space-5);
+}
+
+.teams-preview-markdown a {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.teams-preview-image {
+  width: auto;
+  max-width: min(100%, 420px);
+  max-height: 260px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  object-fit: contain;
+  background: var(--surface-muted);
+}
+
+.teams-preview-image--stretch {
+  width: 100%;
+}
+
+.teams-preview-type {
+  width: fit-content;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.teams-preview-facts {
+  display: grid;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--line);
+}
+
+.teams-preview-facts div {
+  display: grid;
+  grid-template-columns: minmax(96px, 0.45fr) minmax(0, 1fr);
+  gap: var(--space-3);
+}
+
+.teams-preview-facts dt {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.teams-preview-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.teams-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--line);
+}
+
+.teams-preview-actions a {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  color: var(--ink);
+  font-size: 0.875rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.teams-preview-actions a:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-elevated);
+}
+
 .form-error {
   margin: 0;
   color: var(--danger);
@@ -1904,6 +2210,7 @@ button:disabled {
 
   .metric-grid,
   .attention-grid,
+  .payload-generator-layout,
   .settings-integrations-grid,
   .settings-support-grid {
     grid-template-columns: 1fr;
@@ -1946,8 +2253,28 @@ button:disabled {
   }
 
   .credential-check-grid,
+  .payload-field-grid,
+  .payload-fact-row,
+  .payload-action-row,
+  .teams-preview-facts div,
   .settings-kv-list {
     grid-template-columns: 1fr;
+  }
+
+  .payload-mode-row,
+  .payload-facts-header,
+  .payload-section-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .payload-section-header span {
+    text-align: left;
+  }
+
+  .payload-fact-remove {
+    width: 100%;
+    margin-bottom: 0;
   }
 
   .definition-list--compact {

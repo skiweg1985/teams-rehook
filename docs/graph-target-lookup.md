@@ -1,8 +1,8 @@
-# Graph Autocomplete Spike
+# Graph Target Lookup Notes
 
-## Decision
+## Status
 
-The target lookup spike uses Microsoft Graph with app-only credentials. This keeps the relay service aligned with the service-owned operating model and avoids coupling route administration to a personal Microsoft 365 user session.
+Microsoft Graph target lookup is implemented with app-only credentials. This keeps the relay service aligned with the service-owned operating model and avoids coupling route administration to a personal Microsoft 365 user session.
 
 The Graph lookup is only target discovery metadata for now. Bot delivery still uses the configured Bot Framework service URL and conversation ID, and each route must be validated with a test message before it is treated as reachable.
 
@@ -32,6 +32,8 @@ Settings readiness also tries optional read-only metadata checks against `/servi
 
 - `GET /api/v1/teams-targets/search?kind=user|team&q=...`
 - `GET /api/v1/teams-targets/teams/{team_id}/channels?q=...`
+- `POST /api/v1/webhook-routes/refresh-graph-names`
+- `POST /api/v1/webhook-routes/{route_id}/refresh-graph-names`
 
 Responses use one shape:
 

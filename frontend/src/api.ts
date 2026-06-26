@@ -30,6 +30,8 @@ type RequestOptions = {
   csrfToken?: string;
 };
 
+let activeSessionRequest: Promise<SessionResponse> | null = null;
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const method = options.method ?? "GET";
   const headers: Record<string, string> = {};
@@ -71,7 +73,10 @@ export const api = {
     });
   },
   me() {
-    return request<SessionResponse>("/api/v1/sessions/me");
+    activeSessionRequest ??= request<SessionResponse>("/api/v1/sessions/me").finally(() => {
+      activeSessionRequest = null;
+    });
+    return activeSessionRequest;
   },
   logout(csrfToken: string) {
     return request<{ ok: boolean }>("/api/v1/auth/logout", {
