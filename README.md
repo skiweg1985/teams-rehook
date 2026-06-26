@@ -95,7 +95,7 @@ GRAPH_CLIENT_ID=
 GRAPH_CLIENT_SECRET=
 ```
 
-Use **Settings > Readiness** to verify delivery mode, Bot readiness, Graph readiness, public URLs, payload limits, log retention, and cookie configuration.
+Use **Settings > Readiness** to verify delivery mode, credential completeness, Bot and Graph token request status, public URLs, payload limits, log retention, and cookie configuration.
 
 ## Prepare A Teams Target
 
@@ -152,7 +152,7 @@ Empty payloads, invalid JSON, unknown route tokens, disabled routes, and oversiz
 - **Webhooks** manages routes, relay URLs, test sends, Graph name refresh, and known conversations.
 - **Messages** shows delivery logs with filters for status, route, and search text.
 - **System logs** shows sign-ins, route changes, admin activity, and Teams bot activity events.
-- **Settings > Readiness** shows non-secret configuration state for Bot, Graph, runtime URLs, payload limits, retention, cleanup, and secure-cookie behavior.
+- **Settings > Readiness** shows non-secret configuration state for Bot, Graph, OAuth token checks, runtime URLs, payload limits, retention, cleanup, and secure-cookie behavior.
 
 Logs are retained for `LOG_RETENTION_DAYS` days, defaulting to 7.
 

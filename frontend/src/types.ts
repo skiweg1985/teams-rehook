@@ -194,16 +194,24 @@ export type AdminReadinessOut = {
   delivery_mode: "mock" | "real" | string;
   bot: {
     ready: boolean;
+    auth_status: string;
     message: string;
+    token_checked: boolean;
+    token_request_succeeded: boolean;
     mode: string;
     credentials_configured: boolean;
     default_service_url_configured: boolean;
+    credential_fields: Record<string, string>;
   };
   graph: {
     ready: boolean;
+    auth_status: string;
     message: string;
+    token_checked: boolean;
+    token_request_succeeded: boolean;
     configured: boolean;
     credential_source: "graph" | "bot" | "missing" | string;
+    credential_fields: Record<string, string>;
   };
   runtime: {
     app_public_base_url: string;

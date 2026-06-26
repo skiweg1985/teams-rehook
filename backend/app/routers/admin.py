@@ -19,7 +19,9 @@ from app.schemas import (
     UserOut,
 )
 from app.security import loads_json
+from app.services.graph_targets import GraphConfigError, GraphRequestError, fetch_graph_token
 from app.services.log_retention import cleanup_log_events
+from app.services.teams_bot import BotDeliveryError, fetch_botframework_token
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -38,49 +40,15 @@ def readiness(admin: User = Depends(require_admin)):
     _ = admin
     settings = get_settings()
     delivery_mode = settings.bot_delivery_mode_normalized
-    bot_credentials_configured = all(
-        value.strip()
-        for value in [settings.bot_tenant_id, settings.bot_client_id, settings.bot_client_secret]
-    )
-    bot_ready = delivery_mode == "mock" or bot_credentials_configured
-    if delivery_mode == "mock":
-        bot_message = "Mock delivery is active. Teams messages are simulated."
-    elif bot_ready:
-        bot_message = "Bot Framework credentials are configured for real Teams delivery."
-    else:
-        bot_message = "Real delivery requires BOT_TENANT_ID, BOT_CLIENT_ID and BOT_CLIENT_SECRET."
-
-    graph_credentials_configured = all(
-        value.strip()
-        for value in [settings.graph_tenant_id, settings.graph_client_id, settings.graph_client_secret]
-    )
-    if graph_credentials_configured:
-        graph_source = "graph"
-        graph_message = "Microsoft Graph credentials are configured for target search and name resolution."
-    elif bot_credentials_configured:
-        graph_source = "bot"
-        graph_message = "Microsoft Graph will reuse the Bot app registration credentials."
-    else:
-        graph_source = "missing"
-        graph_message = "Graph target search requires Graph credentials or reusable Bot credentials."
+    bot = _bot_readiness(settings, delivery_mode)
+    graph = _graph_readiness(settings)
 
     return AdminReadinessOut(
         app_name=settings.app_name,
         app_version=settings.app_version,
         delivery_mode=delivery_mode,
-        bot=BotReadinessOut(
-            ready=bot_ready,
-            mode=delivery_mode,
-            credentials_configured=bot_credentials_configured,
-            default_service_url_configured=bool(settings.bot_default_service_url.strip()),
-            message=bot_message,
-        ),
-        graph=GraphReadinessOut(
-            ready=graph_credentials_configured or bot_credentials_configured,
-            configured=graph_credentials_configured or bot_credentials_configured,
-            credential_source=graph_source,
-            message=graph_message,
-        ),
+        bot=bot,
+        graph=graph,
         runtime=RuntimeReadinessOut(
             app_public_base_url=settings.app_public_base_url,
             frontend_base_url=settings.frontend_base_url,
@@ -91,6 +59,140 @@ def readiness(admin: User = Depends(require_admin)):
             session_secure_cookie=settings.session_secure_cookie,
         ),
     )
+
+
+def _bot_readiness(settings, delivery_mode: str) -> BotReadinessOut:
+    credential_fields = {
+        "tenant_id": _configured_status(settings.bot_tenant_id),
+        "client_id": _configured_status(settings.bot_client_id),
+        "client_secret": _configured_status(settings.bot_client_secret),
+        "default_service_url": _configured_status(settings.bot_default_service_url),
+    }
+    credentials_configured = all(
+        credential_fields[field] == "configured"
+        for field in ["tenant_id", "client_id", "client_secret"]
+    )
+    if delivery_mode == "mock":
+        return BotReadinessOut(
+            ready=True,
+            auth_status="mock",
+            token_checked=False,
+            token_request_succeeded=False,
+            mode=delivery_mode,
+            credentials_configured=credentials_configured,
+            default_service_url_configured=credential_fields["default_service_url"] == "configured",
+            credential_fields=credential_fields,
+            message="Mock delivery is active. Token checks are skipped and Teams messages are simulated.",
+        )
+    if not credentials_configured:
+        return BotReadinessOut(
+            ready=False,
+            auth_status="incomplete",
+            token_checked=False,
+            token_request_succeeded=False,
+            mode=delivery_mode,
+            credentials_configured=False,
+            default_service_url_configured=credential_fields["default_service_url"] == "configured",
+            credential_fields=credential_fields,
+            message="Real delivery requires BOT_TENANT_ID, BOT_CLIENT_ID and BOT_CLIENT_SECRET.",
+        )
+    try:
+        fetch_botframework_token(settings)
+    except BotDeliveryError:
+        return BotReadinessOut(
+            ready=False,
+            auth_status="token_error",
+            token_checked=True,
+            token_request_succeeded=False,
+            mode=delivery_mode,
+            credentials_configured=True,
+            default_service_url_configured=credential_fields["default_service_url"] == "configured",
+            credential_fields=credential_fields,
+            message="Bot Framework token request failed. Check tenant ID, client ID, client secret and app permissions.",
+        )
+    return BotReadinessOut(
+        ready=True,
+        auth_status="ready",
+        token_checked=True,
+        token_request_succeeded=True,
+        mode=delivery_mode,
+        credentials_configured=True,
+        default_service_url_configured=credential_fields["default_service_url"] == "configured",
+        credential_fields=credential_fields,
+        message="Bot Framework token request succeeded. Delivery still requires a valid Teams conversation reference and bot permissions.",
+    )
+
+
+def _graph_readiness(settings) -> GraphReadinessOut:
+    credential_fields = {
+        "tenant_id": _graph_field_status(settings.graph_tenant_id, settings.bot_tenant_id),
+        "client_id": _graph_field_status(settings.graph_client_id, settings.bot_client_id),
+        "client_secret": _graph_field_status(settings.graph_client_secret, settings.bot_client_secret),
+    }
+    if all(status == "configured" for status in credential_fields.values()):
+        credential_source = "graph"
+    elif all(status in {"configured", "inherited"} for status in credential_fields.values()):
+        credential_source = "bot"
+    else:
+        credential_source = "missing"
+
+    if credential_source == "missing":
+        return GraphReadinessOut(
+            ready=False,
+            auth_status="incomplete",
+            token_checked=False,
+            token_request_succeeded=False,
+            configured=False,
+            credential_source=credential_source,
+            credential_fields=credential_fields,
+            message="Graph lookup requires dedicated Graph credentials or reusable Bot app credentials.",
+        )
+    try:
+        fetch_graph_token(settings)
+    except GraphConfigError:
+        return GraphReadinessOut(
+            ready=False,
+            auth_status="incomplete",
+            token_checked=False,
+            token_request_succeeded=False,
+            configured=False,
+            credential_source="missing",
+            credential_fields=credential_fields,
+            message="Graph lookup credentials are incomplete.",
+        )
+    except GraphRequestError:
+        return GraphReadinessOut(
+            ready=False,
+            auth_status="token_error",
+            token_checked=True,
+            token_request_succeeded=False,
+            configured=True,
+            credential_source=credential_source,
+            credential_fields=credential_fields,
+            message="Microsoft Graph token request failed. Check credentials, tenant and app permissions.",
+        )
+    return GraphReadinessOut(
+        ready=True,
+        auth_status="permission_warning",
+        token_checked=True,
+        token_request_succeeded=True,
+        configured=True,
+        credential_source=credential_source,
+        credential_fields=credential_fields,
+        message="Microsoft Graph token request succeeded. Lookup can still require tenant permissions and admin consent.",
+    )
+
+
+def _configured_status(value: str) -> str:
+    return "configured" if value.strip() else "missing"
+
+
+def _graph_field_status(graph_value: str, bot_value: str) -> str:
+    if graph_value.strip():
+        return "configured"
+    if bot_value.strip():
+        return "inherited"
+    return "missing"
 
 
 @router.get("/logs", response_model=list[AuditEventOut], dependencies=[Depends(require_csrf)])

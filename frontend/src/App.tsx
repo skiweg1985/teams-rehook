@@ -1704,24 +1704,40 @@ function SettingsPage() {
         <div className="settings-grid">
           <Card title="Delivery" description="Teams delivery mode and Bot Framework readiness.">
             <div className="readiness-header">
-              <StatusBadge label={readiness.bot.ready ? "Ready" : "Action needed"} tone={readiness.bot.ready ? "success" : "warn"} />
+              <StatusBadge label={authStatusLabel(readiness.bot.auth_status)} tone={authStatusTone(readiness.bot.auth_status)} />
               <StatusBadge label={readiness.delivery_mode} tone={readiness.delivery_mode === "real" ? "success" : "neutral"} />
             </div>
             <p className="muted">{readiness.bot.message}</p>
             <dl className="definition-list">
-              <dt>Bot credentials</dt>
-              <dd>{yesNo(readiness.bot.credentials_configured)}</dd>
+              <dt>Tenant ID</dt>
+              <dd>{credentialStatusLabel(readiness.bot.credential_fields.tenant_id)}</dd>
+              <dt>Client ID</dt>
+              <dd>{credentialStatusLabel(readiness.bot.credential_fields.client_id)}</dd>
+              <dt>Client secret</dt>
+              <dd>{credentialStatusLabel(readiness.bot.credential_fields.client_secret)}</dd>
               <dt>Default service URL</dt>
-              <dd>{yesNo(readiness.bot.default_service_url_configured)}</dd>
+              <dd>{credentialStatusLabel(readiness.bot.credential_fields.default_service_url)}</dd>
+              <dt>Token request</dt>
+              <dd>{tokenStatusLabel(readiness.bot.token_checked, readiness.bot.token_request_succeeded)}</dd>
             </dl>
           </Card>
           <Card title="Microsoft Graph" description="Target search and display-name resolution readiness.">
             <div className="readiness-header">
-              <StatusBadge label={readiness.graph.ready ? "Ready" : "Not configured"} tone={readiness.graph.ready ? "success" : "warn"} />
+              <StatusBadge label={authStatusLabel(readiness.graph.auth_status)} tone={authStatusTone(readiness.graph.auth_status)} />
               <StatusBadge label={graphCredentialLabel(readiness.graph.credential_source)} />
             </div>
             <p className="muted">{readiness.graph.message}</p>
             <p className="muted">Graph helps find Teams, channels and users. It does not prove that the bot can send there; validate each route with Send test.</p>
+            <dl className="definition-list">
+              <dt>Tenant ID</dt>
+              <dd>{credentialStatusLabel(readiness.graph.credential_fields.tenant_id)}</dd>
+              <dt>Client ID</dt>
+              <dd>{credentialStatusLabel(readiness.graph.credential_fields.client_id)}</dd>
+              <dt>Client secret</dt>
+              <dd>{credentialStatusLabel(readiness.graph.credential_fields.client_secret)}</dd>
+              <dt>Token request</dt>
+              <dd>{tokenStatusLabel(readiness.graph.token_checked, readiness.graph.token_request_succeeded)}</dd>
+            </dl>
           </Card>
           <Card title="Runtime" description="Public URLs, limits and retention used by relay operations.">
             <dl className="definition-list">
@@ -1766,6 +1782,33 @@ function graphCredentialLabel(source: string): string {
   if (source === "graph") return "Graph credentials";
   if (source === "bot") return "Bot fallback";
   return "Missing";
+}
+
+function credentialStatusLabel(status?: string): string {
+  if (status === "configured") return "Configured";
+  if (status === "inherited") return "Inherited";
+  return "Missing";
+}
+
+function authStatusLabel(status: string): string {
+  if (status === "mock") return "Mock mode";
+  if (status === "ready") return "Ready";
+  if (status === "permission_warning") return "Ready with permission warning";
+  if (status === "token_error") return "Token request failed";
+  if (status === "incomplete") return "Incomplete configuration";
+  return "Unknown";
+}
+
+function authStatusTone(status: string): "neutral" | "success" | "warn" | "danger" {
+  if (status === "ready" || status === "permission_warning") return "success";
+  if (status === "token_error") return "danger";
+  if (status === "incomplete") return "warn";
+  return "neutral";
+}
+
+function tokenStatusLabel(checked: boolean, succeeded: boolean): string {
+  if (!checked) return "Not checked";
+  return succeeded ? "Succeeded" : "Failed";
 }
 
 function formatBytes(value: number): string {

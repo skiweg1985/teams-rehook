@@ -49,7 +49,7 @@ Bereits umgesetzt:
 - Real-Delivery-Modus ueber Bot Framework Credentials
 - Delivery Logs mit normalisiertem Payload, Request-Metadaten, Zustellantwort und Fehlern
 - Log-Retention und manuelle Cleanup-Funktion
-- Settings-/Readiness-Ansicht fuer nicht geheime Betriebs- und Integrationszustaende
+- Settings-/Readiness-Ansicht fuer nicht geheime Betriebs-, Credential-, Token- und Integrationszustaende
 
 ## 4. Zielgruppen
 
@@ -75,12 +75,12 @@ Teams Rehook muss folgende Funktionen bereitstellen:
 - Testnachrichten pro Route senden
 - Zustellungen, Fehler und abgelehnte Requests nachvollziehbar loggen
 - Dashboard-Signale fuer fehlgeschlagene, abgelehnte, inaktive und ungetestete Routen anzeigen
-- Readiness fuer Bot, Graph, Delivery Mode, Runtime-URLs, Payload-Limit und Log-Retention anzeigen
+- Readiness fuer Bot, Graph, OAuth-Tokenabruf, Delivery Mode, Runtime-URLs, Payload-Limit und Log-Retention anzeigen
 
 ## 6. Nicht-funktionale Anforderungen
 
 - Bot-Credentials, Client Secrets, Route Tokens und Conversation IDs duerfen nicht unnoetig im UI oder in Logs offengelegt werden.
-- Readiness-Ausgaben duerfen nur Konfigurationszustaende, keine Secret-Werte enthalten.
+- Readiness-Ausgaben duerfen nur Konfigurations- und Health-Zustaende, keine Secret-Werte, Tokens, Header oder rohen Auth-Antworten enthalten.
 - Session-aendernde und administrative Requests muessen gegen CSRF geschuetzt bleiben.
 - Der Mock-Modus muss lokale Tests ohne echte Teams-Zustellung erlauben.
 - Der Real-Modus muss fehlende Bot-Credentials eindeutig als nicht bereit anzeigen.
@@ -114,7 +114,7 @@ Der MVP ist fuer die weitere Evaluation geeignet, wenn:
 - abgelehnte und fehlgeschlagene Requests mit Fehlerursache sichtbar sind,
 - Relay-URLs kopiert und rotiert werden koennen,
 - Dashboard und Empty States Operatoren zum naechsten sinnvollen Schritt fuehren,
-- Settings die Readiness fuer Bot, Graph und Runtime-Konfiguration ohne Secrets anzeigt,
+- Settings die Readiness fuer Bot, Graph, Tokenabruf und Runtime-Konfiguration ohne Secrets anzeigt,
 - README und PRD den aktuellen Produktstand konsistent beschreiben.
 
 ## 9. Bekannte Limitierungen

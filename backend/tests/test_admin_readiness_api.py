@@ -13,6 +13,8 @@ from app.database import Base, get_db
 from app.main import create_app
 from app.models import Organization, User
 from app.security import hash_secret
+from app.services.graph_targets import GraphRequestError
+from app.services.teams_bot import BotDeliveryError
 
 
 @pytest.fixture()
@@ -101,8 +103,12 @@ def test_readiness_reports_mock_delivery_ready_without_bot_credentials(db_sessio
     assert body["app_name"] == "Teams Rehook"
     assert body["delivery_mode"] == "mock"
     assert body["bot"]["ready"] is True
+    assert body["bot"]["auth_status"] == "mock"
+    assert body["bot"]["token_checked"] is False
     assert body["bot"]["credentials_configured"] is False
+    assert body["bot"]["credential_fields"]["tenant_id"] == "missing"
     assert body["graph"]["ready"] is False
+    assert body["graph"]["auth_status"] == "incomplete"
 
 
 def test_readiness_reports_real_delivery_missing_bot_credentials(db_session: Session, monkeypatch: pytest.MonkeyPatch):
@@ -114,10 +120,66 @@ def test_readiness_reports_real_delivery_missing_bot_credentials(db_session: Ses
     body = response.json()
     assert body["delivery_mode"] == "real"
     assert body["bot"]["ready"] is False
+    assert body["bot"]["auth_status"] == "incomplete"
+    assert body["bot"]["token_checked"] is False
     assert "BOT_TENANT_ID" in body["bot"]["message"]
 
 
+def test_readiness_checks_bot_token_for_real_delivery(db_session: Session, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("app.routers.admin.fetch_botframework_token", lambda settings: ("bot-token", 3600))
+    with make_client(
+        db_session,
+        monkeypatch,
+        BOT_DELIVERY_MODE="real",
+        BOT_TENANT_ID="tenant",
+        BOT_CLIENT_ID="client",
+        BOT_CLIENT_SECRET="secret",
+    ) as client:
+        csrf_token = login_admin(client)
+        response = client.get("/api/v1/admin/readiness", headers={"X-CSRF-Token": csrf_token})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["bot"]["ready"] is True
+    assert body["bot"]["auth_status"] == "ready"
+    assert body["bot"]["token_checked"] is True
+    assert body["bot"]["token_request_succeeded"] is True
+    assert body["bot"]["credential_fields"] == {
+        "tenant_id": "configured",
+        "client_id": "configured",
+        "client_secret": "configured",
+        "default_service_url": "missing",
+    }
+
+
+def test_readiness_reports_bot_token_error_without_leaking_details(db_session: Session, monkeypatch: pytest.MonkeyPatch):
+    def fail_token(settings):
+        raise BotDeliveryError("raw provider detail that should not leak")
+
+    monkeypatch.setattr("app.routers.admin.fetch_botframework_token", fail_token)
+    with make_client(
+        db_session,
+        monkeypatch,
+        BOT_DELIVERY_MODE="real",
+        BOT_TENANT_ID="tenant",
+        BOT_CLIENT_ID="client",
+        BOT_CLIENT_SECRET="secret",
+    ) as client:
+        csrf_token = login_admin(client)
+        response = client.get("/api/v1/admin/readiness", headers={"X-CSRF-Token": csrf_token})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["bot"]["ready"] is False
+    assert body["bot"]["auth_status"] == "token_error"
+    assert body["bot"]["token_checked"] is True
+    assert body["bot"]["token_request_succeeded"] is False
+    assert "raw provider detail" not in body["bot"]["message"]
+
+
 def test_readiness_reports_graph_credentials_and_bot_fallback(db_session: Session, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("app.routers.admin.fetch_botframework_token", lambda settings: ("bot-token", 3600))
+    monkeypatch.setattr("app.routers.admin.fetch_graph_token", lambda settings: ("graph-token", 3600))
     with make_client(
         db_session,
         monkeypatch,
@@ -134,6 +196,13 @@ def test_readiness_reports_graph_credentials_and_bot_fallback(db_session: Sessio
     assert fallback_body["bot"]["ready"] is True
     assert fallback_body["graph"]["ready"] is True
     assert fallback_body["graph"]["credential_source"] == "bot"
+    assert fallback_body["graph"]["auth_status"] == "permission_warning"
+    assert fallback_body["graph"]["token_checked"] is True
+    assert fallback_body["graph"]["credential_fields"] == {
+        "tenant_id": "inherited",
+        "client_id": "inherited",
+        "client_secret": "inherited",
+    }
 
     with make_client(
         db_session,
@@ -150,3 +219,55 @@ def test_readiness_reports_graph_credentials_and_bot_fallback(db_session: Sessio
     graph_body = graph_response.json()
     assert graph_body["graph"]["ready"] is True
     assert graph_body["graph"]["credential_source"] == "graph"
+    assert graph_body["graph"]["credential_fields"] == {
+        "tenant_id": "configured",
+        "client_id": "configured",
+        "client_secret": "configured",
+    }
+
+
+def test_readiness_reports_mixed_graph_credentials_and_bot_fallback(db_session: Session, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("app.routers.admin.fetch_graph_token", lambda settings: ("graph-token", 3600))
+    with make_client(
+        db_session,
+        monkeypatch,
+        GRAPH_TENANT_ID="graph-tenant",
+        BOT_CLIENT_ID="bot-client",
+        BOT_CLIENT_SECRET="bot-secret",
+    ) as client:
+        csrf_token = login_admin(client)
+        response = client.get("/api/v1/admin/readiness", headers={"X-CSRF-Token": csrf_token})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["graph"]["ready"] is True
+    assert body["graph"]["credential_source"] == "bot"
+    assert body["graph"]["credential_fields"] == {
+        "tenant_id": "configured",
+        "client_id": "inherited",
+        "client_secret": "inherited",
+    }
+
+
+def test_readiness_reports_graph_token_error_without_leaking_details(db_session: Session, monkeypatch: pytest.MonkeyPatch):
+    def fail_token(settings):
+        raise GraphRequestError("raw graph response that should not leak")
+
+    monkeypatch.setattr("app.routers.admin.fetch_graph_token", fail_token)
+    with make_client(
+        db_session,
+        monkeypatch,
+        GRAPH_TENANT_ID="tenant",
+        GRAPH_CLIENT_ID="client",
+        GRAPH_CLIENT_SECRET="secret",
+    ) as client:
+        csrf_token = login_admin(client)
+        response = client.get("/api/v1/admin/readiness", headers={"X-CSRF-Token": csrf_token})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["graph"]["ready"] is False
+    assert body["graph"]["auth_status"] == "token_error"
+    assert body["graph"]["token_checked"] is True
+    assert body["graph"]["token_request_succeeded"] is False
+    assert "raw graph response" not in body["graph"]["message"]

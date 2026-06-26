@@ -236,18 +236,23 @@ class LogCleanupOut(BaseModel):
 
 class ReadinessComponentOut(BaseModel):
     ready: bool
+    auth_status: str
     message: str
+    token_checked: bool
+    token_request_succeeded: bool
 
 
 class BotReadinessOut(ReadinessComponentOut):
     mode: str
     credentials_configured: bool
     default_service_url_configured: bool
+    credential_fields: dict[str, str]
 
 
 class GraphReadinessOut(ReadinessComponentOut):
     configured: bool
     credential_source: str
+    credential_fields: dict[str, str]
 
 
 class RuntimeReadinessOut(BaseModel):
