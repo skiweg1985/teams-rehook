@@ -2040,6 +2040,10 @@ button:disabled {
   width: min(100%, 1120px);
 }
 
+.message-log-detail-modal {
+  width: min(100%, 760px);
+}
+
 .webhook-route-modal {
   width: min(100%, 780px);
 }
@@ -2114,6 +2118,21 @@ button:disabled {
   gap: var(--space-3);
   color: var(--muted);
   font-size: 0.875rem;
+}
+
+.modal-loading-state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 88px;
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+}
+
+.modal-loading-state p {
+  margin: 0;
 }
 
 .delivery-event-detail {

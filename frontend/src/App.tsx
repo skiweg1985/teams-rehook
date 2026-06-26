@@ -3261,7 +3261,7 @@ function MessageLogsPage() {
       setDeliveryPage(nextDeliveryPage);
       setRoutes(nextRoutes);
       setSelectedEventId((current) =>
-        nextDeliveryPage.items.some((event) => event.id === current) ? current : nextDeliveryPage.items[0]?.id ?? "",
+        nextDeliveryPage.items.some((event) => event.id === current) ? current : "",
       );
     } catch (err) {
       setError(isApiError(err) ? err.message : "Logs could not be loaded.");
@@ -3354,69 +3354,100 @@ function MessageLogsPage() {
             />
           </label>
         </div>
-        <div className="delivery-log-layout">
-          <div className="logs-list-panel">
-            <DataTable
-              columns={["Status", "Time", "Route", "Message", "Mode", "Error"]}
-              rows={deliveryEvents.map((event) => [
-                <DeliveryEventStatusBadge status={event.status} />,
-                formatDateTime(event.created_at),
-                <div className="stacked-cell">
-                  <strong>{event.route_name || "Deleted route"}</strong>
-                  <span className="muted">{event.target_name || "No route metadata"}</span>
-                </div>,
-                <div className="stacked-cell">
-                  <span>{event.title || "-"}</span>
-                  <span className="muted">{event.payload_type || "-"}</span>
-                </div>,
-                <span className="muted">{deliverySummaryMode(event)}</span>,
-                event.error ? <span className="form-error">{event.error}</span> : <span className="muted">-</span>,
-              ])}
-              emptyTitle="No webhook message logs"
-              emptyBody="Send a route test or post to a relay URL. Delivered, failed and rejected attempts will appear here with payload and delivery details."
-              loading={loading}
-              loadingLabel="Loading webhook message logs..."
-              error={error}
-              onRetry={() => void refresh()}
-              rowKey={(index) => deliveryEvents[index]?.id ?? index}
-              rowClassName={(index) => (deliveryEvents[index]?.id === selectedEventId ? "is-selected" : null)}
-              onRowClick={(index) => setSelectedEventId(deliveryEvents[index]?.id ?? "")}
-            />
-            {!loading && !error && totalPages > 1 ? (
-              <div className="pagination-bar">
-                <span>
-                  {firstVisible}-{lastVisible} of {total}
-                </span>
-                <div className="row-actions">
-                  <button className="secondary-button secondary-button--small button-with-icon" type="button" disabled={page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>
-                    <ChevronLeft aria-hidden="true" className="button-icon" focusable="false" />
-                    Previous
-                  </button>
-                  <button className="secondary-button secondary-button--small button-with-icon" type="button" disabled={page >= totalPages} onClick={() => setPage((current) => current + 1)}>
-                    Next
-                    <ChevronRight aria-hidden="true" className="button-icon" focusable="false" />
-                  </button>
-                </div>
+        <div className="logs-list-panel">
+          <DataTable
+            columns={["Status", "Time", "Route", "Message", "Mode", "Error"]}
+            rows={deliveryEvents.map((event) => [
+              <DeliveryEventStatusBadge status={event.status} />,
+              formatDateTime(event.created_at),
+              <div className="stacked-cell">
+                <strong>{event.route_name || "Deleted route"}</strong>
+                <span className="muted">{event.target_name || "No route metadata"}</span>
+              </div>,
+              <div className="stacked-cell">
+                <span>{event.title || "-"}</span>
+                <span className="muted">{event.payload_type || "-"}</span>
+              </div>,
+              <span className="muted">{deliverySummaryMode(event)}</span>,
+              event.error ? <span className="form-error">{event.error}</span> : <span className="muted">-</span>,
+            ])}
+            emptyTitle="No webhook message logs"
+            emptyBody="Send a route test or post to a relay URL. Delivered, failed and rejected attempts will appear here with payload and delivery details."
+            loading={loading}
+            loadingLabel="Loading webhook message logs..."
+            error={error}
+            onRetry={() => void refresh()}
+            rowKey={(index) => deliveryEvents[index]?.id ?? index}
+            rowClassName={(index) => (deliveryEvents[index]?.id === selectedEventId ? "is-selected" : null)}
+            onRowClick={(index) => setSelectedEventId(deliveryEvents[index]?.id ?? "")}
+          />
+          {!loading && !error && totalPages > 1 ? (
+            <div className="pagination-bar">
+              <span>
+                {firstVisible}-{lastVisible} of {total}
+              </span>
+              <div className="row-actions">
+                <button className="secondary-button secondary-button--small button-with-icon" type="button" disabled={page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>
+                  <ChevronLeft aria-hidden="true" className="button-icon" focusable="false" />
+                  Previous
+                </button>
+                <button className="secondary-button secondary-button--small button-with-icon" type="button" disabled={page >= totalPages} onClick={() => setPage((current) => current + 1)}>
+                  Next
+                  <ChevronRight aria-hidden="true" className="button-icon" focusable="false" />
+                </button>
               </div>
-            ) : null}
-          </div>
-          {!loading && !error ? (
-            detailLoading ? (
-              <aside className="delivery-event-detail" role="status" aria-live="polite">
-                <div className="spinner spinner--small" aria-hidden="true" />
-                <p className="muted">Loading event details...</p>
-              </aside>
-            ) : detailError ? (
-              <aside className="delivery-event-detail" role="alert">
-                <p className="form-error">{detailError}</p>
-              </aside>
-            ) : selectedEvent ? (
-              <DeliveryEventDetails event={selectedEvent} />
-            ) : null
+            </div>
           ) : null}
         </div>
       </Card>
+      {selectedEventId && !loading && !error ? (
+        <MessageLogDetailsModal
+          event={selectedEvent}
+          loading={detailLoading}
+          error={detailError}
+          onClose={() => setSelectedEventId("")}
+        />
+      ) : null}
     </>
+  );
+}
+
+function MessageLogDetailsModal({
+  event,
+  loading,
+  error,
+  onClose,
+}: {
+  event: WebhookDeliveryEventDetailOut | null;
+  loading: boolean;
+  error: string;
+  onClose: () => void;
+}) {
+  return (
+    <Modal
+      title="Message log details"
+      description={event ? `${eventTitle(event)} · ${formatDateTime(event.created_at)}` : "Delivery event details"}
+      panelClassName="message-log-detail-modal"
+      onClose={onClose}
+    >
+      {loading ? (
+        <div className="modal-loading-state" role="status" aria-live="polite">
+          <div className="spinner spinner--small" aria-hidden="true" />
+          <p className="muted">Loading event details...</p>
+        </div>
+      ) : error ? (
+        <div className="inline-error" role="alert">
+          <p className="form-error">{error}</p>
+        </div>
+      ) : event ? (
+        <DeliveryEventDetails event={event} />
+      ) : null}
+      <div className="form-actions">
+        <button className="secondary-button" type="button" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </Modal>
   );
 }
 
