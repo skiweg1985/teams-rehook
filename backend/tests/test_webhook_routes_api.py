@@ -473,10 +473,12 @@ def test_global_delivery_event_detail_returns_json_payloads(client: TestClient, 
 
 def test_log_cleanup_uses_retention_days_from_env(db_session: Session, monkeypatch: pytest.MonkeyPatch):
     from app.core.config import get_settings
+    from app.core.settings_overrides import reset_override_state
     from app.services import log_retention
 
     monkeypatch.setenv("LOG_RETENTION_DAYS", "2")
     get_settings.cache_clear()
+    reset_override_state()
     log_retention._last_log_cleanup_at = None
     route = add_route(db_session)
     old_event = WebhookDeliveryEvent(

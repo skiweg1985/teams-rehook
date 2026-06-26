@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Callable, Literal
 
-from app.core.config import Settings, get_settings
+from app.core.config import Settings
+from app.core.settings_overrides import get_effective_settings
 from app.security import utcnow
 
 
@@ -46,7 +47,7 @@ class GraphTokenManager:
         fetcher: TokenFetcher | None = None,
         refresh_window_seconds: int = 60,
     ):
-        self.settings = settings or get_settings()
+        self.settings = settings or get_effective_settings()
         self.fetcher = fetch_graph_token if fetcher is None else fetcher
         self.refresh_window = timedelta(seconds=refresh_window_seconds)
         self._access_token: str | None = None
@@ -73,6 +74,11 @@ def get_graph_token_manager() -> GraphTokenManager:
     if _token_manager is None:
         _token_manager = GraphTokenManager()
     return _token_manager
+
+
+def reset_graph_token_manager() -> None:
+    global _token_manager
+    _token_manager = None
 
 
 def fetch_graph_token(settings: Settings) -> tuple[str, int]:

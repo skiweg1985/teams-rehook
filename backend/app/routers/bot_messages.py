@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
+from app.core.settings_overrides import get_effective_settings
 from app.database import get_db
 from app.deps import record_audit, require_admin
 from app.models import BotActivityEvent, BotConversationReference, Organization, User, WebhookDeliveryEvent, WebhookRoute
@@ -988,7 +988,7 @@ def _captured_with_reference(
 
 
 def _default_organization(db: Session) -> Organization:
-    settings = get_settings()
+    settings = get_effective_settings()
     organization = db.scalar(select(Organization).where(Organization.slug == settings.default_org_slug))
     if organization is None:
         organization = Organization(slug=settings.default_org_slug, name=settings.default_org_name)
@@ -1040,12 +1040,12 @@ def _clip(value: str, limit: int) -> str:
 
 
 def _build_webhook_url(route_token: str) -> str:
-    settings = get_settings()
+    settings = get_effective_settings()
     return f"{settings.app_public_base_url.rstrip('/')}{settings.api_v1_prefix.rstrip('/')}/webhooks/{route_token}"
 
 
 def _build_webhook_copy_url(webhook_url: str) -> str:
-    settings = get_settings()
+    settings = get_effective_settings()
     query = urllib.parse.urlencode({"url": webhook_url})
     return f"{settings.frontend_base_url.rstrip('/')}/copy-webhook?{query}"
 

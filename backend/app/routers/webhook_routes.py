@@ -7,7 +7,7 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
+from app.core.settings_overrides import get_effective_settings
 from app.database import get_db
 from app.deps import record_audit, require_admin, require_csrf
 from app.models import User, WebhookDeliveryEvent, WebhookRoute
@@ -51,7 +51,7 @@ def list_webhook_routes(admin: User = Depends(require_admin), db: Session = Depe
 @router.get("/webhook-routes/defaults", response_model=WebhookRouteDefaultsOut)
 def webhook_route_defaults(admin: User = Depends(require_admin)):
     _ = admin
-    settings = get_settings()
+    settings = get_effective_settings()
     return WebhookRouteDefaultsOut(bot_default_service_url=settings.bot_default_service_url.strip())
 
 
@@ -418,7 +418,7 @@ def test_webhook_route(
 
 @router.post("/webhooks/{route_token}", response_model=WebhookDeliveryOut)
 async def receive_webhook(route_token: str, request: Request, db: Session = Depends(get_db)):
-    settings = get_settings()
+    settings = get_effective_settings()
     token_hash = lookup_secret_hash(route_token)
     body = await request.body()
     if len(body) > settings.webhook_max_payload_bytes:
@@ -689,7 +689,7 @@ def _int_value(record: dict, key: str) -> int | None:
 
 
 def _build_webhook_url(route_token: str) -> str:
-    settings = get_settings()
+    settings = get_effective_settings()
     base_url = settings.app_public_base_url.rstrip("/")
     prefix = settings.api_v1_prefix.rstrip("/")
     return f"{base_url}{prefix}/webhooks/{route_token}"

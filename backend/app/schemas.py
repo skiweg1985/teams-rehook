@@ -315,6 +315,20 @@ class AdminReadinessOut(BaseModel):
     runtime: RuntimeReadinessOut
 
 
+class SettingItemOut(BaseModel):
+    key: str
+    label: str
+    type: Literal["string", "int", "url", "enum", "secret"]
+    enum_values: list[str] = Field(default_factory=list)
+    env_default: str
+    effective_value: str
+    is_overridden: bool
+
+
+class SettingUpdateIn(BaseModel):
+    value: str = Field(max_length=4000)
+
+
 class TeamsTargetSearchOut(BaseModel):
     kind: GraphTargetKind
     id: str

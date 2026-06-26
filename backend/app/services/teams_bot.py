@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Callable
 
-from app.core.config import Settings, get_settings
+from app.core.config import Settings
+from app.core.settings_overrides import get_effective_settings
 from app.security import utcnow
 from app.services.webhook_payloads import NormalizedMessage
 
@@ -47,7 +48,7 @@ class BotTokenManager:
         now: NowProvider = utcnow,
         refresh_window_seconds: int = 60,
     ):
-        self.settings = settings or get_settings()
+        self.settings = settings or get_effective_settings()
         self.fetcher = fetcher or fetch_botframework_token
         self.now = now
         self.refresh_window = timedelta(seconds=refresh_window_seconds)
@@ -75,6 +76,11 @@ def get_token_manager() -> BotTokenManager:
     if _token_manager is None:
         _token_manager = BotTokenManager()
     return _token_manager
+
+
+def reset_bot_token_manager() -> None:
+    global _token_manager
+    _token_manager = None
 
 
 def fetch_botframework_token(settings: Settings) -> tuple[str, int]:
@@ -139,7 +145,7 @@ def send_bot_activity(
     settings: Settings | None = None,
     token_manager: BotTokenManager | None = None,
 ) -> BotDeliveryResult:
-    settings = settings or get_settings()
+    settings = settings or get_effective_settings()
     mode = settings.bot_delivery_mode_normalized
     activity = build_activity(message)
     if mode == "mock":

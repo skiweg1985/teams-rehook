@@ -8,13 +8,13 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
+from app.core.settings_overrides import clear_override, get_effective_settings, list_setting_items, set_override
 from app.database import get_db
-from app.deps import require_admin, require_csrf
+from app.deps import record_audit, require_admin, require_csrf
 from app.models import AuditEvent, BotActivityEvent, User
 from app.schemas import (
     AdminReadinessOut,
@@ -27,6 +27,8 @@ from app.schemas import (
     OAuthTenantDiagnosticsOut,
     OAuthTokenDiagnosticsOut,
     RuntimeReadinessOut,
+    SettingItemOut,
+    SettingUpdateIn,
     SystemLogEventOut,
     UserOut,
 )
@@ -45,6 +47,62 @@ class OAuthTokenResponse:
     claims: dict
 
 
+@router.get("/settings", response_model=list[SettingItemOut], dependencies=[Depends(require_csrf)])
+def list_settings(admin: User = Depends(require_admin)):
+    _ = admin
+    return [SettingItemOut(**item) for item in list_setting_items()]
+
+
+@router.put(
+    "/settings/{key}",
+    response_model=SettingItemOut,
+    dependencies=[Depends(require_csrf)],
+)
+def update_setting(
+    key: str,
+    payload: SettingUpdateIn,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    set_override(db, key=key, value=payload.value, updated_by_id=admin.id)
+    record_audit(
+        db,
+        action="settings.override.set",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata={"key": key},
+    )
+    db.commit()
+    item = next((entry for entry in list_setting_items() if entry["key"] == key), None)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown setting")
+    return SettingItemOut(**item)
+
+
+@router.delete(
+    "/settings/{key}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_csrf)],
+)
+def reset_setting(
+    key: str,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    clear_override(db, key=key)
+    record_audit(
+        db,
+        action="settings.override.reset",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata={"key": key},
+    )
+    db.commit()
+    return None
+
+
 @router.get("/users", response_model=list[UserOut], dependencies=[Depends(require_csrf)])
 def list_users(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     return db.scalars(
@@ -57,7 +115,7 @@ def list_users(admin: User = Depends(require_admin), db: Session = Depends(get_d
 @router.get("/readiness", response_model=AdminReadinessOut, dependencies=[Depends(require_csrf)])
 def readiness(admin: User = Depends(require_admin)):
     _ = admin
-    settings = get_settings()
+    settings = get_effective_settings()
     delivery_mode = settings.bot_delivery_mode_normalized
     bot = _bot_readiness(settings, delivery_mode)
     graph = _graph_readiness(settings)

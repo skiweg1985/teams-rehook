@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     webhook_max_payload_bytes: int = 64_000
     log_retention_days: int = 7
     log_cleanup_interval_minutes: int = 60
+    settings_enc_key: str = ""
 
     @property
     def cors_origin_list(self) -> list[str]:

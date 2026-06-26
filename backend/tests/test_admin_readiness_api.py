@@ -11,6 +11,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.core.settings_overrides import load_overrides, reset_override_state
 from app.database import Base, get_db
 from app.main import create_app
 from app.models import Organization, User
@@ -45,6 +46,7 @@ def db_session() -> Iterator[Session]:
             )
         )
         db.commit()
+        load_overrides(db)
         yield db
 
 
@@ -63,6 +65,8 @@ def make_client(db_session: Session, monkeypatch: pytest.MonkeyPatch, **env: str
     for key, value in defaults.items():
         monkeypatch.setenv(key, value)
     get_settings.cache_clear()
+    reset_override_state()
+    load_overrides(db_session)
     app = create_app()
     app.router.on_startup.clear()
 
@@ -75,6 +79,7 @@ def make_client(db_session: Session, monkeypatch: pytest.MonkeyPatch, **env: str
             yield test_client
     finally:
         get_settings.cache_clear()
+        reset_override_state()
 
 
 def login_admin(client: TestClient) -> str:

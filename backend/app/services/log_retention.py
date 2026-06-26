@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
+from app.core.settings_overrides import get_effective_settings
 from app.models import AuditEvent, BotActivityEvent, WebhookDeliveryEvent
 from app.security import utcnow
 
@@ -30,7 +30,7 @@ class CleanupResult:
 def cleanup_log_events(db: Session, *, force: bool = False) -> CleanupResult:
     global _last_log_cleanup_at
 
-    settings = get_settings()
+    settings = get_effective_settings()
     retention_days = max(0, settings.log_retention_days)
     interval_minutes = max(1, settings.log_cleanup_interval_minutes)
     now = utcnow()
