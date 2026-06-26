@@ -76,6 +76,7 @@ export function DataTable({
   rowKey,
   rowClassName,
   onRowClick,
+  className,
 }: {
   columns: string[];
   rows: ReactNode[][];
@@ -88,6 +89,7 @@ export function DataTable({
   rowKey?: (rowIndex: number) => Key;
   rowClassName?: (rowIndex: number) => string | false | null | undefined;
   onRowClick?: (rowIndex: number) => void;
+  className?: string;
 }) {
   if (loading) {
     return (
@@ -113,7 +115,7 @@ export function DataTable({
   if (!rows.length) return <EmptyState title={emptyTitle} body={emptyBody} />;
   return (
     <div className="table-wrap">
-      <table className="data-table">
+      <table className={classNames("data-table", className)}>
         <thead>
           <tr>
             {columns.map((column) => (

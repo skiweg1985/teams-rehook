@@ -1,16 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
+  AlertTriangle,
   ChevronLeft,
   ChevronRight,
   ClipboardCopy,
   FileClock,
   MessageSquareText,
+  MessagesSquare,
+  MoreHorizontal,
   Pencil,
   Plus,
+  Power,
+  PowerOff,
+  Radio,
   RefreshCw,
   RotateCcwKey,
   Send,
   Trash2,
+  Webhook,
   type LucideIcon,
 } from "lucide-react";
 
@@ -93,6 +100,97 @@ function IconButton({
     >
       <Icon aria-hidden="true" className={classNames("button-icon", spinning && "button-icon--spin")} focusable="false" />
     </button>
+  );
+}
+
+type RowActionItem = {
+  label: string;
+  icon: LucideIcon;
+  onClick: () => void;
+  disabled?: boolean;
+  spinning?: boolean;
+  tone?: "default" | "danger";
+  separated?: boolean;
+};
+
+function RowActionMenu({ label, items }: { label: string; items: RowActionItem[] }) {
+  const [open, setOpen] = useState(false);
+  const [coords, setCoords] = useState<{ top: number; right: number }>({ top: 0, right: 0 });
+  const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+
+  function openMenu() {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (rect) setCoords({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+    setOpen(true);
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    function handlePointer(event: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) setOpen(false);
+    }
+    function handleKey(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    function handleReposition() {
+      setOpen(false);
+    }
+    document.addEventListener("mousedown", handlePointer);
+    document.addEventListener("keydown", handleKey);
+    window.addEventListener("resize", handleReposition);
+    window.addEventListener("scroll", handleReposition, true);
+    return () => {
+      document.removeEventListener("mousedown", handlePointer);
+      document.removeEventListener("keydown", handleKey);
+      window.removeEventListener("resize", handleReposition);
+      window.removeEventListener("scroll", handleReposition, true);
+    };
+  }, [open]);
+
+  return (
+    <div className="row-action-menu" ref={containerRef}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="icon-button"
+        aria-label={label}
+        title={label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => (open ? setOpen(false) : openMenu())}
+      >
+        <MoreHorizontal aria-hidden="true" className="button-icon" focusable="false" />
+      </button>
+      {open ? (
+        <div className="row-action-menu-popover" role="menu" style={{ top: coords.top, right: coords.right }}>
+          {items.map((item) => (
+            <button
+              key={item.label}
+              type="button"
+              role="menuitem"
+              className={classNames(
+                "row-action-menu-item",
+                item.tone === "danger" && "row-action-menu-item--danger",
+                item.separated && "row-action-menu-item--separated",
+              )}
+              disabled={item.disabled}
+              onClick={() => {
+                setOpen(false);
+                item.onClick();
+              }}
+            >
+              <item.icon
+                aria-hidden="true"
+                className={classNames("button-icon", item.spinning && "button-icon--spin")}
+                focusable="false"
+              />
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -353,20 +451,44 @@ function DashboardPage() {
       />
       <div className="metric-grid">
         <Card className="metric-card">
-          <span>Webhook routes</span>
-          <strong>{metricValue(counts.routes)}</strong>
+          <div className="metric-card__head">
+            <span className="metric-icon" aria-hidden="true">
+              <Webhook size={18} strokeWidth={2} />
+            </span>
+            <span className="metric-label">Webhook routes</span>
+          </div>
+          <strong className="metric-value">{metricValue(counts.routes)}</strong>
+          <span className="metric-context">All configured relay routes</span>
         </Card>
         <Card className="metric-card">
-          <span>Active routes</span>
-          <strong>{metricValue(counts.active)}</strong>
+          <div className="metric-card__head">
+            <span className="metric-icon" aria-hidden="true">
+              <Radio size={18} strokeWidth={2} />
+            </span>
+            <span className="metric-label">Active routes</span>
+          </div>
+          <strong className="metric-value">{metricValue(counts.active)}</strong>
+          <span className="metric-context">Currently accepting requests</span>
+        </Card>
+        <Card className={classNames("metric-card", !loading && !error && counts.attention > 0 ? "metric-card--alert" : null)}>
+          <div className="metric-card__head">
+            <span className="metric-icon" aria-hidden="true">
+              <AlertTriangle size={18} strokeWidth={2} />
+            </span>
+            <span className="metric-label">Needs attention</span>
+          </div>
+          <strong className="metric-value">{metricValue(counts.attention)}</strong>
+          <span className="metric-context">Failed or rejected deliveries</span>
         </Card>
         <Card className="metric-card">
-          <span>Needs attention</span>
-          <strong>{metricValue(counts.attention)}</strong>
-        </Card>
-        <Card className="metric-card">
-          <span>Known conversations</span>
-          <strong>{metricValue(counts.conversations)}</strong>
+          <div className="metric-card__head">
+            <span className="metric-icon" aria-hidden="true">
+              <MessagesSquare size={18} strokeWidth={2} />
+            </span>
+            <span className="metric-label">Known conversations</span>
+          </div>
+          <strong className="metric-value">{metricValue(counts.conversations)}</strong>
+          <span className="metric-context">Captured Teams targets</span>
         </Card>
       </div>
       <div className="attention-grid">
@@ -458,6 +580,7 @@ function WebhooksPage() {
   const [testingId, setTestingId] = useState("");
   const [regeneratingId, setRegeneratingId] = useState("");
   const [deletingId, setDeletingId] = useState("");
+  const [togglingId, setTogglingId] = useState("");
   const [refreshingNames, setRefreshingNames] = useState(false);
   const [refreshingRouteNameId, setRefreshingRouteNameId] = useState("");
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
@@ -497,6 +620,27 @@ function WebhooksPage() {
       });
     } finally {
       setDeletingId("");
+    }
+  }
+
+  async function toggleRouteActive(route: WebhookRouteOut) {
+    setTogglingId(route.id);
+    try {
+      await api.updateWebhookRoute(csrfToken, route.id, { is_active: !route.is_active });
+      notify({
+        tone: "success",
+        title: route.is_active ? "Route deactivated" : "Route activated",
+        description: route.name,
+      });
+      await refresh();
+    } catch (err) {
+      notify({
+        tone: "error",
+        title: "Update failed",
+        description: isApiError(err) ? err.message : "The route status could not be changed.",
+      });
+    } finally {
+      setTogglingId("");
     }
   }
 
@@ -648,6 +792,7 @@ function WebhooksPage() {
       />
       <Card>
         <DataTable
+          className="data-table--webhooks"
           columns={["Route", "Target", "Health", "Relay URL", "Actions"]}
           rows={routes.map((route) => [
             <div className="stacked-cell">
@@ -690,22 +835,44 @@ function WebhooksPage() {
                 onClick={() => void testRoute(route)}
               />
               <IconButton label="Edit route" icon={Pencil} onClick={() => setEditing(route)} />
-              <IconButton label="View delivery logs" icon={FileClock} onClick={() => setViewingLogs(route)} />
-              <IconButton
-                label={refreshingRouteNameId === route.id ? "Refreshing Graph names" : "Refresh Graph names"}
-                icon={RefreshCw}
-                disabled={refreshingRouteNameId === route.id}
-                spinning={refreshingRouteNameId === route.id}
-                onClick={() => void refreshRouteGraphNames(route)}
+              <RowActionMenu
+                label="More actions"
+                items={[
+                  {
+                    label: route.is_active ? "Deactivate route" : "Activate route",
+                    icon: route.is_active ? PowerOff : Power,
+                    disabled: togglingId === route.id,
+                    spinning: togglingId === route.id,
+                    onClick: () => void toggleRouteActive(route),
+                  },
+                  {
+                    label: "View delivery logs",
+                    icon: FileClock,
+                    onClick: () => setViewingLogs(route),
+                  },
+                  {
+                    label: refreshingRouteNameId === route.id ? "Refreshing Graph names" : "Refresh Graph names",
+                    icon: RefreshCw,
+                    disabled: refreshingRouteNameId === route.id,
+                    spinning: refreshingRouteNameId === route.id,
+                    onClick: () => void refreshRouteGraphNames(route),
+                  },
+                  {
+                    label: regeneratingId === route.id ? "Regenerating relay URL" : "Regenerate relay URL",
+                    icon: RotateCcwKey,
+                    disabled: regeneratingId === route.id,
+                    spinning: regeneratingId === route.id,
+                    onClick: () => setConfirmingRegeneration(route),
+                  },
+                  {
+                    label: "Delete route",
+                    icon: Trash2,
+                    tone: "danger",
+                    separated: true,
+                    onClick: () => setConfirmingDelete(route),
+                  },
+                ]}
               />
-              <IconButton
-                label={regeneratingId === route.id ? "Regenerating relay URL" : "Regenerate relay URL"}
-                icon={RotateCcwKey}
-                disabled={regeneratingId === route.id}
-                spinning={regeneratingId === route.id}
-                onClick={() => setConfirmingRegeneration(route)}
-              />
-              <IconButton label="Delete route" icon={Trash2} tone="danger" onClick={() => setConfirmingDelete(route)} />
             </div>,
           ])}
           emptyTitle="No webhook routes"

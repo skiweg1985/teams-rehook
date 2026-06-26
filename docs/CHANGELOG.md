@@ -7,6 +7,7 @@
 - Admin settings API and UI for runtime overrides with per-field reset to environment defaults.
 - `app_settings` table for persisted overrides; secrets encrypted at rest.
 - Technical documentation for configuration layers and the settings API contract.
+- Activate or deactivate webhook routes directly from the route list.
 
 ### Changed
 
@@ -14,6 +15,8 @@
 - `.env.example` no longer sets `DATABASE_URL`; local SQLite remains the code default and Docker Compose overrides Postgres.
 - Settings page combines editable runtime overrides with integration readiness diagnostics.
 - Settings overrides grouped by area with field descriptions, units, monospace technical values, an active-override counter, dirty-state save, and inline reset to default.
+- Webhook route actions consolidated into an overflow menu; route list and edit modal visuals unified.
+- Dashboard metric cards redesigned with icons, context lines, tabular figures, and a four-column responsive grid; the "Needs attention" card highlights in a warning tone when problems exist.
 
 - Default bot delivery mode changed from `mock` to `real`; set `BOT_DELIVERY_MODE=mock` for credential-free local validation.
 - Entra app credentials are configured through `MS_APP_TENANT_ID`, `MS_APP_CLIENT_ID`, and `MS_APP_CLIENT_SECRET` for both Bot Framework delivery and Microsoft Graph lookup.
