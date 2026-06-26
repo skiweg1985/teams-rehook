@@ -9,13 +9,14 @@ The Graph lookup is only target discovery metadata for now. Bot delivery still u
 ## Required Configuration
 
 ```text
-GRAPH_TENANT_ID=
-GRAPH_CLIENT_ID=
-GRAPH_CLIENT_SECRET=
+MS_APP_TENANT_ID=
+MS_APP_CLIENT_ID=
+MS_APP_CLIENT_SECRET=
+BOTFRAMEWORK_SCOPE=https://api.botframework.com/.default
 GRAPH_SCOPE=https://graph.microsoft.com/.default
 ```
 
-`GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID`, and `GRAPH_CLIENT_SECRET` may be left empty when the same Entra app registration is used for Bot Framework delivery and Graph lookup. In that case the service reuses `BOT_TENANT_ID`, `BOT_CLIENT_ID`, and `BOT_CLIENT_SECRET` for the Graph token request while keeping the Graph scope separate.
+The same Entra app registration credentials are used for Bot Framework delivery and Graph lookup. API scopes remain separate.
 
 ## Starting Permissions
 

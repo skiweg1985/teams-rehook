@@ -17,8 +17,7 @@ Teams Rehook is currently an internal MVP/evaluation-stage tool. The core relay 
 
 - Docker and Docker Compose for the default local stack
 - A Teams bot/app registration for real Teams delivery
-- Bot Framework credentials for `BOT_DELIVERY_MODE=real`
-- Optional Microsoft Graph app credentials for target search and display-name resolution
+- Entra app credentials (`MS_APP_*`) for Bot Framework delivery and Microsoft Graph target search
 - A Teams chat or channel where the bot is installed and allowed to receive at least one activity
 
 Graph search helps find Teams, channels, and users. It does not prove that the bot can send to that target. A route is sendable only after Teams Rehook has a valid Bot Framework service URL and conversation ID, usually captured from an inbound bot activity.
@@ -81,25 +80,24 @@ For real Teams delivery, set:
 
 ```text
 BOT_DELIVERY_MODE=real
-BOT_TENANT_ID=
-BOT_CLIENT_ID=
-BOT_CLIENT_SECRET=
+MS_APP_TENANT_ID=
+MS_APP_CLIENT_ID=
+MS_APP_CLIENT_SECRET=
 BOT_DEFAULT_SERVICE_URL=
 ```
 
-For Microsoft Graph target search and name resolution, configure Graph credentials. If Graph credentials are empty, Teams Rehook attempts to reuse the Bot app registration:
+The same Entra app registration credentials are used for Bot Framework delivery and Microsoft Graph target search. API scopes remain separate:
 
 ```text
-GRAPH_TENANT_ID=
-GRAPH_CLIENT_ID=
-GRAPH_CLIENT_SECRET=
+BOTFRAMEWORK_SCOPE=https://api.botframework.com/.default
+GRAPH_SCOPE=https://graph.microsoft.com/.default
 ```
 
 ### Microsoft Graph Permissions
 
 Graph access is optional and only supports target search and display-name resolution. Teams delivery itself does not use Microsoft Graph message send or message read APIs; delivery uses Bot Framework credentials plus a captured Teams conversation reference.
 
-Configure these permissions as Microsoft Graph **Application permissions** on the Entra app registration used by `GRAPH_CLIENT_ID`, then grant tenant admin consent. Teams Rehook requests tokens with the client credentials flow and `GRAPH_SCOPE=https://graph.microsoft.com/.default`.
+Configure these permissions as Microsoft Graph **Application permissions** on the Entra app registration used by `MS_APP_CLIENT_ID`, then grant tenant admin consent. Teams Rehook requests tokens with the client credentials flow and `GRAPH_SCOPE=https://graph.microsoft.com/.default`.
 
 The current Graph calls need:
 
@@ -187,11 +185,11 @@ Add the bot to the target Teams chat or channel and send or mention it once. Gra
 
 **Route test fails in real mode**
 
-Check Bot credentials, bot installation in the target conversation, and whether the selected service URL/conversation ID matches the expected Teams context.
+Check Entra app credentials, bot installation in the target conversation, and whether the selected service URL/conversation ID matches the expected Teams context.
 
 **Teams targets are not found**
 
-Check Graph credentials or rely on already captured bot conversations. Graph may require tenant admin consent.
+Check Entra app credentials and Microsoft Graph permissions, or rely on already captured bot conversations. Graph may require tenant admin consent.
 
 **Webhook requests are rejected**
 

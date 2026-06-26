@@ -27,20 +27,16 @@ class Settings(BaseSettings):
     bootstrap_admin_password: str = "change-me-admin-password"
     bootstrap_admin_display_name: str = "App Admin"
 
-    bot_tenant_id: str = ""
-    bot_client_id: str = ""
-    bot_client_secret: str = ""
+    ms_app_tenant_id: str = ""
+    ms_app_client_id: str = ""
+    ms_app_client_secret: str = ""
     botframework_scope: str = "https://api.botframework.com/.default"
+    graph_scope: str = "https://graph.microsoft.com/.default"
     bot_delivery_mode: str = "mock"
     bot_default_service_url: str = ""
     webhook_max_payload_bytes: int = 64_000
     log_retention_days: int = 7
     log_cleanup_interval_minutes: int = 60
-
-    graph_tenant_id: str = ""
-    graph_client_id: str = ""
-    graph_client_secret: str = ""
-    graph_scope: str = "https://graph.microsoft.com/.default"
 
     @property
     def cors_origin_list(self) -> list[str]:

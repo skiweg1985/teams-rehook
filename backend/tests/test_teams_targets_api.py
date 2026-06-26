@@ -107,14 +107,14 @@ def test_target_search_reports_missing_graph_config(client: TestClient, monkeypa
     login_admin(client)
 
     def fake_search(kind: str, query: str):
-        raise GraphConfigError("Missing Microsoft Graph app-only credentials: GRAPH_TENANT_ID")
+        raise GraphConfigError("Missing Microsoft Graph app-only credentials: MS_APP_TENANT_ID")
 
     monkeypatch.setattr("app.routers.teams_targets.search_targets", fake_search)
 
     response = client.get("/api/v1/teams-targets/search?kind=team&q=ops")
 
     assert response.status_code == 503
-    assert "GRAPH_TENANT_ID" in response.json()["detail"]
+    assert "MS_APP_TENANT_ID" in response.json()["detail"]
 
 
 def test_team_channels_returns_channel_results(client: TestClient, monkeypatch: pytest.MonkeyPatch):

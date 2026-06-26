@@ -2035,20 +2035,17 @@ function yesNo(value: boolean): string {
 }
 
 function graphCredentialLabel(source: string): string {
-  if (source === "graph") return "Graph credentials";
-  if (source === "bot") return "Bot fallback";
+  if (source === "ms_app") return "Entra app credentials";
   return "Missing";
 }
 
 function oauthCredentialSourceLabel(source: string): string {
-  if (source === "graph") return "Graph credentials";
-  if (source === "bot") return "Bot credentials";
+  if (source === "ms_app") return "Entra app credentials";
   return "Missing";
 }
 
 function credentialStatusLabel(status?: string): string {
   if (status === "configured") return "Configured";
-  if (status === "inherited") return "Inherited";
   return "Missing";
 }
 

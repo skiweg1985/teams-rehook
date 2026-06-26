@@ -82,9 +82,9 @@ def readiness(admin: User = Depends(require_admin)):
 
 def _bot_readiness(settings, delivery_mode: str) -> BotReadinessOut:
     credential_fields = {
-        "tenant_id": _configured_status(settings.bot_tenant_id),
-        "client_id": _configured_status(settings.bot_client_id),
-        "client_secret": _configured_status(settings.bot_client_secret),
+        "tenant_id": _configured_status(settings.ms_app_tenant_id),
+        "client_id": _configured_status(settings.ms_app_client_id),
+        "client_secret": _configured_status(settings.ms_app_client_secret),
         "default_service_url": _configured_status(settings.bot_default_service_url),
     }
     credentials_configured = all(
@@ -92,9 +92,9 @@ def _bot_readiness(settings, delivery_mode: str) -> BotReadinessOut:
         for field in ["tenant_id", "client_id", "client_secret"]
     )
     oauth = _oauth_diagnostics(
-        credential_source="bot",
-        tenant_id=settings.bot_tenant_id,
-        client_id=settings.bot_client_id,
+        credential_source="ms_app",
+        tenant_id=settings.ms_app_tenant_id,
+        client_id=settings.ms_app_client_id,
         scope=settings.botframework_scope,
     )
     if delivery_mode == "mock":
@@ -121,20 +121,20 @@ def _bot_readiness(settings, delivery_mode: str) -> BotReadinessOut:
             default_service_url_configured=credential_fields["default_service_url"] == "configured",
             credential_fields=credential_fields,
             oauth=oauth,
-            message="Real delivery requires BOT_TENANT_ID, BOT_CLIENT_ID and BOT_CLIENT_SECRET.",
+            message="Real delivery requires MS_APP_TENANT_ID, MS_APP_CLIENT_ID and MS_APP_CLIENT_SECRET.",
         )
     try:
         token_response = _fetch_oauth_token(
-            tenant_id=settings.bot_tenant_id,
-            client_id=settings.bot_client_id,
-            client_secret=settings.bot_client_secret,
+            tenant_id=settings.ms_app_tenant_id,
+            client_id=settings.ms_app_client_id,
+            client_secret=settings.ms_app_client_secret,
             scope=settings.botframework_scope,
             config_error=BotDeliveryError,
             request_error=BotDeliveryError,
             missing_labels={
-                "tenant_id": "BOT_TENANT_ID",
-                "client_id": "BOT_CLIENT_ID",
-                "client_secret": "BOT_CLIENT_SECRET",
+                "tenant_id": "MS_APP_TENANT_ID",
+                "client_id": "MS_APP_CLIENT_ID",
+                "client_secret": "MS_APP_CLIENT_SECRET",
             },
         )
     except BotDeliveryError:
@@ -148,24 +148,24 @@ def _bot_readiness(settings, delivery_mode: str) -> BotReadinessOut:
             default_service_url_configured=credential_fields["default_service_url"] == "configured",
             credential_fields=credential_fields,
             oauth=_oauth_diagnostics(
-                credential_source="bot",
-                tenant_id=settings.bot_tenant_id,
-                client_id=settings.bot_client_id,
+                credential_source="ms_app",
+                tenant_id=settings.ms_app_tenant_id,
+                client_id=settings.ms_app_client_id,
                 scope=settings.botframework_scope,
                 token=OAuthTokenDiagnosticsOut(checked=True, succeeded=False),
             ),
             message="Bot Framework token request failed. Check tenant ID, client ID, client secret and app permissions.",
         )
     oauth = _oauth_diagnostics(
-        credential_source="bot",
-        tenant_id=settings.bot_tenant_id,
-        client_id=settings.bot_client_id,
+        credential_source="ms_app",
+        tenant_id=settings.ms_app_tenant_id,
+        client_id=settings.ms_app_client_id,
         scope=settings.botframework_scope,
         token=_token_diagnostics(token_response),
         metadata=_metadata_for_credentials(
-            tenant_id=settings.bot_tenant_id,
-            client_id=settings.bot_client_id,
-            client_secret=settings.bot_client_secret,
+            tenant_id=settings.ms_app_tenant_id,
+            client_id=settings.ms_app_client_id,
+            client_secret=settings.ms_app_client_secret,
             scope=settings.graph_scope,
         ),
     )
@@ -185,25 +185,20 @@ def _bot_readiness(settings, delivery_mode: str) -> BotReadinessOut:
 
 def _graph_readiness(settings) -> GraphReadinessOut:
     credential_fields = {
-        "tenant_id": _graph_field_status(settings.graph_tenant_id, settings.bot_tenant_id),
-        "client_id": _graph_field_status(settings.graph_client_id, settings.bot_client_id),
-        "client_secret": _graph_field_status(settings.graph_client_secret, settings.bot_client_secret),
+        "tenant_id": _configured_status(settings.ms_app_tenant_id),
+        "client_id": _configured_status(settings.ms_app_client_id),
+        "client_secret": _configured_status(settings.ms_app_client_secret),
     }
-    if all(status == "configured" for status in credential_fields.values()):
-        credential_source = "graph"
-    elif all(status in {"configured", "inherited"} for status in credential_fields.values()):
-        credential_source = "bot"
-    else:
-        credential_source = "missing"
-    tenant_id, client_id, client_secret = _graph_credentials(settings)
+    credentials_configured = all(status == "configured" for status in credential_fields.values())
+    credential_source = "ms_app" if credentials_configured else "missing"
     oauth = _oauth_diagnostics(
         credential_source=credential_source,
-        tenant_id=tenant_id,
-        client_id=client_id,
+        tenant_id=settings.ms_app_tenant_id,
+        client_id=settings.ms_app_client_id,
         scope=settings.graph_scope,
     )
 
-    if credential_source == "missing":
+    if not credentials_configured:
         return GraphReadinessOut(
             ready=False,
             auth_status="incomplete",
@@ -213,20 +208,20 @@ def _graph_readiness(settings) -> GraphReadinessOut:
             credential_source=credential_source,
             credential_fields=credential_fields,
             oauth=oauth,
-            message="Graph lookup requires dedicated Graph credentials or reusable Bot app credentials.",
+            message="Graph lookup requires MS_APP_TENANT_ID, MS_APP_CLIENT_ID and MS_APP_CLIENT_SECRET.",
         )
     try:
         token_response = _fetch_oauth_token(
-            tenant_id=tenant_id,
-            client_id=client_id,
-            client_secret=client_secret,
+            tenant_id=settings.ms_app_tenant_id,
+            client_id=settings.ms_app_client_id,
+            client_secret=settings.ms_app_client_secret,
             scope=settings.graph_scope,
             config_error=GraphConfigError,
             request_error=GraphRequestError,
             missing_labels={
-                "tenant_id": "GRAPH_TENANT_ID or BOT_TENANT_ID",
-                "client_id": "GRAPH_CLIENT_ID or BOT_CLIENT_ID",
-                "client_secret": "GRAPH_CLIENT_SECRET or BOT_CLIENT_SECRET",
+                "tenant_id": "MS_APP_TENANT_ID",
+                "client_id": "MS_APP_CLIENT_ID",
+                "client_secret": "MS_APP_CLIENT_SECRET",
             },
         )
     except GraphConfigError:
@@ -252,8 +247,8 @@ def _graph_readiness(settings) -> GraphReadinessOut:
             credential_fields=credential_fields,
             oauth=_oauth_diagnostics(
                 credential_source=credential_source,
-                tenant_id=tenant_id,
-                client_id=client_id,
+                tenant_id=settings.ms_app_tenant_id,
+                client_id=settings.ms_app_client_id,
                 scope=settings.graph_scope,
                 token=OAuthTokenDiagnosticsOut(checked=True, succeeded=False),
             ),
@@ -261,11 +256,11 @@ def _graph_readiness(settings) -> GraphReadinessOut:
         )
     oauth = _oauth_diagnostics(
         credential_source=credential_source,
-        tenant_id=tenant_id,
-        client_id=client_id,
+        tenant_id=settings.ms_app_tenant_id,
+        client_id=settings.ms_app_client_id,
         scope=settings.graph_scope,
         token=_token_diagnostics(token_response),
-        metadata=_metadata_from_graph_token(token_response.access_token, client_id),
+        metadata=_metadata_from_graph_token(token_response.access_token, settings.ms_app_client_id),
     )
     metadata_available = oauth.app.available and oauth.tenant.available
     return GraphReadinessOut(
@@ -388,9 +383,9 @@ def _metadata_for_credentials(
             config_error=GraphConfigError,
             request_error=GraphRequestError,
             missing_labels={
-                "tenant_id": "BOT_TENANT_ID",
-                "client_id": "BOT_CLIENT_ID",
-                "client_secret": "BOT_CLIENT_SECRET",
+                "tenant_id": "MS_APP_TENANT_ID",
+                "client_id": "MS_APP_CLIENT_ID",
+                "client_secret": "MS_APP_CLIENT_SECRET",
             },
         )
     except (GraphConfigError, GraphRequestError):
@@ -518,28 +513,12 @@ def _decode_jwt_claims(token: str) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def _graph_credentials(settings) -> tuple[str, str, str]:
-    return (
-        settings.graph_tenant_id or settings.bot_tenant_id,
-        settings.graph_client_id or settings.bot_client_id,
-        settings.graph_client_secret or settings.bot_client_secret,
-    )
-
-
-def _odata_string(value: str) -> str:
-    return value.replace("'", "''")
-
-
 def _configured_status(value: str) -> str:
     return "configured" if value.strip() else "missing"
 
 
-def _graph_field_status(graph_value: str, bot_value: str) -> str:
-    if graph_value.strip():
-        return "configured"
-    if bot_value.strip():
-        return "inherited"
-    return "missing"
+def _odata_string(value: str) -> str:
+    return value.replace("'", "''")
 
 
 @router.get("/logs", response_model=list[AuditEventOut], dependencies=[Depends(require_csrf)])

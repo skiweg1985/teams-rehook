@@ -81,9 +81,9 @@ def fetch_botframework_token(settings: Settings) -> tuple[str, int]:
     missing = [
         name
         for name, value in {
-            "BOT_TENANT_ID": settings.bot_tenant_id,
-            "BOT_CLIENT_ID": settings.bot_client_id,
-            "BOT_CLIENT_SECRET": settings.bot_client_secret,
+            "MS_APP_TENANT_ID": settings.ms_app_tenant_id,
+            "MS_APP_CLIENT_ID": settings.ms_app_client_id,
+            "MS_APP_CLIENT_SECRET": settings.ms_app_client_secret,
         }.items()
         if not value
     ]
@@ -93,12 +93,12 @@ def fetch_botframework_token(settings: Settings) -> tuple[str, int]:
     form = urllib.parse.urlencode(
         {
             "grant_type": "client_credentials",
-            "client_id": settings.bot_client_id,
-            "client_secret": settings.bot_client_secret,
+            "client_id": settings.ms_app_client_id,
+            "client_secret": settings.ms_app_client_secret,
             "scope": settings.botframework_scope,
         }
     ).encode("utf-8")
-    url = f"https://login.microsoftonline.com/{settings.bot_tenant_id}/oauth2/v2.0/token"
+    url = f"https://login.microsoftonline.com/{settings.ms_app_tenant_id}/oauth2/v2.0/token"
     request = urllib.request.Request(
         url,
         data=form,

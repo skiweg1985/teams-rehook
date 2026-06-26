@@ -76,13 +76,12 @@ def get_graph_token_manager() -> GraphTokenManager:
 
 
 def fetch_graph_token(settings: Settings) -> tuple[str, int]:
-    tenant_id, client_id, client_secret = _graph_credentials(settings)
     missing = [
         name
         for name, value in {
-            "GRAPH_TENANT_ID or BOT_TENANT_ID": tenant_id,
-            "GRAPH_CLIENT_ID or BOT_CLIENT_ID": client_id,
-            "GRAPH_CLIENT_SECRET or BOT_CLIENT_SECRET": client_secret,
+            "MS_APP_TENANT_ID": settings.ms_app_tenant_id,
+            "MS_APP_CLIENT_ID": settings.ms_app_client_id,
+            "MS_APP_CLIENT_SECRET": settings.ms_app_client_secret,
         }.items()
         if not value
     ]
@@ -92,13 +91,13 @@ def fetch_graph_token(settings: Settings) -> tuple[str, int]:
     form = urllib.parse.urlencode(
         {
             "grant_type": "client_credentials",
-            "client_id": client_id,
-            "client_secret": client_secret,
+            "client_id": settings.ms_app_client_id,
+            "client_secret": settings.ms_app_client_secret,
             "scope": settings.graph_scope,
         }
     ).encode("utf-8")
     request = urllib.request.Request(
-        f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
+        f"https://login.microsoftonline.com/{settings.ms_app_tenant_id}/oauth2/v2.0/token",
         data=form,
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         method="POST",
@@ -109,14 +108,6 @@ def fetch_graph_token(settings: Settings) -> tuple[str, int]:
     except (urllib.error.URLError, json.JSONDecodeError) as exc:
         raise GraphRequestError("Failed to fetch Microsoft Graph access token") from exc
     return str(body.get("access_token") or ""), int(body.get("expires_in") or 3600)
-
-
-def _graph_credentials(settings: Settings) -> tuple[str, str, str]:
-    return (
-        settings.graph_tenant_id or settings.bot_tenant_id,
-        settings.graph_client_id or settings.bot_client_id,
-        settings.graph_client_secret or settings.bot_client_secret,
-    )
 
 
 def search_targets(kind: Literal["user", "team"], query: str, *, limit: int = 10) -> list[GraphTarget]:

@@ -211,7 +211,7 @@ export type AdminReadinessOut = {
     token_checked: boolean;
     token_request_succeeded: boolean;
     configured: boolean;
-    credential_source: "graph" | "bot" | "missing" | string;
+    credential_source: "ms_app" | "missing" | string;
     credential_fields: Record<string, string>;
     oauth: OAuthDiagnosticsOut;
   };
