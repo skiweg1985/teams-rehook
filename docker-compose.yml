@@ -43,13 +43,8 @@ services:
     env_file:
       - .env
     environment:
+      # Override the SQLite default with the bundled Postgres service in containers
       DATABASE_URL: postgresql+psycopg2://app:app@postgres:5432/app
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
-      APP_PUBLIC_BASE_URL: ${APP_PUBLIC_BASE_URL:-http://localhost:8080}
-      FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-http://localhost:8080}
-      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-admin@example.com}
-      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-change-me-admin-password}
-      SESSION_SECRET: ${SESSION_SECRET:-change-me-session-secret}
     volumes:
       - /etc/localtime:/etc/localtime:ro
     depends_on:
