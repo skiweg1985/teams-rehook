@@ -17,8 +17,10 @@ docker compose up -d --build
 
 Open:
 
-- Frontend: http://localhost
-- API docs: http://localhost/api/v1/docs
+- Frontend: http://localhost:8080
+- API docs: http://localhost:8080/api/v1/docs
+
+Proxy ports are configured via `PROXY_HTTP_PORT` and `PROXY_HTTPS_PORT` in `.env` (defaults: `8080` / `8443`).
 
 Seeded admin login:
 
