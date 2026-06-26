@@ -5,6 +5,7 @@ import type {
   BotConversationReferenceOut,
   LogCleanupOut,
   SessionResponse,
+  SettingItemOut,
   SystemLogEventOut,
   TeamsTargetSearchResult,
   UserOut,
@@ -21,7 +22,7 @@ import type {
   WebhookRouteUpdate,
 } from "./types";
 
-type HttpMethod = "GET" | "POST" | "PATCH" | "DELETE";
+type HttpMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 
 type RequestOptions = {
   method?: HttpMethod;
@@ -89,6 +90,22 @@ export const api = {
   },
   adminReadiness(csrfToken: string) {
     return request<AdminReadinessOut>("/api/v1/admin/readiness", { csrfToken });
+  },
+  adminSettings(csrfToken: string) {
+    return request<SettingItemOut[]>("/api/v1/admin/settings", { csrfToken });
+  },
+  updateSetting(csrfToken: string, key: string, value: string) {
+    return request<SettingItemOut>(`/api/v1/admin/settings/${encodeURIComponent(key)}`, {
+      method: "PUT",
+      csrfToken,
+      body: { value },
+    });
+  },
+  resetSetting(csrfToken: string, key: string) {
+    return request<void>(`/api/v1/admin/settings/${encodeURIComponent(key)}`, {
+      method: "DELETE",
+      csrfToken,
+    });
   },
   cleanupLogs(csrfToken: string) {
     return request<LogCleanupOut>("/api/v1/admin/logs/cleanup", {

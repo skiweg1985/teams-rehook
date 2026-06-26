@@ -36,6 +36,7 @@ import type {
   BotConversationReferenceOut,
   GraphTargetKind,
   OAuthDiagnosticsOut,
+  SettingItemOut,
   SystemLogEventOut,
   UserOut,
   WebhookDeliveryEventDetailOut,
@@ -1657,6 +1658,7 @@ function UsersPage() {
 function SettingsPage() {
   const { notify, session } = useAppContext();
   const [readiness, setReadiness] = useState<AdminReadinessOut | null>(null);
+  const [settings, setSettings] = useState<SettingItemOut[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
@@ -1665,9 +1667,14 @@ function SettingsPage() {
     setLoading(true);
     setError("");
     try {
-      setReadiness(await api.adminReadiness(csrfToken));
+      const [nextReadiness, nextSettings] = await Promise.all([
+        api.adminReadiness(csrfToken),
+        api.adminSettings(csrfToken),
+      ]);
+      setReadiness(nextReadiness);
+      setSettings(nextSettings);
     } catch (err) {
-      setError(isApiError(err) ? err.message : "Readiness data could not be loaded.");
+      setError(isApiError(err) ? err.message : "Settings data could not be loaded.");
     } finally {
       setLoading(false);
     }
@@ -1686,20 +1693,20 @@ function SettingsPage() {
     <>
       <PageIntro
         eyebrow="Configuration"
-        title="Readiness"
-        description="Review delivery mode, integration readiness and runtime settings without exposing secrets."
+        title="Settings"
+        description="Override runtime defaults from the environment file and review integration readiness."
       />
       {loading ? (
         <Card>
           <div className="table-state" role="status" aria-live="polite">
             <div className="spinner spinner--small" aria-hidden="true" />
-            <p>Loading readiness...</p>
+            <p>Loading settings...</p>
           </div>
         </Card>
       ) : error ? (
         <Card>
           <div className="table-state table-state--error" role="alert">
-            <h3>Could not load readiness</h3>
+            <h3>Could not load settings</h3>
             <p>{error}</p>
             <button className="secondary-button secondary-button--small" type="button" onClick={() => void refresh()}>
               Retry
@@ -1708,6 +1715,29 @@ function SettingsPage() {
         </Card>
       ) : readiness ? (
         <div className="settings-page">
+          <section className="settings-section">
+            <div className="settings-section-header">
+              <h2>Runtime overrides</h2>
+              <p>
+                Values from the environment file are defaults. Overrides apply immediately without restart. Reset
+                restores the environment default.
+              </p>
+            </div>
+            <Card title="Editable settings" description="Live runtime configuration for relay operations.">
+              <div className="settings-overrides">
+                {settings.map((item) => (
+                  <RuntimeSettingRow
+                    key={item.key}
+                    item={item}
+                    csrfToken={csrfToken}
+                    onChanged={refresh}
+                    notify={notify}
+                  />
+                ))}
+              </div>
+            </Card>
+          </section>
+
           <section className="settings-section">
             <div className="settings-section-header">
               <h2>Integrations</h2>
@@ -1760,7 +1790,7 @@ function SettingsPage() {
           <section className="settings-section settings-section--secondary">
             <div className="settings-section-header">
               <h2>Operations</h2>
-              <p>Runtime defaults and the shortest path to validating a production relay route.</p>
+              <p>Effective runtime values and the shortest path to validating a production relay route.</p>
             </div>
             <div className="settings-support-grid">
               <Card title="Runtime" description="Public URLs, limits and retention used by relay operations.">
@@ -1799,6 +1829,127 @@ function SettingsPage() {
         </div>
       ) : null}
     </>
+  );
+}
+
+function RuntimeSettingRow({
+  item,
+  csrfToken,
+  onChanged,
+  notify,
+}: {
+  item: SettingItemOut;
+  csrfToken: string;
+  onChanged: () => Promise<void>;
+  notify: ReturnType<typeof useAppContext>["notify"];
+}) {
+  const initialDraft = item.type === "secret" ? "" : item.effective_value;
+  const [draft, setDraft] = useState(initialDraft);
+  const [busy, setBusy] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setDraft(item.type === "secret" ? "" : item.effective_value);
+    setError("");
+  }, [item.key, item.effective_value, item.type]);
+
+  const canSave =
+    item.type === "secret" ? draft.trim().length > 0 : draft !== item.effective_value || (draft === "" && item.is_overridden);
+
+  async function save() {
+    setBusy(true);
+    setError("");
+    try {
+      await api.updateSetting(csrfToken, item.key, draft);
+      notify({ tone: "success", title: `${item.label} saved` });
+      await onChanged();
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Saving the setting failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reset() {
+    setBusy(true);
+    setError("");
+    try {
+      await api.resetSetting(csrfToken, item.key);
+      notify({ tone: "info", title: `${item.label} reset`, description: "Environment default restored." });
+      setResetOpen(false);
+      await onChanged();
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Resetting the setting failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="settings-override-row">
+      <div className="settings-override-meta">
+        <div className="settings-override-heading">
+          <strong>{item.label}</strong>
+          <StatusBadge label={item.is_overridden ? "Overridden" : "Default"} tone={item.is_overridden ? "warn" : "neutral"} />
+        </div>
+        <p className="settings-override-summary">
+          Active: <span>{item.effective_value || "-"}</span>
+          {" · "}
+          Environment default: <span>{item.env_default || "-"}</span>
+        </p>
+      </div>
+      <div className="settings-override-editor">
+        {item.type === "enum" ? (
+          <select value={draft} onChange={(event) => setDraft(event.target.value)} disabled={busy}>
+            {item.enum_values.map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+        ) : item.type === "secret" ? (
+          <input
+            type="password"
+            value={draft}
+            placeholder="Enter new secret"
+            autoComplete="new-password"
+            disabled={busy}
+            onChange={(event) => setDraft(event.target.value)}
+          />
+        ) : item.type === "int" ? (
+          <input
+            type="number"
+            value={draft}
+            disabled={busy}
+            onChange={(event) => setDraft(event.target.value)}
+          />
+        ) : (
+          <input value={draft} disabled={busy} onChange={(event) => setDraft(event.target.value)} />
+        )}
+        <div className="settings-override-actions">
+          <button className="primary-button" type="button" disabled={busy || !canSave} onClick={() => void save()}>
+            Save
+          </button>
+          {item.is_overridden ? (
+            <button className="secondary-button secondary-button--small" type="button" disabled={busy} onClick={() => setResetOpen(true)}>
+              Reset
+            </button>
+          ) : null}
+        </div>
+        {error ? <p className="form-error">{error}</p> : null}
+      </div>
+      {resetOpen ? (
+        <ConfirmModal
+          title={`Reset ${item.label}?`}
+          description="This removes the override and restores the value from the environment file."
+          confirmLabel="Reset"
+          busy={busy}
+          onClose={() => setResetOpen(false)}
+          onConfirm={() => void reset()}
+        />
+      ) : null}
+    </div>
   );
 }
 

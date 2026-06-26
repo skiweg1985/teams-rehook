@@ -188,6 +188,16 @@ export type LogCleanupOut = {
   cutoff: string;
 };
 
+export type SettingItemOut = {
+  key: string;
+  label: string;
+  type: "string" | "int" | "url" | "enum" | "secret";
+  enum_values: string[];
+  env_default: string;
+  effective_value: string;
+  is_overridden: boolean;
+};
+
 export type AdminReadinessOut = {
   app_name: string;
   app_version: string;

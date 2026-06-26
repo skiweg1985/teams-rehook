@@ -957,6 +957,64 @@ button:disabled {
   background: var(--danger);
 }
 
+.settings-overrides {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.settings-override-row {
+  display: grid;
+  gap: var(--space-3);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-override-row:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.settings-override-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.settings-override-summary {
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.settings-override-summary span {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.settings-override-editor {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.settings-override-editor input,
+.settings-override-editor select {
+  width: 100%;
+}
+
+.settings-override-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+@media (min-width: 900px) {
+  .settings-override-row {
+    grid-template-columns: minmax(220px, 0.9fr) minmax(0, 1.4fr);
+    align-items: start;
+  }
+}
+
 .credential-check-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
