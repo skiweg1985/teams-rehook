@@ -160,6 +160,71 @@ def list_team_channels(team_id: str, query: str = "", *, limit: int = 25) -> lis
     return targets
 
 
+def get_user_target(user_id: str) -> GraphTarget | None:
+    user_id = user_id.strip()
+    if not user_id:
+        return None
+    data = _graph_get(
+        f"/users/{urllib.parse.quote(user_id, safe='')}",
+        {"$select": "id,displayName,userPrincipalName,mail"},
+    )
+    display_name = str(data.get("displayName") or data.get("userPrincipalName") or "").strip()
+    resolved_id = str(data.get("id") or user_id).strip()
+    if not display_name:
+        return None
+    return GraphTarget(
+        kind="user",
+        id=resolved_id,
+        display_name=display_name,
+        subtitle=str(data.get("mail") or data.get("userPrincipalName") or "").strip(),
+    )
+
+
+def get_team_target(team_id: str) -> GraphTarget | None:
+    team_id = team_id.strip()
+    if not team_id:
+        return None
+    data = _graph_get(
+        f"/teams/{urllib.parse.quote(team_id, safe='')}",
+        {"$select": "id,displayName,description"},
+    )
+    display_name = str(data.get("displayName") or "").strip()
+    resolved_id = str(data.get("id") or team_id).strip()
+    if not display_name:
+        return None
+    return GraphTarget(
+        kind="team",
+        id=resolved_id,
+        display_name=display_name,
+        subtitle=str(data.get("description") or data.get("mailNickname") or "").strip(),
+        team_id=resolved_id,
+        team_name=display_name,
+    )
+
+
+def get_channel_target(team_id: str, channel_id: str) -> GraphTarget | None:
+    team_id = team_id.strip()
+    channel_id = channel_id.strip()
+    if not team_id or not channel_id:
+        return None
+    data = _graph_get(
+        f"/teams/{urllib.parse.quote(team_id, safe='')}/channels/{urllib.parse.quote(channel_id, safe='')}",
+        {"$select": "id,displayName,description,membershipType"},
+    )
+    display_name = str(data.get("displayName") or "").strip()
+    resolved_id = str(data.get("id") or channel_id).strip()
+    if not display_name:
+        return None
+    return GraphTarget(
+        kind="channel",
+        id=resolved_id,
+        display_name=display_name,
+        subtitle=str(data.get("description") or data.get("membershipType") or "").strip(),
+        team_id=team_id,
+        channel_id=resolved_id,
+    )
+
+
 def _search_users(query: str, *, limit: int) -> list[GraphTarget]:
     escaped = _odata_string(query)
     data = _graph_get(

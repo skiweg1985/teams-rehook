@@ -44,6 +44,24 @@ class AuditEventOut(BaseModel):
     created_at: datetime
 
 
+class SystemLogEventOut(BaseModel):
+    id: str
+    activity_type: str
+    conversation_type: str = ""
+    scope: str = ""
+    team_name: str = ""
+    channel_name: str = ""
+    user_name: str = ""
+    service_url: str = ""
+    conversation_id: str = ""
+    tenant_id: str = ""
+    team_id: str = ""
+    graph_team_id: str = ""
+    channel_id: str = ""
+    graph_user_id: str = ""
+    created_at: datetime
+
+
 GraphTargetKind = Literal["user", "team", "channel"]
 WebhookTargetType = Literal["bot_conversation"]
 WebhookRouteStatus = Literal["delivered", "failed", "rejected"]
@@ -156,6 +174,15 @@ class WebhookRouteDefaultsOut(BaseModel):
     bot_default_service_url: str = ""
 
 
+class WebhookRouteNameRefreshOut(BaseModel):
+    ok: bool = True
+    routes_checked: int = 0
+    routes_updated: int = 0
+    references_checked: int = 0
+    references_updated: int = 0
+    error: str = ""
+
+
 class WebhookDeliveryEventOut(BaseModel):
     id: str
     route_id: str | None = None
@@ -165,6 +192,46 @@ class WebhookDeliveryEventOut(BaseModel):
     delivery_result: dict[str, Any] = Field(default_factory=dict)
     error: str = ""
     created_at: datetime
+
+
+class WebhookDeliveryEventSummaryOut(BaseModel):
+    id: str
+    route_id: str | None = None
+    route_name: str = ""
+    source_system: str = ""
+    target_name: str = ""
+    status: str
+    title: str = ""
+    payload_type: str = ""
+    delivery_mode: str = ""
+    status_code: int | None = None
+    error: str = ""
+    created_at: datetime
+
+
+class WebhookDeliveryEventDetailOut(WebhookDeliveryEventOut):
+    route_name: str = ""
+    source_system: str = ""
+    target_name: str = ""
+
+
+class WebhookDeliveryEventPageOut(BaseModel):
+    items: list[WebhookDeliveryEventSummaryOut]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    retention_days: int
+
+
+class LogCleanupOut(BaseModel):
+    ok: bool = True
+    deleted: int
+    deleted_webhook_delivery_events: int
+    deleted_audit_events: int
+    deleted_bot_activity_events: int
+    retention_days: int
+    cutoff: datetime
 
 
 class TeamsTargetSearchOut(BaseModel):

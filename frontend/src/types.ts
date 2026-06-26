@@ -43,6 +43,24 @@ export type AuditEventOut = {
   created_at: string;
 };
 
+export type SystemLogEventOut = {
+  id: string;
+  activity_type: string;
+  conversation_type: string;
+  scope: string;
+  team_name: string;
+  channel_name: string;
+  user_name: string;
+  service_url: string;
+  conversation_id: string;
+  tenant_id: string;
+  team_id: string;
+  graph_team_id: string;
+  channel_id: string;
+  graph_user_id: string;
+  created_at: string;
+};
+
 export type WebhookTargetType = "bot_conversation";
 export type GraphTargetKind = "user" | "team" | "channel";
 
@@ -108,6 +126,15 @@ export type WebhookRouteDefaultsOut = {
   bot_default_service_url: string;
 };
 
+export type WebhookRouteNameRefreshOut = {
+  ok: boolean;
+  routes_checked: number;
+  routes_updated: number;
+  references_checked: number;
+  references_updated: number;
+  error: string;
+};
+
 export type WebhookDeliveryStatus = "delivered" | "failed" | "rejected";
 
 export type WebhookDeliveryEventOut = {
@@ -119,6 +146,46 @@ export type WebhookDeliveryEventOut = {
   delivery_result: Record<string, unknown>;
   error: string;
   created_at: string;
+};
+
+export type WebhookDeliveryEventSummaryOut = {
+  id: string;
+  route_id: string | null;
+  route_name: string;
+  source_system: string;
+  target_name: string;
+  status: WebhookDeliveryStatus;
+  title: string;
+  payload_type: string;
+  delivery_mode: string;
+  status_code: number | null;
+  error: string;
+  created_at: string;
+};
+
+export type WebhookDeliveryEventDetailOut = WebhookDeliveryEventOut & {
+  route_name: string;
+  source_system: string;
+  target_name: string;
+};
+
+export type WebhookDeliveryEventPageOut = {
+  items: WebhookDeliveryEventSummaryOut[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+  retention_days: number;
+};
+
+export type LogCleanupOut = {
+  ok: boolean;
+  deleted: number;
+  deleted_webhook_delivery_events: number;
+  deleted_audit_events: number;
+  deleted_bot_activity_events: number;
+  retention_days: number;
+  cutoff: string;
 };
 
 export type TeamsTargetSearchResult = {

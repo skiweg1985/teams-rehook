@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     bot_delivery_mode: str = "mock"
     bot_default_service_url: str = ""
     webhook_max_payload_bytes: int = 64_000
+    log_retention_days: int = 7
+    log_cleanup_interval_minutes: int = 60
 
     graph_tenant_id: str = ""
     graph_client_id: str = ""

@@ -2,14 +2,19 @@ import type {
   ApiError,
   AuditEventOut,
   BotConversationReferenceOut,
+  LogCleanupOut,
   SessionResponse,
+  SystemLogEventOut,
   TeamsTargetSearchResult,
   UserOut,
+  WebhookDeliveryEventDetailOut,
   WebhookDeliveryEventOut,
+  WebhookDeliveryEventPageOut,
   WebhookDeliveryOut,
   WebhookDeliveryStatus,
   WebhookRouteCreate,
   WebhookRouteDefaultsOut,
+  WebhookRouteNameRefreshOut,
   WebhookRouteOut,
   WebhookRouteTestRequest,
   WebhookRouteUpdate,
@@ -78,6 +83,15 @@ export const api = {
   adminLogs(csrfToken: string) {
     return request<AuditEventOut[]>("/api/v1/admin/logs", { csrfToken });
   },
+  adminSystemLogs(csrfToken: string) {
+    return request<SystemLogEventOut[]>("/api/v1/admin/system-logs", { csrfToken });
+  },
+  cleanupLogs(csrfToken: string) {
+    return request<LogCleanupOut>("/api/v1/admin/logs/cleanup", {
+      method: "POST",
+      csrfToken,
+    });
+  },
   webhookRoutes() {
     return request<WebhookRouteOut[]>("/api/v1/webhook-routes");
   },
@@ -113,6 +127,18 @@ export const api = {
       csrfToken,
     });
   },
+  refreshWebhookRouteGraphNames(csrfToken: string) {
+    return request<WebhookRouteNameRefreshOut>("/api/v1/webhook-routes/refresh-graph-names", {
+      method: "POST",
+      csrfToken,
+    });
+  },
+  refreshSingleWebhookRouteGraphNames(csrfToken: string, id: string) {
+    return request<WebhookRouteNameRefreshOut>(`/api/v1/webhook-routes/${encodeURIComponent(id)}/refresh-graph-names`, {
+      method: "POST",
+      csrfToken,
+    });
+  },
   webhookRouteDeliveries(id: string, status?: WebhookDeliveryStatus) {
     const params = new URLSearchParams();
     if (status) params.set("status", status);
@@ -120,6 +146,28 @@ export const api = {
     return request<WebhookDeliveryEventOut[]>(
       `/api/v1/webhook-routes/${encodeURIComponent(id)}/deliveries${query ? `?${query}` : ""}`,
     );
+  },
+  webhookDeliveryEvents({
+    page,
+    pageSize,
+    status,
+    routeId,
+    query,
+  }: {
+    page: number;
+    pageSize: number;
+    status?: WebhookDeliveryStatus;
+    routeId?: string;
+    query?: string;
+  }) {
+    const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+    if (status) params.set("status", status);
+    if (routeId) params.set("route_id", routeId);
+    if (query?.trim()) params.set("q", query.trim());
+    return request<WebhookDeliveryEventPageOut>(`/api/v1/webhook-delivery-events?${params.toString()}`);
+  },
+  webhookDeliveryEvent(id: string) {
+    return request<WebhookDeliveryEventDetailOut>(`/api/v1/webhook-delivery-events/${encodeURIComponent(id)}`);
   },
   testWebhookRoute(csrfToken: string, id: string, body: WebhookRouteTestRequest) {
     return request<WebhookDeliveryOut>(`/api/v1/webhook-routes/${encodeURIComponent(id)}/test`, {

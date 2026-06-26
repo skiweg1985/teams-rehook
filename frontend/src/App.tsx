@@ -1,23 +1,51 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { ClipboardCopy, FileClock, MessageSquareText, Pencil, Plus, RefreshCw, Send, Trash2, type LucideIcon } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  ClipboardCopy,
+  FileClock,
+  MessageSquareText,
+  Pencil,
+  Plus,
+  RefreshCw,
+  RotateCcwKey,
+  Send,
+  Trash2,
+  type LucideIcon,
+} from "lucide-react";
 
 import { api } from "./api";
 import { AppProvider, useAppContext } from "./app-context";
-import { Card, DataTable, EmptyState, Field, LoadingScreen, Modal, PageIntro, StatusBadge, ToastViewport } from "./components";
+import {
+  Card,
+  ConfirmModal,
+  DataTable,
+  EmptyState,
+  Field,
+  LoadingScreen,
+  Modal,
+  PageIntro,
+  StatusBadge,
+  ToastViewport,
+} from "./components";
 import { isApiError } from "./errors";
 import { ThemeToggle } from "./theme-toggle";
 import type {
   AuditEventOut,
   BotConversationReferenceOut,
   GraphTargetKind,
+  SystemLogEventOut,
   UserOut,
+  WebhookDeliveryEventDetailOut,
   WebhookDeliveryEventOut,
+  WebhookDeliveryEventPageOut,
+  WebhookDeliveryEventSummaryOut,
   WebhookDeliveryStatus,
   WebhookRouteOut,
 } from "./types";
 import { classNames, compactJson, formatDateTime, formatRelativeTime } from "./utils";
 
-type RouteName = "dashboard" | "webhooks" | "users" | "settings" | "logs";
+type RouteName = "dashboard" | "webhooks" | "users" | "settings" | "logs" | "system-logs";
 type DeliveryStatusFilter = "all" | WebhookDeliveryStatus;
 
 const NAV: Array<{ route: RouteName; label: string; path: string; icon: string }> = [
@@ -25,7 +53,8 @@ const NAV: Array<{ route: RouteName; label: string; path: string; icon: string }
   { route: "webhooks", label: "Webhooks", path: "/webhooks", icon: "W" },
   { route: "users", label: "Users", path: "/users", icon: "U" },
   { route: "settings", label: "Settings", path: "/settings", icon: "S" },
-  { route: "logs", label: "Logs", path: "/logs", icon: "L" },
+  { route: "logs", label: "Messages", path: "/logs", icon: "M" },
+  { route: "system-logs", label: "System logs", path: "/system-logs", icon: "L" },
 ];
 
 const DELIVERY_STATUS_FILTERS: Array<{ value: DeliveryStatusFilter; label: string }> = [
@@ -69,14 +98,15 @@ function routeFromPath(pathname: string): RouteName {
   if (pathname === "/webhooks") return "webhooks";
   if (pathname === "/users") return "users";
   if (pathname === "/settings") return "settings";
+  if (pathname === "/system-logs") return "system-logs";
   if (pathname === "/logs") return "logs";
   return "dashboard";
 }
 
 function LoginScreen() {
   const { login } = useAppContext();
-  const [email, setEmail] = useState("admin@example.com");
-  const [password, setPassword] = useState("change-me-admin-password");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -88,7 +118,7 @@ function LoginScreen() {
       await login(email, password);
       window.history.replaceState(null, "", "/dashboard");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Sign in failed");
+      setError(isApiError(err) ? err.message : err instanceof Error ? err.message : "Sign in failed");
     } finally {
       setBusy(false);
     }
@@ -108,13 +138,21 @@ function LoginScreen() {
         </div>
         <form className="compact-form" onSubmit={submit}>
           <Field label="Email">
-            <input value={email} autoComplete="email" onChange={(event) => setEmail(event.target.value)} />
+            <input
+              value={email}
+              autoComplete="email"
+              placeholder="admin@example.com"
+              required
+              onChange={(event) => setEmail(event.target.value)}
+            />
           </Field>
           <Field label="Password">
             <input
               value={password}
               type="password"
               autoComplete="current-password"
+              placeholder="Enter your password"
+              required
               onChange={(event) => setPassword(event.target.value)}
             />
           </Field>
@@ -123,6 +161,64 @@ function LoginScreen() {
             {busy ? "Signing in..." : "Sign in"}
           </button>
         </form>
+      </section>
+    </main>
+  );
+}
+
+function WebhookCopyPage() {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const webhookUrl = useMemo(() => new URLSearchParams(window.location.search).get("url") ?? "", []);
+  const [status, setStatus] = useState("");
+
+  async function copyWebhookUrl() {
+    if (!webhookUrl) return;
+    try {
+      await navigator.clipboard.writeText(webhookUrl);
+      setStatus("Webhook URL copied.");
+    } catch {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+      setStatus("Automatic copy failed. The URL is selected for manual copy.");
+    }
+  }
+
+  return (
+    <main className="public-copy-screen">
+      <section className="public-copy-panel">
+        <div className="login-panel-header">
+          <div className="app-mark">T</div>
+          <ThemeToggle />
+        </div>
+        <div>
+          <p className="eyebrow">Teams Messenger</p>
+          <h1>Copy webhook URL</h1>
+        </div>
+        <div className="copy-url-field">
+          <label htmlFor="webhook-copy-url">Webhook URL</label>
+          <input
+            id="webhook-copy-url"
+            ref={inputRef}
+            readOnly
+            value={webhookUrl}
+            placeholder="No webhook URL provided"
+            onFocus={(event) => event.currentTarget.select()}
+          />
+        </div>
+        <button
+          className="primary-button button-with-icon"
+          type="button"
+          disabled={!webhookUrl}
+          onClick={() => void copyWebhookUrl()}
+        >
+          <ClipboardCopy aria-hidden="true" className="button-icon" focusable="false" />
+          Copy URL
+        </button>
+        {status ? (
+          <p className="copy-status" role="status" aria-live="polite">
+            {status}
+          </p>
+        ) : null}
       </section>
     </main>
   );
@@ -187,7 +283,8 @@ function AppShell() {
         {route === "webhooks" ? <WebhooksPage /> : null}
         {route === "users" ? <UsersPage /> : null}
         {route === "settings" ? <SettingsPage /> : null}
-        {route === "logs" ? <LogsPage /> : null}
+        {route === "logs" ? <MessageLogsPage /> : null}
+        {route === "system-logs" ? <SystemLogsPage /> : null}
       </main>
     </div>
   );
@@ -196,13 +293,26 @@ function AppShell() {
 function DashboardPage() {
   const [routes, setRoutes] = useState<WebhookRouteOut[]>([]);
   const [references, setReferences] = useState<BotConversationReferenceOut[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  useEffect(() => {
-    void Promise.all([api.webhookRoutes(), api.botConversationReferences()]).then(([nextRoutes, nextReferences]) => {
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const [nextRoutes, nextReferences] = await Promise.all([api.webhookRoutes(), api.botConversationReferences()]);
       setRoutes(nextRoutes);
       setReferences(nextReferences);
-    });
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Dashboard data could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
 
   const counts = useMemo(
     () => ({
@@ -214,6 +324,7 @@ function DashboardPage() {
     [routes, references],
   );
   const recentRoutes = useMemo(() => routes.slice(0, 5), [routes]);
+  const metricValue = (value: number) => (loading ? "..." : error ? "-" : value);
 
   return (
     <>
@@ -225,19 +336,19 @@ function DashboardPage() {
       <div className="metric-grid">
         <Card className="metric-card">
           <span>Webhook routes</span>
-          <strong>{counts.routes}</strong>
+          <strong>{metricValue(counts.routes)}</strong>
         </Card>
         <Card className="metric-card">
           <span>Active routes</span>
-          <strong>{counts.active}</strong>
+          <strong>{metricValue(counts.active)}</strong>
         </Card>
         <Card className="metric-card">
           <span>Needs attention</span>
-          <strong>{counts.attention}</strong>
+          <strong>{metricValue(counts.attention)}</strong>
         </Card>
         <Card className="metric-card">
           <span>Known conversations</span>
-          <strong>{counts.conversations}</strong>
+          <strong>{metricValue(counts.conversations)}</strong>
         </Card>
       </div>
       <Card title="Recent webhook routes" description="Latest relay routes and their current delivery status.">
@@ -255,6 +366,10 @@ function DashboardPage() {
           ])}
           emptyTitle="No webhook routes"
           emptyBody="Create a webhook route to start relaying messages into Teams."
+          loading={loading}
+          loadingLabel="Loading recent webhook routes..."
+          error={error}
+          onRetry={() => void refresh()}
           rowKey={(index) => recentRoutes[index]?.id ?? index}
         />
       </Card>
@@ -268,30 +383,56 @@ function WebhooksPage() {
   const [editing, setEditing] = useState<WebhookRouteOut | null>(null);
   const [viewingLogs, setViewingLogs] = useState<WebhookRouteOut | null>(null);
   const [confirmingRegeneration, setConfirmingRegeneration] = useState<WebhookRouteOut | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState<WebhookRouteOut | null>(null);
   const [regeneratedUrl, setRegeneratedUrl] = useState<{ routeName: string; url: string } | null>(null);
   const [testResult, setTestResult] = useState<WebhookRouteOut | null>(null);
   const [viewingBotReferences, setViewingBotReferences] = useState(false);
   const [botDefaultServiceUrl, setBotDefaultServiceUrl] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [testingId, setTestingId] = useState("");
   const [regeneratingId, setRegeneratingId] = useState("");
+  const [deletingId, setDeletingId] = useState("");
+  const [refreshingNames, setRefreshingNames] = useState(false);
+  const [refreshingRouteNameId, setRefreshingRouteNameId] = useState("");
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
 
-  async function refresh() {
-    setRoutes(await api.webhookRoutes());
-  }
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      setRoutes(await api.webhookRoutes());
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Webhook routes could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     void refresh();
-  }, [csrfToken]);
+  }, [csrfToken, refresh]);
 
   useEffect(() => {
     void api.webhookRouteDefaults().then((defaults) => setBotDefaultServiceUrl(defaults.bot_default_service_url));
   }, []);
 
   async function deleteRoute(route: WebhookRouteOut) {
-    await api.deleteWebhookRoute(csrfToken, route.id);
-    notify({ tone: "info", title: "Webhook route deleted", description: route.name });
-    await refresh();
+    setDeletingId(route.id);
+    try {
+      await api.deleteWebhookRoute(csrfToken, route.id);
+      notify({ tone: "info", title: "Webhook route deleted", description: route.name });
+      await refresh();
+      setConfirmingDelete(null);
+    } catch (err) {
+      notify({
+        tone: "error",
+        title: "Delete failed",
+        description: isApiError(err) ? err.message : "The route could not be deleted.",
+      });
+    } finally {
+      setDeletingId("");
+    }
   }
 
   async function testRoute(route: WebhookRouteOut) {
@@ -341,6 +482,65 @@ function WebhooksPage() {
     }
   }
 
+  async function refreshGraphNames() {
+    setRefreshingNames(true);
+    try {
+      const result = await api.refreshWebhookRouteGraphNames(csrfToken);
+      if (!result.ok) {
+        notify({
+          tone: "error",
+          title: "Name refresh failed",
+          description: result.error || "Microsoft Graph could not resolve the names.",
+        });
+        return;
+      }
+      const changed = result.routes_updated + result.references_updated;
+      notify({
+        tone: "success",
+        title: "Names refreshed",
+        description: changed ? `${changed} records updated from Microsoft Graph.` : "All known names are already current.",
+      });
+      await refresh();
+    } catch (err) {
+      notify({
+        tone: "error",
+        title: "Name refresh failed",
+        description: isApiError(err) ? err.message : "Microsoft Graph could not resolve the names.",
+      });
+    } finally {
+      setRefreshingNames(false);
+    }
+  }
+
+  async function refreshRouteGraphNames(route: WebhookRouteOut) {
+    setRefreshingRouteNameId(route.id);
+    try {
+      const result = await api.refreshSingleWebhookRouteGraphNames(csrfToken, route.id);
+      if (!result.ok) {
+        notify({
+          tone: "error",
+          title: "Name refresh failed",
+          description: result.error || "Microsoft Graph could not resolve the route name.",
+        });
+        return;
+      }
+      notify({
+        tone: "success",
+        title: "Names refreshed",
+        description: result.routes_updated ? route.name : "This route already has the current Graph names.",
+      });
+      await refresh();
+    } catch (err) {
+      notify({
+        tone: "error",
+        title: "Name refresh failed",
+        description: isApiError(err) ? err.message : "Microsoft Graph could not resolve the route name.",
+      });
+    } finally {
+      setRefreshingRouteNameId("");
+    }
+  }
+
   return (
     <>
       <PageIntro
@@ -349,6 +549,19 @@ function WebhooksPage() {
         description="Map stable relay webhook URLs to Teams bot targets and validate delivery with deterministic test sends."
         actions={
           <div className="row-actions">
+            <button
+              className="secondary-button button-with-icon"
+              type="button"
+              disabled={refreshingNames}
+              onClick={() => void refreshGraphNames()}
+            >
+              <RefreshCw
+                aria-hidden="true"
+                className={classNames("button-icon", refreshingNames ? "button-icon--spin" : null)}
+                focusable="false"
+              />
+              Refresh names
+            </button>
             <button
               className="secondary-button button-with-icon"
               type="button"
@@ -370,17 +583,16 @@ function WebhooksPage() {
       />
       <Card>
         <DataTable
-          columns={["Route", "Source", "Target", "Active", "Last delivery", "Relay URL", ""]}
+          columns={["Route", "Target", "Health", "Relay URL", "Actions"]}
           rows={routes.map((route) => [
             <div className="stacked-cell">
               <strong>{route.name}</strong>
+              <span className="muted">{route.source_system || "No source system"}</span>
               {route.bot_target_source === "bot_command" ? <StatusBadge label="Bot registered" tone="success" /> : null}
               {route.bot_target_source === "conversation_reference" ? <StatusBadge label="Conversation selected" tone="success" /> : null}
             </div>,
-            <span className="muted">{route.source_system || "-"}</span>,
             <div className="stacked-cell">
               <strong>{route.target_name}</strong>
-              <span className="muted">Bot conversation</span>
               <GraphTargetSummary
                 kind={route.graph_target_kind}
                 targetName={route.target_name}
@@ -389,10 +601,19 @@ function WebhooksPage() {
                 channelId={route.graph_channel_id}
               />
             </div>,
-            route.is_active ? <StatusBadge label="Active" tone="success" /> : <StatusBadge label="Disabled" tone="warn" />,
-            <DeliveryStatusBadge route={route} />,
+            <div className="stacked-cell">
+              {route.is_active ? <StatusBadge label="Active" tone="success" /> : <StatusBadge label="Disabled" tone="warn" />}
+              <DeliveryStatusBadge route={route} />
+            </div>,
             route.webhook_url ? (
-              <IconButton label="Copy relay URL" icon={ClipboardCopy} onClick={() => void copyText(route.webhook_url ?? "", route.name)} />
+              <button
+                className="secondary-button secondary-button--small button-with-icon"
+                type="button"
+                onClick={() => void copyText(route.webhook_url ?? "", route.name)}
+              >
+                <ClipboardCopy aria-hidden="true" className="button-icon" focusable="false" />
+                Copy URL
+              </button>
             ) : (
               <span className="muted">Unavailable for old route</span>
             ),
@@ -406,17 +627,28 @@ function WebhooksPage() {
               <IconButton label="Edit route" icon={Pencil} onClick={() => setEditing(route)} />
               <IconButton label="View delivery logs" icon={FileClock} onClick={() => setViewingLogs(route)} />
               <IconButton
-                label={regeneratingId === route.id ? "Regenerating relay URL" : "Regenerate relay URL"}
+                label={refreshingRouteNameId === route.id ? "Refreshing Graph names" : "Refresh Graph names"}
                 icon={RefreshCw}
+                disabled={refreshingRouteNameId === route.id}
+                spinning={refreshingRouteNameId === route.id}
+                onClick={() => void refreshRouteGraphNames(route)}
+              />
+              <IconButton
+                label={regeneratingId === route.id ? "Regenerating relay URL" : "Regenerate relay URL"}
+                icon={RotateCcwKey}
                 disabled={regeneratingId === route.id}
                 spinning={regeneratingId === route.id}
                 onClick={() => setConfirmingRegeneration(route)}
               />
-              <IconButton label="Delete route" icon={Trash2} tone="danger" onClick={() => void deleteRoute(route)} />
+              <IconButton label="Delete route" icon={Trash2} tone="danger" onClick={() => setConfirmingDelete(route)} />
             </div>,
           ])}
           emptyTitle="No webhook routes"
           emptyBody="Create a route to receive webhook requests and forward them through the Teams bot adapter."
+          loading={loading}
+          loadingLabel="Loading webhook routes..."
+          error={error}
+          onRetry={() => void refresh()}
           rowKey={(index) => routes[index]?.id ?? index}
         />
       </Card>
@@ -440,6 +672,22 @@ function WebhooksPage() {
             setConfirmingRegeneration(null);
           }}
         />
+      ) : null}
+      {confirmingDelete ? (
+        <ConfirmModal
+          title="Delete webhook route"
+          description={`Delete ${confirmingDelete.name}?`}
+          confirmLabel="Delete route"
+          busyLabel="Deleting..."
+          busy={deletingId === confirmingDelete.id}
+          onClose={() => setConfirmingDelete(null)}
+          onConfirm={() => deleteRoute(confirmingDelete)}
+        >
+          <div className="warning-box">
+            <strong>This route will stop accepting webhook requests.</strong>
+            <p>Source systems using this relay URL will fail until they are pointed to another active route.</p>
+          </div>
+        </ConfirmModal>
       ) : null}
       {regeneratedUrl ? (
         <WebhookUrlRevealModal
@@ -676,6 +924,16 @@ function referenceTitle(reference: BotConversationReferenceOut): string {
   return reference.conversation_type === "personal" ? "Personal chat" : "Teams conversation";
 }
 
+function referenceSubtitle(reference: BotConversationReferenceOut): string {
+  const parts = [
+    reference.scope || reference.conversation_type || "conversation",
+    `seen ${formatRelativeTime(reference.last_seen_at)}`,
+    reference.channel_id ? `channel ${shortId(reference.channel_id)}` : "",
+    reference.graph_user_id || reference.user_id ? `user ${shortId(reference.graph_user_id || reference.user_id)}` : "",
+  ].filter(Boolean);
+  return parts.join(" · ");
+}
+
 function identityLabel(name: string, id: string): string {
   if (name && id) return `${name} (${shortId(id)})`;
   return name || id || "-";
@@ -824,31 +1082,49 @@ function WebhookRouteModal({
   const [references, setReferences] = useState<BotConversationReferenceOut[]>([]);
   const [referencesLoading, setReferencesLoading] = useState(false);
   const [referencesError, setReferencesError] = useState("");
-  const [showAdvancedTarget, setShowAdvancedTarget] = useState(Boolean(route));
+  const [conversationSearch, setConversationSearch] = useState("");
+  const [showAdvancedTarget, setShowAdvancedTarget] = useState(false);
   const [createdWebhookUrl, setCreatedWebhookUrl] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
+  const selectedReference = useMemo(
+    () => references.find((reference) => reference.conversation_id === botConversationId) ?? null,
+    [botConversationId, references],
+  );
+  const filteredReferences = useMemo(() => {
+    const query = conversationSearch.trim().toLowerCase();
+    if (!query) return references;
+    return references.filter((reference) =>
+      [
+        referenceTitle(reference),
+        referenceSubtitle(reference),
+        reference.conversation_id,
+        reference.service_url,
+        reference.team_name,
+        reference.channel_name,
+        reference.user_name,
+      ]
+        .filter(Boolean)
+        .some((value) => value.toLowerCase().includes(query)),
+    );
+  }, [conversationSearch, references]);
 
-  useEffect(() => {
-    let mounted = true;
+  const loadReferences = useCallback(async () => {
     setReferencesLoading(true);
     setReferencesError("");
-    api
-      .botConversationReferences()
-      .then((rows) => {
-        if (mounted) setReferences(rows);
-      })
-      .catch((err) => {
-        if (mounted) setReferencesError(isApiError(err) ? err.message : "Bot conversations could not be loaded.");
-      })
-      .finally(() => {
-        if (mounted) setReferencesLoading(false);
-      });
-    return () => {
-      mounted = false;
-    };
+    try {
+      setReferences(await api.botConversationReferences());
+    } catch (err) {
+      setReferencesError(isApiError(err) ? err.message : "Bot conversations could not be loaded.");
+    } finally {
+      setReferencesLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void loadReferences();
+  }, [loadReferences]);
 
   function applyReference(reference: BotConversationReferenceOut) {
     const kind = referenceGraphKind(reference);
@@ -922,42 +1198,69 @@ function WebhookRouteModal({
         </label>
         <div className="graph-target-picker">
           <div className="graph-target-picker-header">
-            <strong>Teams conversation</strong>
-            {botConversationId ? <StatusBadge label="Conversation selected" tone="success" /> : null}
+            <div>
+              <strong>Teams conversation</strong>
+              <p>Search known bot conversations and select one delivery target.</p>
+            </div>
           </div>
           {targetName ? (
-            <GraphTargetSummary
-              kind={graphTargetKind}
-              targetName={targetName}
-              teamName={graphTeamName}
-              teamId={graphTeamId}
-              channelId={graphChannelId}
-            />
+            <div className="selected-conversation-summary">
+              <div className="selected-conversation-copy">
+                <span>Current target</span>
+                <strong>{selectedReference ? referenceTitle(selectedReference) : targetName}</strong>
+              </div>
+              <StatusBadge label="Selected" tone="success" />
+            </div>
           ) : null}
           {referencesLoading ? <p className="muted">Loading known conversations...</p> : null}
-          {referencesError ? <p className="form-error">{referencesError}</p> : null}
+          {referencesError ? (
+            <div className="inline-error">
+              <p className="form-error">{referencesError}</p>
+              <button className="secondary-button secondary-button--small" type="button" onClick={() => void loadReferences()}>
+                Retry
+              </button>
+            </div>
+          ) : null}
           {!referencesLoading && !referencesError && references.length === 0 ? (
-            <p className="muted">No bot conversations captured yet. Send the bot a message or install it in a channel.</p>
+            <p className="muted">
+              No bot conversations captured yet. Send the bot a message, install it in a channel, or use the manual fallback fields below.
+            </p>
           ) : null}
           {references.length ? (
-            <div className="search-result-list">
-              {references.map((reference) => {
-                const selected = reference.conversation_id === botConversationId;
-                return (
-                  <button
-                    key={reference.id}
-                    type="button"
-                    className={selected ? "is-selected" : undefined}
-                    onClick={() => applyReference(reference)}
-                  >
-                    <strong>{referenceTitle(reference)}</strong>
-                    <span>
-                      {reference.scope} · {formatRelativeTime(reference.last_seen_at)}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+            <>
+              <Field label="Find conversation">
+                <input
+                  value={conversationSearch}
+                  placeholder="Search by team, channel, user or ID"
+                  onChange={(event) => setConversationSearch(event.target.value)}
+                />
+              </Field>
+              {filteredReferences.length ? (
+                <div className="compact-conversation-list">
+                  {filteredReferences.map((reference) => {
+                    const selected = reference.conversation_id === botConversationId;
+                    return (
+                      <button
+                        key={reference.id}
+                        type="button"
+                        className={selected ? "is-selected" : undefined}
+                        aria-pressed={selected}
+                        title={`${referenceTitle(reference)} - ${referenceSubtitle(reference)}`}
+                        onClick={() => applyReference(reference)}
+                      >
+                        <span className="compact-conversation-list-copy">
+                          <strong>{referenceTitle(reference)}</strong>
+                          <small>{referenceSubtitle(reference)}</small>
+                        </span>
+                        {selected ? <StatusBadge label="Selected" tone="success" /> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="muted">No conversations match this search.</p>
+              )}
+            </>
           ) : null}
         </div>
         <button
@@ -970,13 +1273,16 @@ function WebhookRouteModal({
         {showAdvancedTarget ? (
           <div className="graph-target-picker">
             <div className="graph-target-picker-header">
-              <strong>Advanced target fields</strong>
+              <div>
+                <strong>Manual delivery target</strong>
+                <p>Use this only when the bot conversation is known but has not been captured in the list above.</p>
+              </div>
               <StatusBadge label="Manual fallback" tone="warn" />
             </div>
-            <Field label="Teams target name">
+            <Field label="Teams target name" hint="A human-readable label shown in the route table.">
               <input value={targetName} required maxLength={200} onChange={(event) => setTargetName(event.target.value)} />
             </Field>
-            <Field label="Bot service URL">
+            <Field label="Bot service URL" hint="Use the service URL from a known Bot Framework conversation reference.">
               <input
                 value={botServiceUrl}
                 required
@@ -986,7 +1292,7 @@ function WebhookRouteModal({
                 }}
               />
             </Field>
-            <Field label="Bot conversation ID">
+            <Field label="Bot conversation ID" hint="Paste the full conversation ID. It is intentionally kept hidden in tables.">
               <textarea
                 value={botConversationId}
                 required
@@ -1043,28 +1349,23 @@ function WebhookDeliveryLogsModal({ route, onClose }: { route: WebhookRouteOut; 
     [events, selectedEventId],
   );
 
-  useEffect(() => {
-    let mounted = true;
+  const refresh = useCallback(async () => {
     setLoading(true);
     setError("");
-    api
-      .webhookRouteDeliveries(route.id, statusFilter === "all" ? undefined : statusFilter)
-      .then((rows) => {
-        if (mounted) {
-          setEvents(rows);
-          setSelectedEventId(rows[0]?.id ?? "");
-        }
-      })
-      .catch((err) => {
-        if (mounted) setError(isApiError(err) ? err.message : "Delivery logs could not be loaded.");
-      })
-      .finally(() => {
-        if (mounted) setLoading(false);
-      });
-    return () => {
-      mounted = false;
-    };
+    try {
+      const rows = await api.webhookRouteDeliveries(route.id, statusFilter === "all" ? undefined : statusFilter);
+      setEvents(rows);
+      setSelectedEventId(rows[0]?.id ?? "");
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Delivery logs could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
   }, [route.id, statusFilter]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
 
   return (
     <Modal
@@ -1086,29 +1387,29 @@ function WebhookDeliveryLogsModal({ route, onClose }: { route: WebhookRouteOut; 
           </button>
         ))}
       </div>
-      {loading ? <p className="muted">Loading delivery logs...</p> : null}
-      {error ? <p className="form-error">{error}</p> : null}
-      {!loading && !error ? (
-        <div className="delivery-log-layout">
-          <DataTable
-            columns={["Status", "Time", "Message", "Payload", "Mode", "Error"]}
-            rows={events.map((event) => [
-              <DeliveryEventStatusBadge status={event.status} />,
-              formatDateTime(event.created_at),
-              <span>{eventTitle(event)}</span>,
-              <span className="muted">{eventPayloadType(event)}</span>,
-              <span className="muted">{eventDeliveryMode(event)}</span>,
-              event.error ? <span className="form-error">{event.error}</span> : <span className="muted">-</span>,
-            ])}
-            emptyTitle="No delivery logs"
-            emptyBody="Test sends and incoming webhooks will appear here."
-            rowKey={(index) => events[index]?.id ?? index}
-            rowClassName={(index) => (events[index]?.id === selectedEvent?.id ? "is-selected" : null)}
-            onRowClick={(index) => setSelectedEventId(events[index]?.id ?? "")}
-          />
-          {selectedEvent ? <DeliveryEventDetails event={selectedEvent} /> : null}
-        </div>
-      ) : null}
+      <div className="delivery-log-layout">
+        <DataTable
+          columns={["Status", "Time", "Message", "Payload", "Mode", "Error"]}
+          rows={events.map((event) => [
+            <DeliveryEventStatusBadge status={event.status} />,
+            formatDateTime(event.created_at),
+            <span>{eventTitle(event)}</span>,
+            <span className="muted">{eventPayloadType(event)}</span>,
+            <span className="muted">{eventDeliveryMode(event)}</span>,
+            event.error ? <span className="form-error">{event.error}</span> : <span className="muted">-</span>,
+          ])}
+          emptyTitle="No delivery logs"
+          emptyBody="Test sends and incoming webhooks will appear here."
+          loading={loading}
+          loadingLabel="Loading delivery logs..."
+          error={error}
+          onRetry={() => void refresh()}
+          rowKey={(index) => events[index]?.id ?? index}
+          rowClassName={(index) => (events[index]?.id === selectedEvent?.id ? "is-selected" : null)}
+          onRowClick={(index) => setSelectedEventId(events[index]?.id ?? "")}
+        />
+        {!loading && !error && selectedEvent ? <DeliveryEventDetails event={selectedEvent} /> : null}
+      </div>
     </Modal>
   );
 }
@@ -1119,7 +1420,7 @@ function DeliveryEventStatusBadge({ status }: { status: WebhookDeliveryEventOut[
   return <StatusBadge label="Rejected" tone="warn" />;
 }
 
-function DeliveryEventDetails({ event }: { event: WebhookDeliveryEventOut }) {
+function DeliveryEventDetails({ event }: { event: WebhookDeliveryEventOut & Partial<WebhookDeliveryEventDetailOut> }) {
   const requestMetadata = event.request_metadata;
   const deliveryResult = event.delivery_result;
   return (
@@ -1133,6 +1434,12 @@ function DeliveryEventDetails({ event }: { event: WebhookDeliveryEventOut }) {
       </div>
 
       <dl className="definition-list delivery-response-list">
+        <dt>Route</dt>
+        <dd>{event.route_name || (event.route_id ? shortId(event.route_id) : "-")}</dd>
+        <dt>Target</dt>
+        <dd>{event.target_name || "-"}</dd>
+        <dt>Source</dt>
+        <dd>{event.source_system || stringField(event.normalized_message, "source")}</dd>
         <dt>Mode</dt>
         <dd>{stringField(deliveryResult, "mode")}</dd>
         <dt>Status code</dt>
@@ -1219,14 +1526,33 @@ function eventDeliveryMode(event: WebhookDeliveryEventOut): string {
   return typeof statusCode === "number" ? `${modeText} / ${statusCode}` : modeText;
 }
 
+function deliverySummaryMode(event: WebhookDeliveryEventSummaryOut): string {
+  const mode = event.delivery_mode || "-";
+  return typeof event.status_code === "number" ? `${mode} / ${event.status_code}` : mode;
+}
+
 function UsersPage() {
   const { session } = useAppContext();
   const [users, setUsers] = useState<UserOut[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
 
-  useEffect(() => {
-    void api.adminUsers(csrfToken).then(setUsers);
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      setUsers(await api.adminUsers(csrfToken));
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Users could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
   }, [csrfToken]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
 
   return (
     <>
@@ -1247,6 +1573,10 @@ function UsersPage() {
           ])}
           emptyTitle="No users"
           emptyBody="Users appear here after bootstrap or invitation flows."
+          loading={loading}
+          loadingLabel="Loading users..."
+          error={error}
+          onRetry={() => void refresh()}
           rowKey={(index) => users[index]?.id ?? index}
         />
       </Card>
@@ -1285,26 +1615,279 @@ function SettingsPage() {
   );
 }
 
-function LogsPage() {
-  const { session } = useAppContext();
-  const [logs, setLogs] = useState<AuditEventOut[]>([]);
-  const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
+function MessageLogsPage() {
+  const [deliveryPage, setDeliveryPage] = useState<WebhookDeliveryEventPageOut | null>(null);
+  const [routes, setRoutes] = useState<WebhookRouteOut[]>([]);
+  const [statusFilter, setStatusFilter] = useState<DeliveryStatusFilter>("all");
+  const [routeFilter, setRouteFilter] = useState("all");
+  const [searchText, setSearchText] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [selectedEventId, setSelectedEventId] = useState("");
+  const [selectedEvent, setSelectedEvent] = useState<WebhookDeliveryEventDetailOut | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState("");
+  const [error, setError] = useState("");
+  const pageSize = 25;
+  const deliveryEvents = deliveryPage?.items ?? [];
+  const total = deliveryPage?.total ?? 0;
+  const totalPages = deliveryPage?.total_pages ?? 0;
+  const firstVisible = total ? (page - 1) * pageSize + 1 : 0;
+  const lastVisible = Math.min(page * pageSize, total);
 
   useEffect(() => {
-    void api.adminLogs(csrfToken).then(setLogs);
-  }, [csrfToken]);
+    const timeoutId = window.setTimeout(() => {
+      setSearchQuery(searchText.trim());
+      setPage(1);
+    }, 300);
+    return () => window.clearTimeout(timeoutId);
+  }, [searchText]);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const [nextDeliveryPage, nextRoutes] = await Promise.all([
+        api.webhookDeliveryEvents({
+          page,
+          pageSize,
+          status: statusFilter === "all" ? undefined : statusFilter,
+          routeId: routeFilter === "all" ? undefined : routeFilter,
+          query: searchQuery,
+        }),
+        api.webhookRoutes(),
+      ]);
+      setDeliveryPage(nextDeliveryPage);
+      setRoutes(nextRoutes);
+      setSelectedEventId((current) =>
+        nextDeliveryPage.items.some((event) => event.id === current) ? current : nextDeliveryPage.items[0]?.id ?? "",
+      );
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Logs could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
+  }, [page, routeFilter, searchQuery, statusFilter]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    if (!selectedEventId) {
+      setSelectedEvent(null);
+      setDetailError("");
+      return;
+    }
+    let mounted = true;
+    setDetailLoading(true);
+    setDetailError("");
+    api
+      .webhookDeliveryEvent(selectedEventId)
+      .then((event) => {
+        if (mounted) setSelectedEvent(event);
+      })
+      .catch((err) => {
+        if (mounted) setDetailError(isApiError(err) ? err.message : "Delivery event details could not be loaded.");
+      })
+      .finally(() => {
+        if (mounted) setDetailLoading(false);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [selectedEventId]);
 
   return (
     <>
       <PageIntro
-        eyebrow="Audit"
-        title="Logs"
-        description="Track sign-ins, route changes and relay administration activity."
+        eyebrow="Operations"
+        title="Message logs"
+        description={`Inspect webhook message events and Teams delivery outcomes. Logs are kept for ${deliveryPage?.retention_days ?? 7} days by default.`}
       />
-      <Card>
+      <Card
+        title="Webhook message logs"
+        description="Recent incoming webhook messages, manual tests and Teams delivery outcomes."
+      >
+        <div className="message-log-filters">
+          <div className="segmented-control" aria-label="Filter webhook message logs by status">
+            {DELIVERY_STATUS_FILTERS.map((filter) => (
+              <button
+                key={filter.value}
+                type="button"
+                className={classNames("segmented-control-button", statusFilter === filter.value && "is-active")}
+                aria-pressed={statusFilter === filter.value}
+                onClick={() => {
+                  setStatusFilter(filter.value);
+                  setPage(1);
+                }}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
+          <label className="compact-filter">
+            <span>Route</span>
+            <select
+              value={routeFilter}
+              onChange={(event) => {
+                setRouteFilter(event.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="all">All routes</option>
+              {routes.map((route) => (
+                <option key={route.id} value={route.id}>
+                  {route.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="compact-filter compact-filter--search">
+            <span>Search</span>
+            <input
+              type="search"
+              value={searchText}
+              placeholder="Route, source, message, error, payload"
+              onChange={(event) => setSearchText(event.target.value)}
+            />
+          </label>
+        </div>
+        <div className="delivery-log-layout">
+          <div className="logs-list-panel">
+            <DataTable
+              columns={["Status", "Time", "Route", "Message", "Mode", "Error"]}
+              rows={deliveryEvents.map((event) => [
+                <DeliveryEventStatusBadge status={event.status} />,
+                formatDateTime(event.created_at),
+                <div className="stacked-cell">
+                  <strong>{event.route_name || "Deleted route"}</strong>
+                  <span className="muted">{event.source_system || event.target_name || "No route metadata"}</span>
+                </div>,
+                <div className="stacked-cell">
+                  <span>{event.title || "-"}</span>
+                  <span className="muted">{event.payload_type || "-"}</span>
+                </div>,
+                <span className="muted">{deliverySummaryMode(event)}</span>,
+                event.error ? <span className="form-error">{event.error}</span> : <span className="muted">-</span>,
+              ])}
+              emptyTitle="No webhook message logs"
+              emptyBody="Incoming webhooks and manual test sends will appear here."
+              loading={loading}
+              loadingLabel="Loading webhook message logs..."
+              error={error}
+              onRetry={() => void refresh()}
+              rowKey={(index) => deliveryEvents[index]?.id ?? index}
+              rowClassName={(index) => (deliveryEvents[index]?.id === selectedEventId ? "is-selected" : null)}
+              onRowClick={(index) => setSelectedEventId(deliveryEvents[index]?.id ?? "")}
+            />
+            {!loading && !error && totalPages > 1 ? (
+              <div className="pagination-bar">
+                <span>
+                  {firstVisible}-{lastVisible} of {total}
+                </span>
+                <div className="row-actions">
+                  <button className="secondary-button secondary-button--small button-with-icon" type="button" disabled={page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>
+                    <ChevronLeft aria-hidden="true" className="button-icon" focusable="false" />
+                    Previous
+                  </button>
+                  <button className="secondary-button secondary-button--small button-with-icon" type="button" disabled={page >= totalPages} onClick={() => setPage((current) => current + 1)}>
+                    Next
+                    <ChevronRight aria-hidden="true" className="button-icon" focusable="false" />
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+          {!loading && !error ? (
+            detailLoading ? (
+              <aside className="delivery-event-detail" role="status" aria-live="polite">
+                <div className="spinner spinner--small" aria-hidden="true" />
+                <p className="muted">Loading event details...</p>
+              </aside>
+            ) : detailError ? (
+              <aside className="delivery-event-detail" role="alert">
+                <p className="form-error">{detailError}</p>
+              </aside>
+            ) : selectedEvent ? (
+              <DeliveryEventDetails event={selectedEvent} />
+            ) : null
+          ) : null}
+        </div>
+      </Card>
+    </>
+  );
+}
+
+function SystemLogsPage() {
+  const { session, notify } = useAppContext();
+  const [auditLogs, setAuditLogs] = useState<AuditEventOut[]>([]);
+  const [systemLogs, setSystemLogs] = useState<SystemLogEventOut[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [cleanupBusy, setCleanupBusy] = useState(false);
+  const [error, setError] = useState("");
+  const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const [nextAuditLogs, nextSystemLogs] = await Promise.all([
+        api.adminLogs(csrfToken),
+        api.adminSystemLogs(csrfToken),
+      ]);
+      setAuditLogs(nextAuditLogs);
+      setSystemLogs(nextSystemLogs);
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "System logs could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
+  }, [csrfToken]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  async function cleanupLogs() {
+    setCleanupBusy(true);
+    try {
+      const result = await api.cleanupLogs(csrfToken);
+      notify({
+        tone: "info",
+        title: "Logs cleaned up",
+        description: `${result.deleted} entries removed. Retention is ${result.retention_days} days.`,
+      });
+      await refresh();
+    } catch (err) {
+      notify({
+        tone: "error",
+        title: "Cleanup failed",
+        description: isApiError(err) ? err.message : "Logs could not be cleaned up.",
+      });
+    } finally {
+      setCleanupBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <PageIntro
+        eyebrow="Administration"
+        title="System logs"
+        description="Review audit events and Teams bot activity separately from webhook message delivery."
+        actions={
+          <button className="secondary-button button-with-icon" type="button" disabled={cleanupBusy} onClick={() => void cleanupLogs()}>
+            <Trash2 aria-hidden="true" className="button-icon" focusable="false" />
+            {cleanupBusy ? "Cleaning..." : "Clean up"}
+          </button>
+        }
+      />
+      <Card title="Audit logs" description="Recent sign-ins, route changes and administration activity.">
         <DataTable
           columns={["Action", "Actor", "Metadata", "Time"]}
-          rows={logs.map((event) => [
+          rows={auditLogs.map((event) => [
             <strong>{event.action}</strong>,
             `${event.actor_type}${event.actor_id ? `:${event.actor_id.slice(0, 8)}` : ""}`,
             <span className="muted">{compactJson(event.metadata)}</span>,
@@ -1312,11 +1895,45 @@ function LogsPage() {
           ])}
           emptyTitle="No audit events"
           emptyBody="Log entries appear after sign-in or route administration changes."
-          rowKey={(index) => logs[index]?.id ?? index}
+          loading={loading}
+          loadingLabel="Loading audit logs..."
+          error={error}
+          onRetry={() => void refresh()}
+          rowKey={(index) => auditLogs[index]?.id ?? index}
+        />
+      </Card>
+      <Card title="System events" description="Teams bot activities captured by the relay service.">
+        <DataTable
+          columns={["Activity", "Scope", "Conversation", "User", "Time"]}
+          rows={systemLogs.map((event) => [
+            <strong>{event.activity_type || "activity"}</strong>,
+            <StatusBadge label={event.scope || "unknown"} tone={event.scope === "channel" ? "success" : "neutral"} />,
+            <div className="stacked-cell">
+              <span>{systemLogConversation(event)}</span>
+              <span className="muted">{event.conversation_type || shortId(event.conversation_id)}</span>
+            </div>,
+            <div className="stacked-cell">
+              <span>{event.user_name || "-"}</span>
+              <span className="muted">{event.graph_user_id ? shortId(event.graph_user_id) : "-"}</span>
+            </div>,
+            formatDateTime(event.created_at),
+          ])}
+          emptyTitle="No system events"
+          emptyBody="Bot activity events appear after Teams sends activities to the relay bot endpoint."
+          loading={loading}
+          loadingLabel="Loading system events..."
+          error={error}
+          onRetry={() => void refresh()}
+          rowKey={(index) => systemLogs[index]?.id ?? index}
         />
       </Card>
     </>
   );
+}
+
+function systemLogConversation(event: SystemLogEventOut): string {
+  if (event.team_name && event.channel_name) return `${event.team_name} / ${event.channel_name}`;
+  return event.channel_name || event.team_name || shortId(event.conversation_id) || "-";
 }
 
 function InnerApp() {
@@ -1327,6 +1944,8 @@ function InnerApp() {
 }
 
 export default function App() {
+  if (window.location.pathname === "/copy-webhook") return <WebhookCopyPage />;
+
   return (
     <AppProvider>
       <InnerApp />

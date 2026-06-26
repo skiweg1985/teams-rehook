@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -14,14 +14,22 @@ from app.models import User, WebhookDeliveryEvent, WebhookRoute
 from app.schemas import (
     WebhookDeliveryOut,
     WebhookDeliveryEventOut,
+    WebhookDeliveryEventDetailOut,
+    WebhookDeliveryEventPageOut,
+    WebhookDeliveryEventSummaryOut,
+    LogCleanupOut,
     WebhookRouteDefaultsOut,
     WebhookRouteCreate,
     WebhookRouteCreatedOut,
+    WebhookRouteNameRefreshOut,
     WebhookRouteOut,
     WebhookRouteTestRequest,
     WebhookRouteUpdate,
 )
 from app.security import dumps_json, issue_plain_secret, loads_json, lookup_secret_hash, utcnow
+from app.services.graph_name_resolution import refresh_graph_names, resolve_route_graph_names, try_resolve_route_graph_names
+from app.services.graph_targets import GraphConfigError, GraphRequestError
+from app.services.log_retention import cleanup_log_events
 from app.services.teams_bot import BotDeliveryError, send_bot_activity
 from app.services.webhook_payloads import NormalizedMessage, WebhookPayloadError, normalize_webhook_payload, payload_preview
 
@@ -77,6 +85,7 @@ def create_webhook_route(
         graph_channel_id=payload.graph_channel_id.strip(),
         bot_target_source=payload.bot_target_source.strip(),
     )
+    try_resolve_route_graph_names(route)
     _validate_target(route)
     db.add(route)
     try:
@@ -131,6 +140,7 @@ def update_webhook_route(
         route.graph_channel_id = payload.graph_channel_id.strip()
     if payload.bot_target_source is not None:
         route.bot_target_source = payload.bot_target_source.strip()
+    try_resolve_route_graph_names(route)
     _validate_target(route)
     record_audit(
         db,
@@ -147,6 +157,65 @@ def update_webhook_route(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Webhook route name already exists") from exc
     db.refresh(route)
     return _route_out(route)
+
+
+@router.post("/webhook-routes/refresh-graph-names", response_model=WebhookRouteNameRefreshOut, dependencies=[Depends(require_csrf)])
+def refresh_webhook_route_graph_names(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    result = refresh_graph_names(db, organization_id=admin.organization_id)
+    if result.error:
+        db.rollback()
+        return WebhookRouteNameRefreshOut(
+            ok=False,
+            routes_checked=result.routes_checked,
+            routes_updated=result.routes_updated,
+            references_checked=result.references_checked,
+            references_updated=result.references_updated,
+            error=result.error,
+        )
+    record_audit(
+        db,
+        action="webhook_route.graph_names_refreshed",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata={
+            "routes_checked": result.routes_checked,
+            "routes_updated": result.routes_updated,
+            "references_checked": result.references_checked,
+            "references_updated": result.references_updated,
+        },
+    )
+    db.commit()
+    return WebhookRouteNameRefreshOut(
+        routes_checked=result.routes_checked,
+        routes_updated=result.routes_updated,
+        references_checked=result.references_checked,
+        references_updated=result.references_updated,
+    )
+
+
+@router.post("/webhook-routes/{route_id}/refresh-graph-names", response_model=WebhookRouteNameRefreshOut, dependencies=[Depends(require_csrf)])
+def refresh_single_webhook_route_graph_names(
+    route_id: str,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    route = _get_org_route(db, admin.organization_id, route_id)
+    try:
+        updated = resolve_route_graph_names(route, force=True)
+    except (GraphConfigError, GraphRequestError) as exc:
+        db.rollback()
+        return WebhookRouteNameRefreshOut(ok=False, routes_checked=1, error=str(exc))
+    record_audit(
+        db,
+        action="webhook_route.graph_names_refreshed",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata={"webhook_route_id": route.id, "name": route.name, "routes_updated": 1 if updated else 0},
+    )
+    db.commit()
+    return WebhookRouteNameRefreshOut(routes_checked=1, routes_updated=1 if updated else 0)
 
 
 @router.delete("/webhook-routes/{route_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_csrf)])
@@ -207,6 +276,108 @@ def list_webhook_route_deliveries(
         query = query.where(WebhookDeliveryEvent.status == status_filter)
     events = db.scalars(query.order_by(WebhookDeliveryEvent.created_at.desc()).limit(limit)).all()
     return [_delivery_event_out(event) for event in events]
+
+
+@router.get("/webhook-delivery-events", response_model=WebhookDeliveryEventPageOut)
+def list_webhook_delivery_events(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
+    status_filter: DeliveryStatusFilter | None = Query(default=None, alias="status"),
+    route_id: str | None = Query(default=None),
+    q: str = Query(default="", max_length=200),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    cleanup_result = cleanup_log_events(db)
+    if not cleanup_result.skipped:
+        db.commit()
+
+    filters = [WebhookDeliveryEvent.organization_id == admin.organization_id]
+    if route_id:
+        route = _get_org_route(db, admin.organization_id, route_id)
+        filters.append(WebhookDeliveryEvent.route_id == route.id)
+    if status_filter:
+        filters.append(WebhookDeliveryEvent.status == status_filter)
+    search = q.strip()
+    if search:
+        pattern = f"%{search}%"
+        filters.append(
+            or_(
+                WebhookDeliveryEvent.error.ilike(pattern),
+                WebhookDeliveryEvent.request_metadata_json.ilike(pattern),
+                WebhookDeliveryEvent.normalized_message_json.ilike(pattern),
+                WebhookDeliveryEvent.delivery_result_json.ilike(pattern),
+                WebhookRoute.name.ilike(pattern),
+                WebhookRoute.source_system.ilike(pattern),
+                WebhookRoute.target_name.ilike(pattern),
+            )
+        )
+
+    total = (
+        db.scalar(
+            select(func.count())
+            .select_from(WebhookDeliveryEvent)
+            .outerjoin(WebhookRoute, WebhookDeliveryEvent.route_id == WebhookRoute.id)
+            .where(*filters)
+        )
+        or 0
+    )
+    offset = (page - 1) * page_size
+    rows = db.execute(
+        select(WebhookDeliveryEvent, WebhookRoute)
+        .outerjoin(WebhookRoute, WebhookDeliveryEvent.route_id == WebhookRoute.id)
+        .where(*filters)
+        .order_by(WebhookDeliveryEvent.created_at.desc())
+        .offset(offset)
+        .limit(page_size)
+    ).all()
+    return WebhookDeliveryEventPageOut(
+        items=[_delivery_event_summary_out(event, route) for event, route in rows],
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=(total + page_size - 1) // page_size,
+        retention_days=cleanup_result.retention_days,
+    )
+
+
+@router.get("/webhook-delivery-events/{event_id}", response_model=WebhookDeliveryEventDetailOut)
+def get_webhook_delivery_event(
+    event_id: str,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    row = db.execute(
+        select(WebhookDeliveryEvent, WebhookRoute)
+        .outerjoin(WebhookRoute, WebhookDeliveryEvent.route_id == WebhookRoute.id)
+        .where(WebhookDeliveryEvent.id == event_id, WebhookDeliveryEvent.organization_id == admin.organization_id)
+    ).one_or_none()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Delivery event not found")
+    event, route = row
+    return _delivery_event_detail_out(event, route)
+
+
+@router.post(
+    "/webhook-delivery-events/cleanup",
+    response_model=LogCleanupOut,
+    dependencies=[Depends(require_csrf)],
+)
+def cleanup_log_event_retention(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    _ = admin
+    cleanup_result = cleanup_log_events(db, force=True)
+    db.commit()
+    return LogCleanupOut(
+        deleted=cleanup_result.deleted,
+        deleted_webhook_delivery_events=cleanup_result.deleted_webhook_delivery_events,
+        deleted_audit_events=cleanup_result.deleted_audit_events,
+        deleted_bot_activity_events=cleanup_result.deleted_bot_activity_events,
+        retention_days=cleanup_result.retention_days,
+        cutoff=cleanup_result.cutoff,
+    )
 
 
 @router.post("/webhook-routes/{route_id}/test", response_model=WebhookDeliveryOut, dependencies=[Depends(require_csrf)])
@@ -400,9 +571,13 @@ def _record_event(
 def _request_metadata(request: Request, body: bytes) -> dict:
     client_host = request.client.host if request.client else ""
     return {
+        "trigger": "external_webhook",
+        "method": request.method,
+        "path": request.url.path,
         "content_type": request.headers.get("content-type", ""),
         "content_length": request.headers.get("content-length", str(len(body))),
         "client_host": client_host,
+        "user_agent": request.headers.get("user-agent", ""),
         "payload_preview": payload_preview(body),
     }
 
@@ -472,6 +647,45 @@ def _delivery_event_out(event: WebhookDeliveryEvent) -> WebhookDeliveryEventOut:
         error=event.error,
         created_at=event.created_at,
     )
+
+
+def _delivery_event_summary_out(event: WebhookDeliveryEvent, route: WebhookRoute | None) -> WebhookDeliveryEventSummaryOut:
+    normalized_message = loads_json(event.normalized_message_json, {})
+    delivery_result = loads_json(event.delivery_result_json, {})
+    return WebhookDeliveryEventSummaryOut(
+        id=event.id,
+        route_id=event.route_id,
+        route_name=route.name if route else "",
+        source_system=route.source_system if route else _string_value(normalized_message, "source"),
+        target_name=route.target_name if route else "",
+        status=event.status,
+        title=_string_value(normalized_message, "title"),
+        payload_type=_string_value(normalized_message, "raw_type"),
+        delivery_mode=_string_value(delivery_result, "mode"),
+        status_code=_int_value(delivery_result, "status_code"),
+        error=event.error,
+        created_at=event.created_at,
+    )
+
+
+def _delivery_event_detail_out(event: WebhookDeliveryEvent, route: WebhookRoute | None) -> WebhookDeliveryEventDetailOut:
+    base = _delivery_event_out(event)
+    return WebhookDeliveryEventDetailOut(
+        **base.model_dump(),
+        route_name=route.name if route else "",
+        source_system=route.source_system if route else "",
+        target_name=route.target_name if route else "",
+    )
+
+
+def _string_value(record: dict, key: str) -> str:
+    value = record.get(key)
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _int_value(record: dict, key: str) -> int | None:
+    value = record.get(key)
+    return value if isinstance(value, int) else None
 
 
 def _build_webhook_url(route_token: str) -> str:

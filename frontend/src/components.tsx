@@ -69,6 +69,10 @@ export function DataTable({
   rows,
   emptyTitle,
   emptyBody,
+  loading = false,
+  loadingLabel = "Loading...",
+  error = "",
+  onRetry,
   rowKey,
   rowClassName,
   onRowClick,
@@ -77,10 +81,35 @@ export function DataTable({
   rows: ReactNode[][];
   emptyTitle: string;
   emptyBody: string;
+  loading?: boolean;
+  loadingLabel?: string;
+  error?: string;
+  onRetry?: () => void;
   rowKey?: (rowIndex: number) => Key;
   rowClassName?: (rowIndex: number) => string | false | null | undefined;
   onRowClick?: (rowIndex: number) => void;
 }) {
+  if (loading) {
+    return (
+      <div className="table-state" role="status" aria-live="polite">
+        <div className="spinner spinner--small" aria-hidden="true" />
+        <p>{loadingLabel}</p>
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="table-state table-state--error" role="alert">
+        <h3>Could not load data</h3>
+        <p>{error}</p>
+        {onRetry ? (
+          <button className="secondary-button secondary-button--small" type="button" onClick={onRetry}>
+            Retry
+          </button>
+        ) : null}
+      </div>
+    );
+  }
   if (!rows.length) return <EmptyState title={emptyTitle} body={emptyBody} />;
   return (
     <div className="table-wrap">
@@ -202,6 +231,49 @@ export function Modal({
         </div>
       </div>
     </div>
+  );
+}
+
+export function ConfirmModal({
+  title,
+  description,
+  confirmLabel,
+  busyLabel = "Working...",
+  cancelLabel = "Cancel",
+  tone = "danger",
+  busy = false,
+  onClose,
+  onConfirm,
+  children,
+}: {
+  title: string;
+  description?: string;
+  confirmLabel: string;
+  busyLabel?: string;
+  cancelLabel?: string;
+  tone?: "danger" | "primary";
+  busy?: boolean;
+  onClose: () => void;
+  onConfirm: () => void | Promise<void>;
+  children?: ReactNode;
+}) {
+  return (
+    <Modal title={title} description={description} onClose={onClose}>
+      {children}
+      <div className="form-actions">
+        <button className="secondary-button" type="button" onClick={onClose} disabled={busy}>
+          {cancelLabel}
+        </button>
+        <button
+          className={tone === "danger" ? "danger-button" : "primary-button"}
+          type="button"
+          onClick={() => void onConfirm()}
+          disabled={busy}
+        >
+          {busy ? busyLabel : confirmLabel}
+        </button>
+      </div>
+    </Modal>
   );
 }
 

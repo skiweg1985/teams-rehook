@@ -11,6 +11,7 @@ from app.core.config import get_settings
 from app.database import Base, engine
 from app.models import BotActivityEvent, BotConversationReference, Organization, User, WebhookRoute
 from app.security import hash_secret
+from app.services.log_retention import cleanup_log_events
 
 
 def init_db() -> None:
@@ -20,6 +21,7 @@ def init_db() -> None:
     with Session(engine) as db:
         _backfill_bot_reference_metadata(db)
         _backfill_webhook_route_targets(db)
+        cleanup_log_events(db, force=True)
 
         org = db.scalar(select(Organization).where(Organization.slug == settings.default_org_slug))
         if not org:
