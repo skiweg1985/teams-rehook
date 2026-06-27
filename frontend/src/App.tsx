@@ -1,11 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   AlertTriangle,
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ClipboardCopy,
+  Eye,
+  EyeOff,
   FileClock,
+  Info,
   MessageSquareText,
   MessagesSquare,
   MoreHorizontal,
@@ -16,6 +20,7 @@ import {
   Radio,
   RefreshCw,
   RotateCcwKey,
+  Search,
   Send,
   Trash2,
   Webhook,
@@ -1315,6 +1320,119 @@ function routeDeliveryFeatureEnabled(route: WebhookRouteOut, policy: DeliveryFea
   return false;
 }
 
+type WebhookRouteView = {
+  route: WebhookRouteOut;
+  tone: StatusTone;
+  statusLabel: string;
+  summary: string;
+  targetSummary: string;
+  deliveryLabel: string;
+  lastActivityLabel: string;
+  topIssue: string;
+  topIssueDetail: string;
+  featureEnabled: boolean;
+  facts: StatusFact[];
+  technicalRows: StatusTechnicalRow[];
+};
+
+function buildWebhookRouteView(route: WebhookRouteOut, policy: DeliveryFeaturePolicy): WebhookRouteView {
+  const featureEnabled = routeDeliveryFeatureEnabled(route, policy);
+  const deliveryLabel = route.last_delivery_status ? capitalize(route.last_delivery_status) : "Not tested";
+  const lastActivityLabel = route.last_delivery_at ? formatRelativeTime(route.last_delivery_at) : "No delivery yet";
+  const tone = webhookRouteTone(route, featureEnabled);
+  const statusLabel = webhookRouteStatusLabel(route, featureEnabled);
+  const topIssue = webhookRouteTopIssue(route, featureEnabled);
+  const targetSummary = webhookTargetSummary(route);
+
+  return {
+    route,
+    tone,
+    statusLabel,
+    summary: route.is_active
+      ? featureEnabled
+        ? `Accepts relay requests for ${route.target_name || "the selected Teams target"}.`
+        : "Route is active, but its delivery feature is disabled."
+      : "Route is disabled and rejects incoming webhook requests.",
+    targetSummary,
+    deliveryLabel,
+    lastActivityLabel,
+    topIssue,
+    topIssueDetail: webhookRouteIssueDetail(route, featureEnabled),
+    featureEnabled,
+    facts: [
+      { label: "State", value: route.is_active ? "Active" : "Disabled", tone: route.is_active ? "success" : "warn" },
+      { label: "Backend", value: deliveryBackendLabel(route.delivery_backend) },
+      { label: "Delivery", value: deliveryLabel, tone: webhookDeliveryTone(route) },
+      { label: "Last activity", value: lastActivityLabel },
+    ],
+    technicalRows: [
+      { label: "Route ID", value: route.id },
+      { label: "Webhook URL", value: route.webhook_url ? <code>{route.webhook_url}</code> : "-" },
+      { label: "Target type", value: route.target_type },
+      { label: "Bot conversation", value: route.bot_conversation_id ? <code>{shortId(route.bot_conversation_id)}</code> : "-" },
+      { label: "Bot service URL", value: route.bot_service_url || "-" },
+      { label: "Graph target kind", value: route.graph_target_kind || "-" },
+      { label: "Graph target ID", value: route.graph_target_id ? <code>{shortId(route.graph_target_id)}</code> : "-" },
+      { label: "Team ID", value: route.graph_team_id ? <code>{shortId(route.graph_team_id)}</code> : "-" },
+      { label: "Channel ID", value: route.graph_channel_id ? <code>{shortId(route.graph_channel_id)}</code> : "-" },
+      { label: "Created", value: route.created_at ? formatDateTime(route.created_at) : "-" },
+      { label: "Updated", value: route.updated_at ? formatDateTime(route.updated_at) : "-" },
+    ],
+  };
+}
+
+function webhookRouteTone(route: WebhookRouteOut, featureEnabled: boolean): StatusTone {
+  if (!route.is_active || !featureEnabled) return "warn";
+  if (route.last_delivery_status === "failed" || route.last_delivery_status === "rejected") return "danger";
+  if (route.last_delivery_status === "delivered") return "success";
+  return "warn";
+}
+
+function webhookDeliveryTone(route: WebhookRouteOut): StatusTone {
+  if (route.last_delivery_status === "delivered") return "success";
+  if (route.last_delivery_status === "failed" || route.last_delivery_status === "rejected") return "danger";
+  return "warn";
+}
+
+function webhookRouteStatusLabel(route: WebhookRouteOut, featureEnabled: boolean): string {
+  if (!route.is_active) return "Disabled";
+  if (!featureEnabled) return "Feature disabled";
+  if (route.last_delivery_status === "failed") return "Delivery failed";
+  if (route.last_delivery_status === "rejected") return "Rejected";
+  if (route.last_delivery_status === "delivered") return "Ready";
+  return "Untested";
+}
+
+function webhookRouteTopIssue(route: WebhookRouteOut, featureEnabled: boolean): string {
+  if (!route.is_active) return "Route disabled";
+  if (!featureEnabled) return "Delivery feature disabled";
+  if (route.last_delivery_status === "failed") return "Last delivery failed";
+  if (route.last_delivery_status === "rejected") return "Last request rejected";
+  if (!route.last_delivery_status) return "Send a test";
+  return "No active issue";
+}
+
+function webhookRouteIssueDetail(route: WebhookRouteOut, featureEnabled: boolean): string {
+  if (!route.is_active) return "Incoming webhook requests are rejected until this route is activated.";
+  if (!featureEnabled) return "The selected backend depends on a disabled readiness feature.";
+  if (route.last_delivery_status === "failed") return "Open delivery logs or send another test after correcting the target.";
+  if (route.last_delivery_status === "rejected") return "The relay rejected the latest request before delivery completed.";
+  if (!route.last_delivery_status) return "Run a deterministic test before sharing this relay URL.";
+  return "The latest delivery check completed successfully.";
+}
+
+function webhookTargetSummary(route: WebhookRouteOut): string {
+  if (route.delivery_backend === "graph") {
+    const type = route.graph_target_kind ? capitalize(route.graph_target_kind) : "Graph target";
+    return `${type} · ${route.target_name || route.graph_target_id || "No target name"}`;
+  }
+  return route.target_name || "Bot conversation";
+}
+
+function capitalize(value: string): string {
+  return value ? value.charAt(0).toUpperCase() + value.slice(1) : value;
+}
+
 function WebhooksPage() {
   const { session, notify } = useAppContext();
   const [routes, setRoutes] = useState<WebhookRouteOut[]>([]);
@@ -1332,8 +1450,8 @@ function WebhooksPage() {
   const [regeneratingId, setRegeneratingId] = useState("");
   const [deletingId, setDeletingId] = useState("");
   const [togglingId, setTogglingId] = useState("");
-  const [refreshingNames, setRefreshingNames] = useState(false);
   const [refreshingRouteNameId, setRefreshingRouteNameId] = useState("");
+  const [selectedRouteId, setSelectedRouteId] = useState("");
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
 
   const refresh = useCallback(async () => {
@@ -1443,36 +1561,6 @@ function WebhooksPage() {
     }
   }
 
-  async function refreshGraphNames() {
-    setRefreshingNames(true);
-    try {
-      const result = await api.refreshWebhookRouteGraphNames(csrfToken);
-      if (!result.ok) {
-        notify({
-          tone: "error",
-          title: "Name refresh failed",
-          description: result.error || "Microsoft Graph could not resolve the names.",
-        });
-        return;
-      }
-      const changed = result.routes_updated + result.references_updated;
-      notify({
-        tone: "success",
-        title: "Names refreshed",
-        description: changed ? `${changed} records updated from Microsoft Graph.` : "All known names are already current.",
-      });
-      await refresh();
-    } catch (err) {
-      notify({
-        tone: "error",
-        title: "Name refresh failed",
-        description: isApiError(err) ? err.message : "Microsoft Graph could not resolve the names.",
-      });
-    } finally {
-      setRefreshingNames(false);
-    }
-  }
-
   async function refreshRouteGraphNames(route: WebhookRouteOut) {
     setRefreshingRouteNameId(route.id);
     try {
@@ -1502,28 +1590,27 @@ function WebhooksPage() {
     }
   }
 
+  const routeViews = routes.map((route) => buildWebhookRouteView(route, featurePolicy));
+  const defaultSelectedRouteId =
+    routeViews.find((view) => view.tone === "danger")?.route.id ??
+    routeViews.find((view) => view.tone === "warn")?.route.id ??
+    routeViews[0]?.route.id ??
+    "";
+  const selectedRouteView =
+    routeViews.find((view) => view.route.id === selectedRouteId) ??
+    routeViews.find((view) => view.route.id === defaultSelectedRouteId) ??
+    routeViews[0] ??
+    null;
+  const selectedRouteIdEffective = selectedRouteView?.route.id ?? defaultSelectedRouteId;
+
   return (
     <>
       <PageIntro
         eyebrow="Teams Rehook"
         title="Webhook routes"
-        description="Map stable relay webhook URLs to Teams bot targets and validate delivery with deterministic test sends."
+        description="Operate relay endpoints, validate delivery and inspect route health without digging through raw diagnostics."
         actions={
           <div className="row-actions">
-            <button
-              className="secondary-button button-with-icon"
-              type="button"
-              disabled={refreshingNames || !featurePolicy.graphLookupEnabled}
-              onClick={() => void refreshGraphNames()}
-              title={featurePolicy.graphLookupEnabled ? "Refresh Graph names" : "Graph lookup is disabled"}
-            >
-              <RefreshCw
-                aria-hidden="true"
-                className={classNames("button-icon", refreshingNames ? "button-icon--spin" : null)}
-                focusable="false"
-              />
-              Refresh names
-            </button>
             <button
               className="secondary-button button-with-icon"
               type="button"
@@ -1543,103 +1630,38 @@ function WebhooksPage() {
           </div>
         }
       />
-      <Card>
-        <DataTable
-          className="data-table--webhooks"
-          columns={["Route", "Target", "Health", "Relay URL", "Actions"]}
-          rows={routes.map((route) => [
-            <div className="stacked-cell">
-              <button type="button" className="cell-name-button" onClick={() => setEditing(route)}>
-                {route.name}
-              </button>
-            </div>,
-            <div className="stacked-cell">
-              <strong>{route.target_name}</strong>
-              <small>{deliveryBackendLabel(route.delivery_backend)}</small>
-              <GraphTargetSummary
-                kind={route.graph_target_kind}
-                targetName={route.target_name}
-                targetId={route.graph_target_id}
-                teamName={route.graph_team_name}
-                teamId={route.graph_team_id}
-                channelId={route.graph_channel_id}
-                compact
-              />
-            </div>,
-            <div className="stacked-cell">
-              {route.is_active ? <StatusBadge label="Active" tone="success" /> : <StatusBadge label="Disabled" tone="warn" />}
-              {!routeDeliveryFeatureEnabled(route, featurePolicy) ? <StatusBadge label="Feature disabled" tone="warn" /> : null}
-              <DeliveryStatusBadge route={route} />
-            </div>,
-            route.webhook_url ? (
-              <button
-                className="secondary-button secondary-button--small button-with-icon"
-                type="button"
-                onClick={() => void copyText(route.webhook_url ?? "", route.name)}
-              >
-                <ClipboardCopy aria-hidden="true" className="button-icon" focusable="false" />
-                Copy URL
-              </button>
-            ) : (
-              <span className="muted">Unavailable for old route</span>
-            ),
-            <div className="row-actions">
-              <IconButton
-                label={testingId === route.id ? "Sending test" : "Send test"}
-                icon={Send}
-                disabled={testingId === route.id || !routeDeliveryFeatureEnabled(route, featurePolicy)}
-                onClick={() => void testRoute(route)}
-              />
-              <IconButton label="Edit route" icon={Pencil} onClick={() => setEditing(route)} />
-              <RowActionMenu
-                label="More actions"
-                items={[
-                  {
-                    label: route.is_active ? "Deactivate route" : "Activate route",
-                    icon: route.is_active ? PowerOff : Power,
-                    disabled: togglingId === route.id,
-                    spinning: togglingId === route.id,
-                    onClick: () => void toggleRouteActive(route),
-                  },
-                  {
-                    label: "View delivery logs",
-                    icon: FileClock,
-                    onClick: () => setViewingLogs(route),
-                  },
-                  {
-                    label: refreshingRouteNameId === route.id ? "Refreshing Graph names" : "Refresh Graph names",
-                    icon: RefreshCw,
-                    disabled: refreshingRouteNameId === route.id || !featurePolicy.graphLookupEnabled,
-                    spinning: refreshingRouteNameId === route.id,
-                    onClick: () => void refreshRouteGraphNames(route),
-                  },
-                  {
-                    label: regeneratingId === route.id ? "Regenerating relay URL" : "Regenerate relay URL",
-                    icon: RotateCcwKey,
-                    disabled: regeneratingId === route.id,
-                    spinning: regeneratingId === route.id,
-                    onClick: () => setConfirmingRegeneration(route),
-                  },
-                  {
-                    label: "Delete route",
-                    icon: Trash2,
-                    tone: "danger",
-                    separated: true,
-                    onClick: () => setConfirmingDelete(route),
-                  },
-                ]}
-              />
-            </div>,
-          ])}
-          emptyTitle="No webhook routes"
-          emptyBody="Add the bot to a Teams chat or channel, open Known conversations to confirm capture, create a route, send a test, then copy the relay URL into the external system."
-          loading={loading}
-          loadingLabel="Loading webhook routes..."
+      <div className="webhooks-command-center">
+        <WebhookRouteSummary routeViews={routeViews} loading={loading} />
+        <WebhookRouteConsole
           error={error}
+          loading={loading}
+          onCopyRoute={(route) => void copyText(route.webhook_url ?? "", route.name)}
+          onCreateRoute={() => setEditing(emptyWebhookRoute(botDefaultServiceUrl))}
+          onEditRoute={setEditing}
           onRetry={() => void refresh()}
-          rowKey={(index) => routes[index]?.id ?? index}
+          onSelectRoute={setSelectedRouteId}
+          onTestRoute={(route) => void testRoute(route)}
+          routeViews={routeViews}
+          selectedRouteId={selectedRouteIdEffective}
+          testingId={testingId}
         />
-      </Card>
+        <WebhookRouteInspector
+          featurePolicy={featurePolicy}
+          onCopyRoute={(route) => void copyText(route.webhook_url ?? "", route.name)}
+          onDeleteRoute={setConfirmingDelete}
+          onEditRoute={setEditing}
+          onRefreshNames={(route) => void refreshRouteGraphNames(route)}
+          onRegenerateRoute={setConfirmingRegeneration}
+          onTestRoute={(route) => void testRoute(route)}
+          onToggleRoute={(route) => void toggleRouteActive(route)}
+          onViewLogs={setViewingLogs}
+          refreshingRouteNameId={refreshingRouteNameId}
+          regeneratingId={regeneratingId}
+          routeView={selectedRouteView}
+          testingId={testingId}
+          togglingId={togglingId}
+        />
+      </div>
       {editing ? (
         <WebhookRouteModal
           route={editing.id ? editing : null}
@@ -1697,6 +1719,363 @@ function WebhooksPage() {
         />
       ) : null}
     </>
+  );
+}
+
+function WebhookRouteSummary({ loading, routeViews }: { loading: boolean; routeViews: WebhookRouteView[] }) {
+  const activeCount = routeViews.filter((view) => view.route.is_active).length;
+  const attentionCount = routeViews.filter((view) => view.tone === "danger" || view.tone === "warn").length;
+  const graphCount = routeViews.filter((view) => view.route.delivery_backend === "graph").length;
+  const botCount = routeViews.filter((view) => view.route.delivery_backend === "bot_framework").length;
+  const deliveredCount = routeViews.filter((view) => view.route.last_delivery_status === "delivered").length;
+
+  return (
+    <section className="webhook-route-summary" aria-label="Webhook route summary">
+      <StatusOverviewMetric
+        label="Routes"
+        value={loading ? "..." : String(routeViews.length)}
+        detail={routeViews.length === 1 ? "1 relay endpoint." : `${routeViews.length} relay endpoints.`}
+        tone="neutral"
+      />
+      <StatusOverviewMetric
+        label="Active"
+        value={loading ? "..." : `${activeCount}/${routeViews.length || 0}`}
+        detail={activeCount === routeViews.length && routeViews.length ? "All routes accept traffic." : "Some routes are paused."}
+        tone={routeViews.length && activeCount === routeViews.length ? "success" : activeCount ? "warn" : "neutral"}
+      />
+      <StatusOverviewMetric
+        label="Attention"
+        value={loading ? "..." : attentionCount ? String(attentionCount) : "None"}
+        detail={attentionCount ? "Review the selected route." : "No open route issue."}
+        tone={attentionCount ? "warn" : "success"}
+      />
+      <StatusOverviewMetric
+        label="Delivery"
+        value={loading ? "..." : `${deliveredCount}/${routeViews.length || 0} tested`}
+        detail={`${graphCount} Graph / ${botCount} Bot Framework`}
+        tone={deliveredCount === routeViews.length && routeViews.length ? "success" : deliveredCount ? "warn" : "neutral"}
+      />
+    </section>
+  );
+}
+
+function WebhookRouteConsole({
+  error,
+  loading,
+  onCopyRoute,
+  onCreateRoute,
+  onEditRoute,
+  onRetry,
+  onSelectRoute,
+  onTestRoute,
+  routeViews,
+  selectedRouteId,
+  testingId,
+}: {
+  error: string;
+  loading: boolean;
+  onCopyRoute: (route: WebhookRouteOut) => void;
+  onCreateRoute: () => void;
+  onEditRoute: (route: WebhookRouteOut) => void;
+  onRetry: () => void;
+  onSelectRoute: (routeId: string) => void;
+  onTestRoute: (route: WebhookRouteOut) => void;
+  routeViews: WebhookRouteView[];
+  selectedRouteId: string;
+  testingId: string;
+}) {
+  if (loading) {
+    return (
+      <Card>
+        <div className="table-state" role="status" aria-live="polite">
+          <div className="spinner spinner--small" aria-hidden="true" />
+          <p>Loading webhook routes...</p>
+        </div>
+      </Card>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card>
+        <div className="table-state table-state--error" role="alert">
+          <h3>Could not load webhook routes</h3>
+          <p>{error}</p>
+          <button className="secondary-button secondary-button--small" type="button" onClick={onRetry}>
+            Retry
+          </button>
+        </div>
+      </Card>
+    );
+  }
+
+  if (!routeViews.length) {
+    return (
+      <Card>
+        <EmptyState
+          title="No webhook routes"
+          body="Add the bot to a Teams chat or channel, create a route from a known conversation, then send a test before sharing the relay URL."
+        />
+        <div className="form-actions form-actions--start">
+          <button className="primary-button button-with-icon" type="button" onClick={onCreateRoute}>
+            <Plus aria-hidden="true" className="button-icon" focusable="false" />
+            New route
+          </button>
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <section className="webhook-route-console" aria-label="Relay route console">
+      <div className="webhook-route-console-header">
+        <div>
+          <p className="integration-kicker">Relay routes</p>
+          <h2>Route health</h2>
+        </div>
+        <span>{routeViews.length} routes</span>
+      </div>
+      <div className="webhook-route-list" role="list">
+        {routeViews.map((view) => (
+          <WebhookRouteRow
+            key={view.route.id}
+            onCopyRoute={onCopyRoute}
+            onEditRoute={onEditRoute}
+            onSelectRoute={onSelectRoute}
+            onTestRoute={onTestRoute}
+            selected={selectedRouteId === view.route.id}
+            testing={testingId === view.route.id}
+            view={view}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function WebhookRouteRow({
+  onCopyRoute,
+  onEditRoute,
+  onSelectRoute,
+  onTestRoute,
+  selected,
+  testing,
+  view,
+}: {
+  onCopyRoute: (route: WebhookRouteOut) => void;
+  onEditRoute: (route: WebhookRouteOut) => void;
+  onSelectRoute: (routeId: string) => void;
+  onTestRoute: (route: WebhookRouteOut) => void;
+  selected: boolean;
+  testing: boolean;
+  view: WebhookRouteView;
+}) {
+  return (
+    <article className={classNames("webhook-route-row", selected && "webhook-route-row--selected")} role="listitem">
+      <button
+        aria-pressed={selected}
+        className="webhook-route-row-main"
+        type="button"
+        onClick={() => onSelectRoute(view.route.id)}
+      >
+        <span className={classNames("status-dot", `status-dot--${view.tone}`)} aria-hidden="true" />
+        <span className="webhook-route-row-title">
+          <strong>{view.route.name}</strong>
+          <small>{view.targetSummary}</small>
+        </span>
+        <span className="webhook-route-row-status">
+          <strong>{view.statusLabel}</strong>
+          <small>{view.lastActivityLabel}</small>
+        </span>
+        <span className="webhook-route-row-issue">
+          <span>{view.topIssue}</span>
+          <small>{view.deliveryLabel}</small>
+        </span>
+      </button>
+      <div className="webhook-route-row-actions">
+        {view.route.webhook_url ? (
+          <IconButton label="Copy relay URL" icon={ClipboardCopy} onClick={() => onCopyRoute(view.route)} />
+        ) : null}
+        <IconButton
+          label={testing ? "Sending test" : "Send test"}
+          icon={Send}
+          disabled={testing || !view.featureEnabled}
+          onClick={() => onTestRoute(view.route)}
+        />
+        <IconButton label="Edit route" icon={Pencil} onClick={() => onEditRoute(view.route)} />
+      </div>
+    </article>
+  );
+}
+
+function WebhookRouteInspector({
+  featurePolicy,
+  onCopyRoute,
+  onDeleteRoute,
+  onEditRoute,
+  onRefreshNames,
+  onRegenerateRoute,
+  onTestRoute,
+  onToggleRoute,
+  onViewLogs,
+  refreshingRouteNameId,
+  regeneratingId,
+  routeView,
+  testingId,
+  togglingId,
+}: {
+  featurePolicy: DeliveryFeaturePolicy;
+  onCopyRoute: (route: WebhookRouteOut) => void;
+  onDeleteRoute: (route: WebhookRouteOut) => void;
+  onEditRoute: (route: WebhookRouteOut) => void;
+  onRefreshNames: (route: WebhookRouteOut) => void;
+  onRegenerateRoute: (route: WebhookRouteOut) => void;
+  onTestRoute: (route: WebhookRouteOut) => void;
+  onToggleRoute: (route: WebhookRouteOut) => void;
+  onViewLogs: (route: WebhookRouteOut) => void;
+  refreshingRouteNameId: string;
+  regeneratingId: string;
+  routeView: WebhookRouteView | null;
+  testingId: string;
+  togglingId: string;
+}) {
+  if (!routeView) return null;
+  const route = routeView.route;
+
+  return (
+    <aside className="webhook-route-inspector" aria-label={`${route.name} route details`}>
+      <div className="webhook-route-inspector-header">
+        <div>
+          <p className="integration-kicker">Selected route</p>
+          <h2>{route.name}</h2>
+          <p>{routeView.summary}</p>
+        </div>
+        <div className={classNames("status-health-pill", `status-health-pill--${routeView.tone}`)}>
+          <span aria-hidden="true" />
+          <strong>{routeView.statusLabel}</strong>
+        </div>
+      </div>
+
+      {routeView.tone !== "success" ? (
+        <div className={classNames("status-detail-alert", routeView.tone === "danger" && "status-detail-alert--danger")}>
+          <strong>{routeView.topIssue}</strong>
+          <span>{routeView.topIssueDetail}</span>
+        </div>
+      ) : null}
+
+      <section className="webhook-route-inspector-section">
+        <h3>Overview</h3>
+        <StatusFactList facts={routeView.facts} />
+      </section>
+
+      <section className="webhook-route-inspector-section">
+        <h3>Target</h3>
+        <div className="webhook-target-panel">
+          <div>
+            <strong>{route.target_name || "Unnamed target"}</strong>
+            <span>{deliveryBackendLabel(route.delivery_backend)}</span>
+          </div>
+        </div>
+      </section>
+
+      <section className="webhook-route-inspector-section">
+        <h3>Relay URL</h3>
+        <div className="webhook-route-url-action">
+          {!route.webhook_url ? <span className="muted">Unavailable for old route</span> : null}
+          <button
+            className="secondary-button secondary-button--small button-with-icon"
+            type="button"
+            disabled={!route.webhook_url}
+            onClick={() => onCopyRoute(route)}
+          >
+            <ClipboardCopy aria-hidden="true" className="button-icon" focusable="false" />
+            Copy URL
+          </button>
+        </div>
+      </section>
+
+      <section className="webhook-route-inspector-section">
+        <h3>Operator actions</h3>
+        <div className="webhook-route-action-grid">
+          <button
+            className="primary-button button-with-icon"
+            type="button"
+            disabled={testingId === route.id || !routeView.featureEnabled}
+            onClick={() => onTestRoute(route)}
+          >
+            <Send aria-hidden="true" className="button-icon" focusable="false" />
+            {testingId === route.id ? "Sending..." : "Send test"}
+          </button>
+          <button className="secondary-button button-with-icon" type="button" onClick={() => onEditRoute(route)}>
+            <Pencil aria-hidden="true" className="button-icon" focusable="false" />
+            Edit route
+          </button>
+          <button className="secondary-button button-with-icon" type="button" onClick={() => onViewLogs(route)}>
+            <FileClock aria-hidden="true" className="button-icon" focusable="false" />
+            Delivery logs
+          </button>
+          <button
+            className="secondary-button button-with-icon"
+            type="button"
+            disabled={togglingId === route.id}
+            onClick={() => onToggleRoute(route)}
+          >
+            {route.is_active ? <PowerOff aria-hidden="true" className="button-icon" focusable="false" /> : <Power aria-hidden="true" className="button-icon" focusable="false" />}
+            {togglingId === route.id ? "Updating..." : route.is_active ? "Deactivate" : "Activate"}
+          </button>
+        </div>
+      </section>
+
+      <details className="status-detail-disclosure">
+        <summary>
+          <span>Advanced actions</span>
+          <small>Refresh metadata, rotate URL or delete the route</small>
+        </summary>
+        <div className="webhook-route-danger-zone">
+          <button
+            className="secondary-button secondary-button--small button-with-icon"
+            type="button"
+            disabled={refreshingRouteNameId === route.id || !featurePolicy.graphLookupEnabled}
+            onClick={() => onRefreshNames(route)}
+          >
+            <RefreshCw
+              aria-hidden="true"
+              className={classNames("button-icon", refreshingRouteNameId === route.id && "button-icon--spin")}
+              focusable="false"
+            />
+            {refreshingRouteNameId === route.id ? "Refreshing..." : "Refresh Graph names"}
+          </button>
+          <button
+            className="secondary-button secondary-button--small button-with-icon"
+            type="button"
+            disabled={regeneratingId === route.id}
+            onClick={() => onRegenerateRoute(route)}
+          >
+            <RotateCcwKey aria-hidden="true" className="button-icon" focusable="false" />
+            {regeneratingId === route.id ? "Regenerating..." : "Regenerate URL"}
+          </button>
+          <button className="danger-button danger-button--small button-with-icon" type="button" onClick={() => onDeleteRoute(route)}>
+            <Trash2 aria-hidden="true" className="button-icon" focusable="false" />
+            Delete route
+          </button>
+        </div>
+      </details>
+
+      <details className="status-detail-disclosure">
+        <summary>
+          <span>Diagnostics</span>
+          <small>Delivery backend, feature state and technical identifiers</small>
+        </summary>
+        <div className="status-detail-disclosure-body">
+          <dl className="definition-list definition-list--compact advanced-definition-list">
+            <FragmentPair label="Backend available" value={routeDeliveryFeatureEnabled(route, featurePolicy) ? "Yes" : "No"} />
+            {routeView.technicalRows.map((row) => (
+              <FragmentPair key={row.label} label={row.label} value={row.value} />
+            ))}
+          </dl>
+        </div>
+      </details>
+    </aside>
   );
 }
 
@@ -2492,10 +2871,11 @@ function WebhookRouteModal({
             {graphTargetKind === "channel" ? (
               <>
                 <Field label="Find team" hint="App-only Graph lookup is used for team and channel search.">
-                  <div className="settings-int-field">
+                  <div className="webhook-lookup-field">
                     <input value={graphTeamSearch} placeholder="Search Teams" onChange={(event) => setGraphTeamSearch(event.target.value)} />
-                    <button className="secondary-button secondary-button--small" type="button" onClick={() => void searchGraphTeams()} disabled={graphTeamsLoading || graphTeamSearch.trim().length < 2 || !featurePolicy.graphLookupEnabled}>
-                      {graphTeamsLoading ? "Searching..." : "Search"}
+                    <button className="secondary-button secondary-button--small button-with-icon" type="button" onClick={() => void searchGraphTeams()} disabled={graphTeamsLoading || graphTeamSearch.trim().length < 2 || !featurePolicy.graphLookupEnabled}>
+                      <Search aria-hidden="true" className="button-icon" focusable="false" />
+                      {graphTeamsLoading ? "Searching..." : "Search team"}
                     </button>
                   </div>
                 </Field>
@@ -2513,10 +2893,11 @@ function WebhookRouteModal({
                   </div>
                 ) : null}
                 <Field label="Find channel" hint="Select a team first, then search its channels.">
-                  <div className="settings-int-field">
+                  <div className="webhook-lookup-field">
                     <input value={graphChannelSearch} placeholder="Search channels" onChange={(event) => setGraphChannelSearch(event.target.value)} disabled={!graphTeamId.trim()} />
-                    <button className="secondary-button secondary-button--small" type="button" onClick={() => void searchGraphChannels()} disabled={graphChannelsLoading || !graphTeamId.trim() || !featurePolicy.graphLookupEnabled}>
-                      {graphChannelsLoading ? "Loading..." : "Load channels"}
+                    <button className="secondary-button secondary-button--small button-with-icon" type="button" onClick={() => void searchGraphChannels()} disabled={graphChannelsLoading || !graphTeamId.trim() || !featurePolicy.graphLookupEnabled}>
+                      <Search aria-hidden="true" className="button-icon" focusable="false" />
+                      {graphChannelsLoading ? "Loading..." : "Find channels"}
                     </button>
                   </div>
                 </Field>
@@ -2541,9 +2922,10 @@ function WebhookRouteModal({
             {graphTargetKind === "chat" ? (
               <>
                 <Field label="Find service-user chat" hint="Lists existing chats the connected service user belongs to.">
-                  <div className="settings-int-field">
+                  <div className="webhook-lookup-field">
                     <input value={graphChatSearch} placeholder="Search chat topic, type or ID" onChange={(event) => setGraphChatSearch(event.target.value)} />
-                    <button className="secondary-button secondary-button--small" type="button" onClick={() => void searchGraphChats()} disabled={graphChatsLoading || !featurePolicy.graphLookupEnabled}>
+                    <button className="secondary-button secondary-button--small button-with-icon" type="button" onClick={() => void searchGraphChats()} disabled={graphChatsLoading || !featurePolicy.graphLookupEnabled}>
+                      <Search aria-hidden="true" className="button-icon" focusable="false" />
                       {graphChatsLoading ? "Searching..." : "Search chats"}
                     </button>
                   </div>
@@ -2566,18 +2948,19 @@ function WebhookRouteModal({
             {graphTargetKind === "user" ? (
               <>
                 <Field label="Find user" hint="Select a Microsoft 365 user. The route will be linked to a one-on-one chat on save.">
-                  <div className="settings-int-field">
+                  <div className="webhook-lookup-field">
                     <input
                       value={graphUserSearch}
                       placeholder="Search name, email or UPN"
                       onChange={(event) => setGraphUserSearch(event.target.value)}
                     />
                     <button
-                      className="secondary-button secondary-button--small"
+                      className="secondary-button secondary-button--small button-with-icon"
                       type="button"
                       onClick={() => void searchGraphUsers()}
                       disabled={graphUsersLoading || graphUserSearch.trim().length < 2 || !featurePolicy.graphLookupEnabled}
                     >
+                      <Search aria-hidden="true" className="button-icon" focusable="false" />
                       {graphUsersLoading ? "Searching..." : "Search users"}
                     </button>
                   </div>
@@ -2985,84 +3368,140 @@ function UsersPage() {
   );
 }
 
-const SETTING_META: Record<string, { group: string; description: string; unit?: string }> = {
+type SettingSection = "delivery" | "runtime" | "advancedIdentity";
+type SettingDisplay = "switch" | "segmented" | "number" | "technical" | "secret";
+
+type SettingMeta = {
+  section: SettingSection;
+  label?: string;
+  description?: string;
+  help?: string;
+  unit?: string;
+  display: SettingDisplay;
+  sourceLabel?: string;
+};
+
+const SETTING_META: Record<string, SettingMeta> = {
   bot_framework_enabled: {
-    group: "Delivery Features",
-    description: "Allow Bot Framework route delivery and Bot readiness checks.",
+    section: "delivery",
+    label: "Bot Framework",
+    description: "Route messages through captured Teams conversations.",
+    display: "switch",
   },
   graph_lookup_enabled: {
-    group: "Delivery Features",
-    description: "Allow Microsoft Graph target discovery and display-name resolution.",
+    section: "delivery",
+    label: "Graph lookup",
+    description: "Resolve Teams users, chats and channels from Microsoft Graph.",
+    display: "switch",
   },
   graph_delivery_enabled: {
-    group: "Delivery Features",
-    description: "Allow delegated Microsoft Graph message delivery.",
+    section: "delivery",
+    label: "Graph delivery",
+    description: "Send delegated Teams messages through the connected service user.",
+    help: "Requires Graph lookup to stay enabled.",
+    display: "switch",
   },
   bot_delivery_mode: {
-    group: "Delivery",
-    description: "Real sends to Teams via Bot Framework. Mock simulates delivery for local checks.",
+    section: "delivery",
+    label: "Delivery mode",
+    description: "Choose whether webhook tests send real Teams messages.",
+    display: "segmented",
   },
   bot_default_service_url: {
-    group: "Delivery",
-    description: "Fallback Bot Framework service URL used when a route has none.",
+    section: "runtime",
+    label: "Default service URL",
+    description: "Fallback Bot Framework endpoint for routes without a captured URL.",
+    display: "technical",
+    sourceLabel: "Bot Framework",
   },
   webhook_max_payload_bytes: {
-    group: "Limits & retention",
-    description: "Maximum accepted size of an incoming webhook request body.",
+    section: "runtime",
+    label: "Payload limit",
+    description: "Maximum accepted webhook body size.",
     unit: "bytes",
+    display: "number",
   },
   log_retention_days: {
-    group: "Limits & retention",
-    description: "How long delivery, audit and bot activity events are kept.",
+    section: "runtime",
+    label: "Log retention",
+    description: "How long delivery, audit and bot events are kept.",
     unit: "days",
+    display: "number",
   },
   log_cleanup_interval_minutes: {
-    group: "Limits & retention",
-    description: "Minimum time between automatic log cleanup runs.",
+    section: "runtime",
+    label: "Cleanup cadence",
+    description: "Minimum time between automatic cleanup runs.",
     unit: "minutes",
+    display: "number",
   },
   app_public_base_url: {
-    group: "URLs",
-    description: "Public base URL used to build relay webhook links.",
+    section: "runtime",
+    label: "Public URL",
+    description: "Base URL used to build relay webhook links.",
+    display: "technical",
   },
   frontend_base_url: {
-    group: "URLs",
-    description: "Base URL of the web interface for generated links.",
+    section: "runtime",
+    label: "Frontend URL",
+    description: "Base URL used in generated operator links.",
+    display: "technical",
   },
   ms_app_tenant_id: {
-    group: "Microsoft Entra",
-    description: "Directory (tenant) ID of the Entra app registration.",
+    section: "advancedIdentity",
+    label: "Tenant ID",
+    description: "Directory ID for the Entra app registration.",
+    display: "technical",
   },
   ms_app_client_id: {
-    group: "Microsoft Entra",
-    description: "Application (client) ID of the Entra app registration.",
+    section: "advancedIdentity",
+    label: "Client ID",
+    description: "Application ID for the Entra app registration.",
+    display: "technical",
   },
   ms_app_client_secret: {
-    group: "Microsoft Entra",
-    description: "Client secret for Bot Framework delivery and Graph lookup.",
+    section: "advancedIdentity",
+    label: "Client secret",
+    description: "Used for Bot Framework delivery and Graph lookup.",
+    display: "secret",
   },
   botframework_scope: {
-    group: "Microsoft Entra",
+    section: "advancedIdentity",
+    label: "Bot Framework scope",
     description: "OAuth scope requested for Bot Framework tokens.",
+    display: "technical",
   },
   graph_scope: {
-    group: "Microsoft Entra",
+    section: "advancedIdentity",
+    label: "Graph scope",
     description: "OAuth scope requested for Microsoft Graph tokens.",
+    display: "technical",
   },
 };
 
-const SETTING_GROUP_ORDER = ["Delivery Features", "Delivery", "Limits & retention", "URLs", "Microsoft Entra"];
+const DELIVERY_SETTING_KEYS = [
+  "bot_framework_enabled",
+  "graph_lookup_enabled",
+  "graph_delivery_enabled",
+  "bot_delivery_mode",
+] as const;
 
-const TECHNICAL_SETTING_KEYS = new Set([
-  "bot_default_service_url",
+const RUNTIME_SETTING_KEYS = [
   "app_public_base_url",
   "frontend_base_url",
+  "bot_default_service_url",
+  "webhook_max_payload_bytes",
+  "log_retention_days",
+  "log_cleanup_interval_minutes",
+] as const;
+
+const ADVANCED_IDENTITY_SETTING_KEYS = [
   "ms_app_tenant_id",
   "ms_app_client_id",
   "ms_app_client_secret",
   "botframework_scope",
   "graph_scope",
-]);
+] as const;
 
 function StatusPage() {
   const { notify, session } = useAppContext();
@@ -3070,6 +3509,7 @@ function StatusPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [graphOAuthBusy, setGraphOAuthBusy] = useState(false);
+  const [selectedComponentId, setSelectedComponentId] = useState("");
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
 
   const refresh = useCallback(async () => {
@@ -3119,12 +3559,25 @@ function StatusPage() {
     }
   }
 
+  const integrationViews = readiness
+    ? [
+        buildBotIntegrationView(readiness, copyDiagnosticValue),
+        buildGraphLookupIntegrationView(readiness, copyDiagnosticValue),
+        buildGraphDeliveryIntegrationView(readiness.graph_delivery, graphOAuthBusy, () => void connectGraphDelivery(), () => void disconnectGraphDelivery(), copyDiagnosticValue),
+      ]
+    : [];
+  const overallTone = integrationViews.some((view) => view.tone === "danger") ? "danger" : integrationViews.some((view) => view.tone === "warn") ? "warn" : "success";
+  const overallLabel = overallTone === "danger" ? "Degraded" : overallTone === "warn" ? "Attention" : "Ready";
+  const defaultSelectedComponentId = integrationViews.find((view) => view.tone === "danger" || view.tone === "warn")?.id ?? integrationViews.find((view) => view.id === "graph-delivery")?.id ?? integrationViews[0]?.id ?? "";
+  const selectedIntegration = integrationViews.find((view) => view.id === selectedComponentId) ?? integrationViews.find((view) => view.id === defaultSelectedComponentId) ?? integrationViews[0] ?? null;
+
   return (
     <>
       <PageIntro
         eyebrow="Operations"
         title="Status"
-        description="Operational readiness and diagnostics for Teams Rehook."
+        description="Production readiness, delivery paths and diagnostics for Teams Rehook."
+        actions={readiness ? <StatusBadge label={overallLabel} tone={overallTone} /> : null}
       />
       {loading ? (
         <Card>
@@ -3144,103 +3597,16 @@ function StatusPage() {
           </div>
         </Card>
       ) : readiness ? (
-        <div className="settings-page status-page">
-          <section className="settings-section">
-            <div className="settings-section-header">
-              <h2>Integrations</h2>
-              <p>Health, credentials and token checks for the services that relay messages into Teams.</p>
-            </div>
-            <div className="settings-integrations-grid">
-              <IntegrationReadinessCard
-                title="Delivery"
-                description="Teams delivery mode and Bot Framework readiness."
-                authStatus={readiness.bot.auth_status}
-                badges={[
-                  { label: readiness.bot.enabled ? "Enabled" : "Disabled", tone: readiness.bot.enabled ? "success" : "neutral" },
-                  { label: readiness.delivery_mode, tone: readiness.delivery_mode === "real" ? "success" : "neutral" },
-                  {
-                    label: readiness.bot.default_service_url_configured ? "Service URL set" : "No default service URL",
-                    tone: readiness.bot.default_service_url_configured ? "success" : "neutral",
-                  },
-                ]}
-                message={readiness.bot.message}
-                oauth={readiness.bot.oauth}
-                credentialRows={[
-                  ["Tenant ID", credentialStatusLabel(readiness.bot.credential_fields.tenant_id)],
-                  ["Client ID", credentialStatusLabel(readiness.bot.credential_fields.client_id)],
-                  ["Client secret", credentialStatusLabel(readiness.bot.credential_fields.client_secret)],
-                  ["Default service URL", credentialStatusLabel(readiness.bot.credential_fields.default_service_url)],
-                ]}
-                onCopy={copyDiagnosticValue}
-              />
-              <IntegrationReadinessCard
-                title="Graph lookup"
-                description="Target search and display-name resolution readiness."
-                authStatus={readiness.graph_lookup.auth_status}
-                badges={[
-                  { label: readiness.graph_lookup.enabled ? "Enabled" : "Disabled", tone: readiness.graph_lookup.enabled ? "success" : "neutral" },
-                  {
-                    label: graphCredentialLabel(readiness.graph_lookup.credential_source),
-                    tone: readiness.graph_lookup.credential_source === "missing" ? "warn" : "neutral",
-                  },
-                ]}
-                message={readiness.graph_lookup.message}
-                oauth={readiness.graph_lookup.oauth}
-                credentialRows={[
-                  ["Tenant ID", credentialStatusLabel(readiness.graph_lookup.credential_fields.tenant_id)],
-                  ["Client ID", credentialStatusLabel(readiness.graph_lookup.credential_fields.client_id)],
-                  ["Client secret", credentialStatusLabel(readiness.graph_lookup.credential_fields.client_secret)],
-                ]}
-                onCopy={copyDiagnosticValue}
-              />
-              <GraphDeliveryReadinessCard
-                readiness={readiness.graph_delivery}
-                onCopy={copyDiagnosticValue}
-                onConnect={() => void connectGraphDelivery()}
-                onDisconnect={() => void disconnectGraphDelivery()}
-                busy={graphOAuthBusy}
-              />
-            </div>
-          </section>
-
-          <section className="settings-section settings-section--secondary">
-            <div className="settings-section-header">
-              <h2>Operations</h2>
-              <p>Effective runtime values and the shortest path to validating a production relay route.</p>
-            </div>
-            <div className="settings-support-grid">
-              <Card title="Runtime" description="Public URLs, limits and retention used by relay operations.">
-                <dl className="definition-list">
-                  <dt>Application</dt>
-                  <dd>
-                    {readiness.app_name} {readiness.app_version}
-                  </dd>
-                  <dt>Public URL</dt>
-                  <dd>{readiness.runtime.app_public_base_url}</dd>
-                  <dt>Frontend URL</dt>
-                  <dd>{readiness.runtime.frontend_base_url}</dd>
-                  <dt>CORS origins</dt>
-                  <dd>{readiness.runtime.cors_origins.join(", ") || "-"}</dd>
-                  <dt>Payload limit</dt>
-                  <dd>{formatBytes(readiness.runtime.webhook_max_payload_bytes)}</dd>
-                  <dt>Log retention</dt>
-                  <dd>{readiness.runtime.log_retention_days} days</dd>
-                  <dt>Cleanup interval</dt>
-                  <dd>{readiness.runtime.log_cleanup_interval_minutes} minutes</dd>
-                  <dt>Secure session cookie</dt>
-                  <dd>{yesNo(readiness.runtime.session_secure_cookie)}</dd>
-                </dl>
-              </Card>
-              <Card title="Operator checklist" description="Minimum path to a working relay route.">
-                <ol className="check-list">
-                  <li>Add the bot to the target Teams chat or channel.</li>
-                  <li>Send or mention the bot once so Teams Rehook captures the conversation.</li>
-                  <li>Create a webhook route from that known conversation.</li>
-                  <li>Use Send test and confirm the message appears in Teams.</li>
-                  <li>Copy the relay URL into the external system and monitor Messages.</li>
-                </ol>
-              </Card>
-            </div>
+        <div className="status-command-center">
+          <RelayHealthHero readiness={readiness} integrations={integrationViews} overallLabel={overallLabel} overallTone={overallTone} />
+          <RelayPipelineLayout
+            integrations={integrationViews}
+            selectedIntegration={selectedIntegration}
+            selectedComponentId={selectedIntegration?.id ?? defaultSelectedComponentId}
+            onSelectComponent={setSelectedComponentId}
+          />
+          <section className="status-operations-grid" aria-label="Operational context">
+            <RuntimeSnapshotCard readiness={readiness} onCopy={copyDiagnosticValue} />
           </section>
         </div>
       ) : null}
@@ -3253,6 +3619,7 @@ function SettingsPage() {
   const [settings, setSettings] = useState<SettingItemOut[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [identityOpen, setIdentityOpen] = useState(false);
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
 
   const refresh = useCallback(async () => {
@@ -3271,18 +3638,20 @@ function SettingsPage() {
     void refresh();
   }, [refresh]);
 
+  const settingsByKey = useMemo(() => new Map(settings.map((item) => [item.key, item])), [settings]);
   const overrideCount = settings.filter((item) => item.is_overridden).length;
-  const groupedSettings = SETTING_GROUP_ORDER.map((name) => ({
-    name,
-    items: settings.filter((item) => (SETTING_META[item.key]?.group ?? "Other") === name),
-  })).filter((group) => group.items.length > 0);
+  const deliverySettings = orderedSettings(DELIVERY_SETTING_KEYS, settingsByKey);
+  const runtimeSettings = orderedSettings(RUNTIME_SETTING_KEYS, settingsByKey);
+  const identitySettings = orderedSettings(ADVANCED_IDENTITY_SETTING_KEYS, settingsByKey);
+  const overrideBadge = overrideCount > 0 ? `${overrideCount} ${overrideCount === 1 ? "override" : "overrides"}` : "All defaults";
 
   return (
     <>
       <PageIntro
         eyebrow="Configuration"
         title="Settings"
-        description="Override runtime defaults from the environment file."
+        description="Control delivery behavior, runtime defaults and Microsoft identity values."
+        actions={<StatusBadge label={overrideBadge} tone={overrideCount > 0 ? "warn" : "neutral"} />}
       />
       {loading ? (
         <Card>
@@ -3303,76 +3672,287 @@ function SettingsPage() {
         </Card>
       ) : (
         <div className="settings-page">
-          <section className="settings-section">
-            <div className="settings-section-header">
-              <h2>Runtime overrides</h2>
-              <p>
-                Values from the environment file are defaults. Overrides apply immediately without restart. Reset
-                restores the environment default.
-              </p>
-            </div>
-            <Card
-              title="Editable settings"
-              description="Live runtime configuration for relay operations."
-              headerActions={
-                <StatusBadge
-                  label={overrideCount > 0 ? `${overrideCount} ${overrideCount === 1 ? "override" : "overrides"} active` : "All defaults"}
-                  tone={overrideCount > 0 ? "warn" : "neutral"}
-                />
-              }
-            >
-              <div className="settings-overrides">
-                {groupedSettings.map((group) => (
-                  <div className="settings-override-group" key={group.name}>
-                    <div className="settings-subsection-header">
-                      <h3>{group.name}</h3>
-                    </div>
-                    <div className="settings-override-rows">
-                      {group.items.map((item) => (
-                        <RuntimeSettingRow
-                          key={item.key}
-                          item={item}
-                          csrfToken={csrfToken}
-                          onChanged={refresh}
-                          notify={notify}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </Card>
-          </section>
+          <SettingsOverviewStrip settingsByKey={settingsByKey} overrideCount={overrideCount} />
+          <DeliveryControlsCard
+            settings={deliverySettings}
+            settingsByKey={settingsByKey}
+            csrfToken={csrfToken}
+            onChanged={refresh}
+            notify={notify}
+          />
+          <RuntimeDefaultsCard
+            settings={runtimeSettings}
+            settingsByKey={settingsByKey}
+            csrfToken={csrfToken}
+            onChanged={refresh}
+            notify={notify}
+          />
+          <AdvancedIdentityCard
+            settings={identitySettings}
+            settingsByKey={settingsByKey}
+            csrfToken={csrfToken}
+            onChanged={refresh}
+            notify={notify}
+            open={identityOpen}
+            onToggle={() => setIdentityOpen((value) => !value)}
+          />
         </div>
       )}
     </>
   );
 }
 
-function RuntimeSettingRow({
+function orderedSettings(keys: readonly string[], settingsByKey: Map<string, SettingItemOut>) {
+  return keys.map((key) => settingsByKey.get(key)).filter((item): item is SettingItemOut => Boolean(item));
+}
+
+function settingValue(settingsByKey: Map<string, SettingItemOut>, key: string) {
+  return settingsByKey.get(key)?.effective_value ?? "";
+}
+
+function settingEnabled(settingsByKey: Map<string, SettingItemOut>, key: string) {
+  return settingValue(settingsByKey, key) === "true";
+}
+
+function SettingsOverviewStrip({
+  overrideCount,
+  settingsByKey,
+}: {
+  overrideCount: number;
+  settingsByKey: Map<string, SettingItemOut>;
+}) {
+  const deliveryMode = settingValue(settingsByKey, "bot_delivery_mode") || "mock";
+  const tenantConfigured = Boolean(settingValue(settingsByKey, "ms_app_tenant_id"));
+  const clientConfigured = Boolean(settingValue(settingsByKey, "ms_app_client_id"));
+  const secretConfigured = settingValue(settingsByKey, "ms_app_client_secret") === "configured";
+  const identityReady = tenantConfigured && clientConfigured && secretConfigured;
+
+  return (
+    <section className="settings-overview" aria-label="Runtime configuration overview">
+      <OverviewMetric
+        label="Source"
+        value={overrideCount > 0 ? `${overrideCount} active` : "Environment"}
+        detail={overrideCount > 0 ? "Runtime overrides are applied immediately." : "All values inherit from environment defaults."}
+      />
+      <OverviewMetric
+        label="Delivery"
+        value={deliveryMode === "real" ? "Real sends" : "Mock mode"}
+        detail={deliveryMode === "real" ? "Messages can reach Teams." : "Delivery is simulated for checks."}
+        tone={deliveryMode === "real" ? "success" : "neutral"}
+      />
+      <OverviewMetric
+        label="Features"
+        value={`${[settingEnabled(settingsByKey, "bot_framework_enabled"), settingEnabled(settingsByKey, "graph_lookup_enabled"), settingEnabled(settingsByKey, "graph_delivery_enabled")].filter(Boolean).length}/3 enabled`}
+        detail="Bot Framework, Graph lookup and delegated Graph delivery."
+      />
+      <OverviewMetric
+        label="Identity"
+        value={identityReady ? "Configured" : "Needs attention"}
+        detail={identityReady ? "Tenant, client and secret are present." : "Check Microsoft Entra values."}
+        tone={identityReady ? "success" : "warn"}
+      />
+    </section>
+  );
+}
+
+function OverviewMetric({
+  detail,
+  label,
+  tone = "neutral",
+  value,
+}: {
+  detail: string;
+  label: string;
+  tone?: "neutral" | "success" | "warn";
+  value: string;
+}) {
+  return (
+    <div className={classNames("settings-overview-item", tone !== "neutral" && `settings-overview-item--${tone}`)}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <p>{detail}</p>
+    </div>
+  );
+}
+
+function DeliveryControlsCard({
+  csrfToken,
+  notify,
+  onChanged,
+  settings,
+  settingsByKey,
+}: SettingsCardProps) {
+  return (
+    <Card className="settings-card" title="Delivery" description="Primary delivery controls stay visible for quick operational changes.">
+      <div className="settings-feature-grid">
+        {settings.map((item) => (
+          <RuntimeSettingControl
+            key={item.key}
+            item={item}
+            csrfToken={csrfToken}
+            onChanged={onChanged}
+            notify={notify}
+            settingsByKey={settingsByKey}
+          />
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function RuntimeDefaultsCard({
+  csrfToken,
+  notify,
+  onChanged,
+  settings,
+  settingsByKey,
+}: SettingsCardProps) {
+  const urlSettings = settings.filter((item) => item.type === "url" && item.key !== "bot_default_service_url");
+  const limitSettings = settings.filter((item) => item.type === "int");
+  const fallbackSettings = settings.filter((item) => item.key === "bot_default_service_url");
+
+  return (
+    <Card className="settings-card" title="Runtime defaults" description="Effective URLs, limits and retention used by relay operations.">
+      <div className="settings-runtime-grid">
+        <div className="settings-card-block">
+          <div className="settings-card-block-header">
+            <h3>URLs</h3>
+            <p>Copied into generated links and fallback delivery paths.</p>
+          </div>
+          {[...urlSettings, ...fallbackSettings].map((item) => (
+            <RuntimeSettingControl
+              key={item.key}
+              item={item}
+              csrfToken={csrfToken}
+              onChanged={onChanged}
+              notify={notify}
+              settingsByKey={settingsByKey}
+            />
+          ))}
+        </div>
+        <div className="settings-card-block">
+          <div className="settings-card-block-header">
+            <h3>Limits</h3>
+            <p>Small operational values should be fast to scan and adjust.</p>
+          </div>
+          {limitSettings.map((item) => (
+            <RuntimeSettingControl
+              key={item.key}
+              item={item}
+              csrfToken={csrfToken}
+              onChanged={onChanged}
+              notify={notify}
+              settingsByKey={settingsByKey}
+              compact
+            />
+          ))}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function AdvancedIdentityCard({
+  csrfToken,
+  notify,
+  onChanged,
+  onToggle,
+  open,
+  settings,
+  settingsByKey,
+}: SettingsCardProps & { open: boolean; onToggle: () => void }) {
+  const overriddenCount = settings.filter((item) => item.is_overridden).length;
+  const secret = settingsByKey.get("ms_app_client_secret");
+  const secretReady = secret?.effective_value === "configured";
+
+  return (
+    <Card className="settings-card settings-card--identity">
+      <div className="settings-disclosure">
+        <button
+          className="settings-disclosure-trigger"
+          type="button"
+          aria-expanded={open}
+          aria-controls="advanced-identity-settings"
+          onClick={onToggle}
+        >
+          <span>
+            <span className="settings-disclosure-kicker">Advanced</span>
+            <strong>Microsoft identity</strong>
+            <small>Tenant, client secret and OAuth scopes for Bot Framework and Graph.</small>
+          </span>
+          <span className="settings-disclosure-badges">
+            <StatusBadge label={secretReady ? "Secret configured" : "Secret missing"} tone={secretReady ? "success" : "warn"} />
+            {overriddenCount > 0 ? <StatusBadge label={`${overriddenCount} overrides`} tone="warn" /> : <StatusBadge label="ENV" />}
+            <ChevronDown aria-hidden="true" className="settings-disclosure-icon" focusable="false" />
+          </span>
+        </button>
+        {open ? (
+          <div className="settings-advanced-list" id="advanced-identity-settings">
+            {settings.map((item) => (
+              <RuntimeSettingControl
+                key={item.key}
+                item={item}
+                csrfToken={csrfToken}
+                onChanged={onChanged}
+                notify={notify}
+                settingsByKey={settingsByKey}
+              />
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </Card>
+  );
+}
+
+type SettingsNotify = ReturnType<typeof useAppContext>["notify"];
+
+type SettingsCardProps = {
+  settings: SettingItemOut[];
+  settingsByKey: Map<string, SettingItemOut>;
+  csrfToken: string;
+  onChanged: () => Promise<void>;
+  notify: SettingsNotify;
+};
+
+function RuntimeSettingControl({
+  compact = false,
   item,
   csrfToken,
   onChanged,
   notify,
+  settingsByKey,
 }: {
   item: SettingItemOut;
   csrfToken: string;
   onChanged: () => Promise<void>;
-  notify: ReturnType<typeof useAppContext>["notify"];
+  notify: SettingsNotify;
+  settingsByKey: Map<string, SettingItemOut>;
+  compact?: boolean;
 }) {
   const initialDraft = item.type === "secret" ? "" : item.effective_value;
   const [draft, setDraft] = useState(initialDraft);
   const [busy, setBusy] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
+  const [secretVisible, setSecretVisible] = useState(false);
   const [error, setError] = useState("");
+  const inputId = useId();
+  const errorId = `${inputId}-error`;
 
   useEffect(() => {
     setDraft(item.type === "secret" ? "" : item.effective_value);
+    setSecretVisible(false);
     setError("");
   }, [item.key, item.effective_value, item.type]);
 
   const canSave =
     item.type === "secret" ? draft.trim().length > 0 : draft !== item.effective_value || (draft === "" && item.is_overridden);
+  const canCancel = item.type === "secret" ? draft.trim().length > 0 : draft !== item.effective_value;
+  const meta = SETTING_META[item.key];
+  const display = meta?.display ?? (item.type === "bool" ? "switch" : item.type === "int" ? "number" : item.type === "secret" ? "secret" : "technical");
+  const label = meta?.label ?? item.label;
+  const graphLookupEnabled = settingEnabled(settingsByKey, "graph_lookup_enabled");
+  const dependencyWarning = item.key === "graph_delivery_enabled" && draft === "true" && !graphLookupEnabled;
 
   async function save() {
     setBusy(true);
@@ -3385,6 +3965,17 @@ function RuntimeSettingRow({
       setError(isApiError(err) ? err.message : "Saving the setting failed.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function copyValue() {
+    const value = draft || item.effective_value;
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      notify({ tone: "success", title: `${label} copied` });
+    } catch {
+      notify({ tone: "error", title: "Copy failed", description: `${label} could not be copied automatically.` });
     }
   }
 
@@ -3403,75 +3994,138 @@ function RuntimeSettingRow({
     }
   }
 
-  const meta = SETTING_META[item.key];
-  const isMono = TECHNICAL_SETTING_KEYS.has(item.key);
-  const inputClassName = isMono ? "settings-input--mono" : undefined;
+  function cancelDraft() {
+    setDraft(item.type === "secret" ? "" : item.effective_value);
+    setError("");
+  }
 
   return (
-    <div className="settings-override-row">
-      <div className="settings-override-meta">
-        <div className="settings-override-heading">
-          <strong>{item.label}</strong>
-          {item.is_overridden ? <StatusBadge label="Overridden" tone="warn" /> : null}
+    <div className={classNames("settings-control", compact && "settings-control--compact")}>
+      <div className="settings-control-copy">
+        <div className="settings-control-heading">
+          <label htmlFor={inputId}>{label}</label>
+          {meta?.help ? (
+            <span className="settings-info" title={meta.help} aria-label={meta.help}>
+              <Info aria-hidden="true" focusable="false" />
+            </span>
+          ) : null}
         </div>
-        {meta?.description ? <p className="settings-override-hint">{meta.description}</p> : null}
+        {meta?.description ? <p>{meta.description}</p> : null}
       </div>
-      <div className="settings-override-editor">
-        {item.type === "bool" ? (
-          <label className="settings-toggle">
+      <div className="settings-control-editor">
+        {display === "switch" ? (
+          <label className="settings-switch" htmlFor={inputId}>
             <input
+              id={inputId}
               type="checkbox"
               checked={draft === "true"}
               disabled={busy}
+              aria-describedby={error ? errorId : undefined}
               onChange={(event) => setDraft(event.target.checked ? "true" : "false")}
             />
-            <span>{draft === "true" ? "Enabled" : "Disabled"}</span>
+            <span aria-hidden="true" />
+            <strong>{draft === "true" ? "Enabled" : "Disabled"}</strong>
           </label>
-        ) : item.type === "enum" ? (
-          <select className={inputClassName} value={draft} onChange={(event) => setDraft(event.target.value)} disabled={busy}>
+        ) : display === "segmented" ? (
+          <div className="settings-segmented" role="radiogroup" aria-label={label} aria-describedby={error ? errorId : undefined}>
             {item.enum_values.map((value) => (
-              <option key={value} value={value}>
+              <button
+                key={value}
+                className={classNames("settings-segmented-button", draft === value && "is-active")}
+                type="button"
+                role="radio"
+                aria-checked={draft === value}
+                disabled={busy}
+                onClick={() => setDraft(value)}
+              >
                 {value}
-              </option>
+              </button>
             ))}
-          </select>
-        ) : item.type === "secret" ? (
-          <input
-            className={inputClassName}
-            type="password"
-            value={draft}
-            placeholder="Enter new secret"
-            autoComplete="new-password"
-            disabled={busy}
-            onChange={(event) => setDraft(event.target.value)}
-          />
-        ) : item.type === "int" ? (
-          <div className="settings-int-field">
+          </div>
+        ) : display === "secret" ? (
+          <div className="settings-secret-field">
+            <div className="settings-secret-state">
+              <StatusBadge label={item.effective_value === "configured" ? "Configured" : "Missing"} tone={item.effective_value === "configured" ? "success" : "warn"} />
+              <span>Stored secret is never displayed.</span>
+            </div>
+            <div className="settings-input-action">
+              <input
+                id={inputId}
+                className="settings-input--mono"
+                type={secretVisible ? "text" : "password"}
+                value={draft}
+                placeholder="Enter replacement secret"
+                autoComplete="new-password"
+                disabled={busy}
+                aria-describedby={error ? errorId : undefined}
+                onChange={(event) => setDraft(event.target.value)}
+              />
+              <button
+                className="icon-button icon-button--tiny"
+                type="button"
+                disabled={!draft}
+                onClick={() => setSecretVisible((value) => !value)}
+                aria-label={secretVisible ? "Hide replacement secret" : "Reveal replacement secret"}
+                title={secretVisible ? "Hide replacement secret" : "Reveal replacement secret"}
+              >
+                {secretVisible ? <EyeOff aria-hidden="true" focusable="false" /> : <Eye aria-hidden="true" focusable="false" />}
+              </button>
+            </div>
+          </div>
+        ) : display === "number" ? (
+          <div className="settings-number-field">
             <input
+              id={inputId}
               type="number"
               value={draft}
               disabled={busy}
+              aria-describedby={error ? errorId : undefined}
               onChange={(event) => setDraft(event.target.value)}
             />
             {meta?.unit ? <span className="settings-unit">{meta.unit}</span> : null}
           </div>
         ) : (
-          <input className={inputClassName} value={draft} disabled={busy} onChange={(event) => setDraft(event.target.value)} />
-        )}
-        <div className="settings-override-footer">
-          <div className="settings-override-default">
-            {item.is_overridden ? (
-              <>
-                Default: <span className={isMono ? "settings-mono" : undefined}>{item.env_default || "-"}</span>
-              </>
-            ) : (
-              <span className="settings-override-default-muted">Using environment default</span>
-            )}
+          <div className="settings-input-action">
+            <input
+              id={inputId}
+              className="settings-input--mono"
+              value={draft}
+              disabled={busy}
+              aria-describedby={error ? errorId : undefined}
+              onChange={(event) => setDraft(event.target.value)}
+            />
+            <button
+              className="icon-button icon-button--tiny"
+              type="button"
+              disabled={!draft && !item.effective_value}
+              onClick={() => void copyValue()}
+              aria-label={`Copy ${label}`}
+              title={`Copy ${label}`}
+            >
+              <ClipboardCopy aria-hidden="true" focusable="false" />
+            </button>
           </div>
-          <div className="settings-override-actions">
+        )}
+        {dependencyWarning ? <p className="settings-warning">Graph delivery requires Graph lookup. Enable lookup first or save will fail.</p> : null}
+        <div className="settings-control-footer">
+          <div className="settings-source-row">
+            <SourceBadge overridden={item.is_overridden} />
             {item.is_overridden ? (
-              <button className="settings-reset-link" type="button" disabled={busy} onClick={() => setResetOpen(true)}>
-                Reset to default
+              <span>
+                Default <code>{item.env_default || "-"}</code>
+              </span>
+            ) : null}
+          </div>
+          <div className="settings-control-actions">
+            {canCancel ? (
+              <button className="ghost-button ghost-button--small" type="button" disabled={busy} onClick={cancelDraft}>
+                Cancel
+              </button>
+            ) : null}
+            {item.is_overridden ? (
+              <button className="secondary-button secondary-button--small button-with-icon" type="button" disabled={busy} onClick={() => setResetOpen(true)}>
+                <RotateCcwKey aria-hidden="true" className="button-icon" focusable="false" />
+                Reset
               </button>
             ) : null}
             {canSave ? (
@@ -3481,11 +4135,15 @@ function RuntimeSettingRow({
             ) : null}
           </div>
         </div>
-        {error ? <p className="form-error">{error}</p> : null}
+        {error ? (
+          <p className="form-error" id={errorId}>
+            {error}
+          </p>
+        ) : null}
       </div>
       {resetOpen ? (
         <ConfirmModal
-          title={`Reset ${item.label}?`}
+          title={`Reset ${label}?`}
           description="This removes the override and restores the value from the environment file."
           confirmLabel="Reset"
           busy={busy}
@@ -3497,307 +4155,618 @@ function RuntimeSettingRow({
   );
 }
 
-function GraphDeliveryReadinessCard({
-  busy,
-  onConnect,
-  onCopy,
-  onDisconnect,
-  readiness,
-}: {
-  busy: boolean;
-  onConnect: () => void;
-  onCopy: (value: string, label: string) => void;
-  onDisconnect: () => void;
-  readiness: AdminReadinessOut["graph_delivery"];
-}) {
+function SourceBadge({ overridden }: { overridden: boolean }) {
+  return <span className={classNames("settings-source-badge", overridden && "settings-source-badge--override")}>{overridden ? "Override" : "ENV"}</span>;
+}
+
+type StatusTone = "neutral" | "success" | "warn" | "danger";
+
+type StatusFact = {
+  label: string;
+  value: ReactNode;
+  tone?: StatusTone;
+};
+
+type StatusCheck = {
+  label: string;
+  value: ReactNode;
+  tone: StatusTone;
+  detail?: string;
+};
+
+type StatusTechnicalRow = {
+  label: string;
+  value: ReactNode;
+};
+
+type IntegrationStatusView = {
+  id: string;
+  title: string;
+  description: string;
+  statusLabel: string;
+  tone: StatusTone;
+  summary: string;
+  lastCheckedLabel: string;
+  badges: Array<{ label: string; tone?: StatusTone }>;
+  facts: StatusFact[];
+  healthChecks: StatusCheck[];
+  capabilities: StatusFact[];
+  credentials: Array<[string, string]>;
+  permissionSummary: string;
+  permissionBadges: Array<{ label: string; tone: "success" | "warn" | "neutral" }>;
+  attentionItems: Array<{ title: string; description: string; tone: "warn" | "danger" }>;
+  diagnosticRows: StatusTechnicalRow[];
+  technicalRows: StatusTechnicalRow[];
+  primaryActionSlot?: ReactNode;
+};
+
+function buildBotIntegrationView(readiness: AdminReadinessOut, onCopy: (value: string, label: string) => void): IntegrationStatusView {
+  const oauth = readiness.bot.oauth;
+  const authStatus = readiness.bot.auth_status;
+  const permissionTone = oauth.token.succeeded && oauth.token.roles.length ? "success" : oauth.token.succeeded ? "neutral" : "warn";
+  return {
+    id: "bot-framework",
+    title: "Bot Framework",
+    description: "Teams conversation delivery",
+    statusLabel: healthStateLabel(authStatus),
+    tone: authStatusTone(authStatus),
+    summary: readinessSummary(authStatus, readiness.bot.message, oauth),
+    lastCheckedLabel: oauth.token.checked ? "Checked this request" : "Not checked",
+    badges: [
+      { label: readiness.bot.enabled ? "Enabled" : "Disabled", tone: readiness.bot.enabled ? "success" : "neutral" },
+      { label: readiness.delivery_mode, tone: readiness.delivery_mode === "real" ? "success" : "neutral" },
+      {
+        label: readiness.bot.default_service_url_configured ? "Service URL set" : "No service URL",
+        tone: readiness.bot.default_service_url_configured ? "success" : "warn",
+      },
+    ],
+    facts: oauthFacts(oauth),
+    healthChecks: [
+      { label: "Feature policy", value: readiness.bot.enabled ? "Enabled" : "Disabled", tone: readiness.bot.enabled ? "success" : "neutral" },
+      { label: "App credentials", value: readiness.bot.credentials_configured ? "Configured" : "Missing", tone: readiness.bot.credentials_configured ? "success" : "warn" },
+      { label: "Token request", value: tokenFact(oauth), tone: oauth.token.succeeded ? "success" : oauth.token.checked ? "danger" : "neutral" },
+      {
+        label: "Default service URL",
+        value: readiness.bot.default_service_url_configured ? "Configured" : "Missing",
+        tone: readiness.bot.default_service_url_configured ? "success" : "warn",
+      },
+    ],
+    capabilities: [
+      { label: "Delivery mode", value: readiness.delivery_mode === "real" ? "Real sends" : "Mock mode", tone: readiness.delivery_mode === "real" ? "success" : "neutral" },
+      { label: "Message path", value: "Bot conversation" },
+      { label: "Scope", value: compactScope(oauth.scope || oauth.token.audience) },
+    ],
+    credentials: [
+      ["Tenant ID", credentialStatusLabel(readiness.bot.credential_fields.tenant_id)],
+      ["Client ID", credentialStatusLabel(readiness.bot.credential_fields.client_id)],
+      ["Client secret", credentialStatusLabel(readiness.bot.credential_fields.client_secret)],
+      ["Default service URL", credentialStatusLabel(readiness.bot.credential_fields.default_service_url)],
+    ],
+    permissionSummary: permissionSummary(oauth),
+    permissionBadges: oauthPermissionBadges(oauth, permissionTone),
+    attentionItems: readinessAttentionItems(authStatus, readiness.bot.message, oauth),
+    diagnosticRows: oauthDiagnosticRows(oauth),
+    technicalRows: oauthTechnicalRows(oauth, onCopy),
+  };
+}
+
+function buildGraphLookupIntegrationView(readiness: AdminReadinessOut, onCopy: (value: string, label: string) => void): IntegrationStatusView {
+  const oauth = readiness.graph_lookup.oauth;
+  const authStatus = readiness.graph_lookup.auth_status;
+  const permissionTone = oauth.token.succeeded && oauth.token.roles.length ? "success" : oauth.token.succeeded ? "neutral" : "warn";
+  return {
+    id: "graph-lookup",
+    title: "Graph lookup",
+    description: "Target discovery and names",
+    statusLabel: healthStateLabel(authStatus),
+    tone: authStatusTone(authStatus),
+    summary: readinessSummary(authStatus, readiness.graph_lookup.message, oauth),
+    lastCheckedLabel: oauth.token.checked ? "Checked this request" : "Not checked",
+    badges: [
+      { label: readiness.graph_lookup.enabled ? "Enabled" : "Disabled", tone: readiness.graph_lookup.enabled ? "success" : "neutral" },
+      {
+        label: graphCredentialLabel(readiness.graph_lookup.credential_source),
+        tone: readiness.graph_lookup.credential_source === "missing" ? "warn" : "neutral",
+      },
+    ],
+    facts: oauthFacts(oauth),
+    healthChecks: [
+      { label: "Feature policy", value: readiness.graph_lookup.enabled ? "Enabled" : "Disabled", tone: readiness.graph_lookup.enabled ? "success" : "neutral" },
+      { label: "App credentials", value: readiness.graph_lookup.configured ? "Configured" : "Missing", tone: readiness.graph_lookup.configured ? "success" : "warn" },
+      { label: "Token request", value: tokenFact(oauth), tone: oauth.token.succeeded ? "success" : oauth.token.checked ? "danger" : "neutral" },
+      { label: "Directory metadata", value: oauth.app.available || oauth.tenant.available ? "Available" : "Limited", tone: oauth.app.available || oauth.tenant.available ? "success" : "warn" },
+    ],
+    capabilities: [
+      { label: "Lookup mode", value: readiness.graph_lookup.enabled ? "Enabled" : "Disabled", tone: readiness.graph_lookup.enabled ? "success" : "neutral" },
+      { label: "Credentials", value: graphCredentialLabel(readiness.graph_lookup.credential_source), tone: readiness.graph_lookup.credential_source === "missing" ? "warn" : "neutral" },
+      { label: "Scope", value: compactScope(oauth.scope || oauth.token.audience) },
+    ],
+    credentials: [
+      ["Tenant ID", credentialStatusLabel(readiness.graph_lookup.credential_fields.tenant_id)],
+      ["Client ID", credentialStatusLabel(readiness.graph_lookup.credential_fields.client_id)],
+      ["Client secret", credentialStatusLabel(readiness.graph_lookup.credential_fields.client_secret)],
+    ],
+    permissionSummary: permissionSummary(oauth),
+    permissionBadges: oauthPermissionBadges(oauth, permissionTone),
+    attentionItems: readinessAttentionItems(authStatus, readiness.graph_lookup.message, oauth),
+    diagnosticRows: oauthDiagnosticRows(oauth),
+    technicalRows: oauthTechnicalRows(oauth, onCopy),
+  };
+}
+
+function buildGraphDeliveryIntegrationView(
+  readiness: AdminReadinessOut["graph_delivery"],
+  busy: boolean,
+  onConnect: () => void,
+  onDisconnect: () => void,
+  onCopy: (value: string, label: string) => void,
+): IntegrationStatusView {
   const serviceUser = readiness.service_user_display_name || readiness.service_user_principal_name || readiness.service_user_id || "-";
   const missingScopes = new Set(readiness.missing_scopes.map((scope) => scope.toLowerCase()));
-  const attentionItems = graphDeliveryAttentionItems(readiness);
+  return {
+    id: "graph-delivery",
+    title: "Graph delivery",
+    description: "Delegated Teams sends",
+    statusLabel: healthStateLabel(readiness.auth_status),
+    tone: authStatusTone(readiness.auth_status),
+    summary: graphDeliverySummary(readiness),
+    lastCheckedLabel: readiness.refresh_checked_at ? formatDateTime(readiness.refresh_checked_at) : readiness.token_checked ? "Checked this request" : "Not checked",
+    badges: [
+      { label: readiness.enabled ? "Enabled" : "Disabled", tone: readiness.enabled ? "success" : "neutral" },
+      {
+        label: readiness.credential_source === "delegated_service_user" ? "Service user connected" : "Not connected",
+        tone: readiness.credential_source === "delegated_service_user" ? "success" : readiness.enabled ? "warn" : "neutral",
+      },
+    ],
+    facts: [
+      {
+        label: "Token",
+        value: delegatedTokenFact(readiness),
+        tone: readiness.token_request_succeeded ? "success" : readiness.token_checked ? "danger" : "neutral",
+      },
+      {
+        label: "Expires",
+        value: readiness.access_token_expires_at ? formatRelativeTime(readiness.access_token_expires_at) : "-",
+        tone: readiness.access_token_expires_at ? "success" : "neutral",
+      },
+      { label: "Service user", value: serviceUser },
+      { label: "Last checked", value: readiness.refresh_checked_at ? formatDateTime(readiness.refresh_checked_at) : "Not checked" },
+    ],
+    healthChecks: [
+      { label: "Feature policy", value: readiness.enabled ? "Enabled" : "Disabled", tone: readiness.enabled ? "success" : "neutral" },
+      { label: "Service user", value: readiness.configured ? "Connected" : "Not connected", tone: readiness.configured ? "success" : readiness.enabled ? "warn" : "neutral" },
+      { label: "Token refresh", value: delegatedTokenFact(readiness), tone: readiness.token_request_succeeded ? "success" : readiness.token_checked ? "danger" : "neutral" },
+      {
+        label: "Required scopes",
+        value: readiness.missing_scopes.length ? `${readiness.missing_scopes.length} missing` : "Present",
+        tone: readiness.missing_scopes.length ? "warn" : "success",
+      },
+    ],
+    capabilities: [
+      { label: "Delivery mode", value: readiness.enabled ? "Available" : "Disabled", tone: readiness.enabled ? "success" : "neutral" },
+      { label: "Sender", value: serviceUser },
+      { label: "Token expires", value: readiness.access_token_expires_at ? formatRelativeTime(readiness.access_token_expires_at) : "-" },
+    ],
+    credentials: [
+      ["Tenant ID", readiness.tenant_id ? "Configured" : "Missing"],
+      ["Client ID", readiness.client_id ? "Configured" : "Missing"],
+      ["Service user", readiness.configured ? "Configured" : "Missing"],
+    ],
+    permissionSummary: graphDeliveryScopeSummary(readiness),
+    permissionBadges: readiness.required_scopes.map((scope) => ({
+      label: scope,
+      tone: missingScopes.has(scope.toLowerCase()) ? "warn" : "success",
+    })),
+    attentionItems: graphDeliveryAttentionItems(readiness),
+    primaryActionSlot: (
+      <GraphDeliveryActionBar
+        busy={busy}
+        configured={readiness.configured}
+        enabled={readiness.enabled}
+        onConnect={onConnect}
+        onDisconnect={onDisconnect}
+      />
+    ),
+    diagnosticRows: [
+      { label: "Credential source", value: readiness.credential_source || "missing" },
+      { label: "Refresh checked", value: readiness.refresh_checked_at ? formatDateTime(readiness.refresh_checked_at) : "Not checked" },
+      { label: "Token request", value: readiness.token_request_succeeded ? "Succeeded" : readiness.token_checked ? "Failed" : "Not checked" },
+      { label: "Missing scopes", value: readiness.missing_scopes.join(", ") || "-" },
+    ],
+    technicalRows: [
+      { label: "Tenant ID", value: <DiagnosticValue value={readiness.tenant_id} label="Tenant ID" onCopy={onCopy} /> },
+      { label: "Client ID", value: <DiagnosticValue value={readiness.client_id} label="Client ID" onCopy={onCopy} /> },
+      { label: "Service user ID", value: <DiagnosticValue value={readiness.service_user_id} label="Service user ID" onCopy={onCopy} /> },
+      { label: "Service user UPN", value: readiness.service_user_principal_name || "-" },
+      { label: "Granted scopes", value: readiness.scopes.join(", ") || "-" },
+      { label: "Missing scopes", value: readiness.missing_scopes.join(", ") || "-" },
+    ],
+  };
+}
+
+function oauthFacts(oauth: OAuthDiagnosticsOut): StatusFact[] {
+  return [
+    { label: "Token", value: tokenFact(oauth), tone: oauth.token.succeeded ? "success" : oauth.token.checked ? "danger" : "neutral" },
+    { label: "Expires", value: tokenExpirationShortLabel(oauth), tone: oauth.token.succeeded ? "success" : "neutral" },
+    { label: "Credentials", value: oauthCredentialSourceLabel(oauth.credential_source) },
+    { label: "Scope", value: compactScope(oauth.scope || oauth.token.audience) },
+  ];
+}
+
+function oauthPermissionBadges(oauth: OAuthDiagnosticsOut, fallbackTone: "success" | "warn" | "neutral") {
+  if (oauth.token.roles.length) {
+    return oauth.token.roles.map((role) => ({ label: role, tone: "success" as const }));
+  }
+  return [{ label: oauth.token.succeeded ? "No roles reported" : "Permissions not verified", tone: fallbackTone }];
+}
+
+function oauthDiagnosticRows(oauth: OAuthDiagnosticsOut): StatusTechnicalRow[] {
+  return [
+    { label: "Credential source", value: oauthCredentialSourceLabel(oauth.credential_source) },
+    { label: "Token checked", value: yesNo(oauth.token.checked) },
+    { label: "Token request", value: oauth.token.succeeded ? "Succeeded" : oauth.token.checked ? "Failed" : "Not checked" },
+    { label: "Token expires", value: tokenExpirationShortLabel(oauth) },
+    { label: "App metadata", value: oauth.app.metadata_checked ? (oauth.app.available ? "Available" : oauth.app.message || "Unavailable") : "Not checked" },
+    { label: "Tenant metadata", value: oauth.tenant.metadata_checked ? (oauth.tenant.available ? "Available" : oauth.tenant.message || "Unavailable") : "Not checked" },
+  ];
+}
+
+function oauthTechnicalRows(oauth: OAuthDiagnosticsOut, onCopy: (value: string, label: string) => void): StatusTechnicalRow[] {
+  return [
+    { label: "Tenant ID", value: <DiagnosticValue value={oauth.tenant_id} label="Tenant ID" onCopy={onCopy} /> },
+    { label: "Client ID", value: <DiagnosticValue value={oauth.client_id} label="Client ID" onCopy={onCopy} /> },
+    { label: "Audience", value: oauth.token.audience || "-" },
+    { label: "Issuer", value: oauth.token.issuer || "-" },
+    { label: "App name", value: oauth.app.display_name || "-" },
+    { label: "App ID", value: <DiagnosticValue value={oauth.app.app_id} label="App ID" onCopy={onCopy} /> },
+    { label: "Service principal", value: <DiagnosticValue value={oauth.app.service_principal_id} label="Service principal ID" onCopy={onCopy} /> },
+    { label: "Principal type", value: oauth.app.service_principal_type || "-" },
+    { label: "Account enabled", value: oauth.app.account_enabled === null ? "-" : yesNo(oauth.app.account_enabled) },
+    { label: "Tenant", value: oauth.tenant.display_name || "-" },
+    { label: "Primary domain", value: oauth.tenant.primary_domain || "-" },
+  ];
+}
+
+function RelayHealthHero({
+  integrations,
+  overallLabel,
+  overallTone,
+  readiness,
+}: {
+  integrations: IntegrationStatusView[];
+  overallLabel: string;
+  overallTone: StatusTone;
+  readiness: AdminReadinessOut;
+}) {
+  const tokenCount = integrations.filter((integration) => integration.facts.some((fact) => fact.label === "Token" && fact.tone === "success")).length;
+  const attentionItems = integrations.flatMap((integration) => integration.attentionItems);
+  const firstAction = attentionItems[0]?.title ?? (readiness.graph_delivery.configured ? "Monitor Messages" : "Connect service user");
 
   return (
-    <Card className="integration-readiness-card">
-      <div className="integration-card-content">
-        <div className="integration-status">
-          <div className="integration-status-main">
-            <div>
-              <p className="integration-kicker">Graph delivery</p>
-              <h2>Delegated Teams message delivery readiness.</h2>
-            </div>
-            <div className={classNames("health-state", `health-state--${authStatusTone(readiness.auth_status)}`)}>
-              <span aria-hidden="true" />
-              <strong>{healthStateLabel(readiness.auth_status)}</strong>
-            </div>
-            <p>{graphDeliverySummary(readiness)}</p>
-          </div>
-          <div className="integration-status-badges">
-            <StatusBadge label={authStatusLabel(readiness.auth_status)} tone={authStatusTone(readiness.auth_status)} />
-            <StatusBadge label={readiness.enabled ? "Enabled" : "Disabled"} tone={readiness.enabled ? "success" : "neutral"} />
-            <StatusBadge
-              label={readiness.credential_source === "delegated_service_user" ? "Delegated service user" : "Not connected"}
-              tone={readiness.credential_source === "delegated_service_user" ? "success" : readiness.enabled ? "warn" : "neutral"}
-            />
-          </div>
-          <div className="integration-card-actions">
-            <button className="secondary-button secondary-button--small" type="button" onClick={onConnect} disabled={busy || !readiness.enabled}>
-              {readiness.configured ? "Reconnect service user" : "Connect service user"}
-            </button>
-            {readiness.configured ? (
-              <button className="ghost-button ghost-button--small" type="button" onClick={onDisconnect} disabled={busy}>
-                Disconnect
-              </button>
-            ) : null}
-          </div>
+    <section className={classNames("status-relay-hero", `status-relay-hero--${overallTone}`)} aria-label="Relay health">
+      <div className="status-relay-hero-main">
+        <div className={classNames("status-relay-indicator", `status-relay-indicator--${overallTone}`)} aria-hidden="true" />
+        <div>
+          <p className="integration-kicker">Relay health</p>
+          <h2>{overallLabel === "Ready" ? "Relay is ready to deliver messages" : overallLabel === "Attention" ? "Relay needs operator attention" : "Relay delivery is degraded"}</h2>
+          <p>
+            {overallTone === "success"
+              ? "All configured relay paths report usable readiness."
+              : "One or more relay checks need review before production delivery can be trusted."}
+          </p>
         </div>
-
-        <section className="settings-subsection">
-          <div className="settings-subsection-header">
-            <h3>Operational status</h3>
-          </div>
-          <dl className="settings-kv-list">
-            <KeyValue label="Token" tone={readiness.token_request_succeeded ? "success" : readiness.token_checked ? "danger" : "neutral"}>
-              {delegatedTokenFact(readiness)}
-            </KeyValue>
-            <KeyValue label="Token expires" tone={readiness.access_token_expires_at ? "success" : "neutral"}>
-              {readiness.access_token_expires_at ? `${formatRelativeTime(readiness.access_token_expires_at)} (${formatDateTime(readiness.access_token_expires_at)})` : "-"}
-            </KeyValue>
-            <KeyValue label="Last checked">{readiness.refresh_checked_at ? formatDateTime(readiness.refresh_checked_at) : "Not checked"}</KeyValue>
-            <KeyValue label="Service user">{serviceUser}</KeyValue>
-          </dl>
-          <p className="settings-override-hint">Graph delivery messages appear in Teams as the connected service user.</p>
-        </section>
-
-        <section className="settings-subsection">
-          <div className="settings-subsection-header">
-            <h3>Delegated scopes</h3>
-            <p>{graphDeliveryScopeSummary(readiness)}</p>
-          </div>
-          <div className="permission-badge-list">
-            {readiness.required_scopes.map((scope) => (
-              <span
-                className={classNames("permission-badge", missingScopes.has(scope.toLowerCase()) ? "permission-badge--warn" : "permission-badge--success")}
-                key={scope}
-              >
-                {scope}
-              </span>
-            ))}
-          </div>
-        </section>
-
-        {attentionItems.length ? (
-          <section className="settings-subsection">
-            <div className="settings-subsection-header">
-              <h3>Needs attention</h3>
-            </div>
-            <ul className="attention-list">
-              {attentionItems.map((item) => (
-                <li className={classNames("attention-item", `attention-item--${item.tone}`)} key={item.title}>
-                  <strong>{item.title}</strong>
-                  <span>{item.description}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
-
-        <details className="advanced-details">
-          <summary>
-            <span>Advanced technical details</span>
-            <small>Delegated account, IDs and scope state</small>
-          </summary>
-          <dl className="definition-list definition-list--compact advanced-definition-list">
-            <dt>Tenant ID</dt>
-            <dd>
-              <DiagnosticValue value={readiness.tenant_id} label="Tenant ID" onCopy={onCopy} />
-            </dd>
-            <dt>Client ID</dt>
-            <dd>
-              <DiagnosticValue value={readiness.client_id} label="Client ID" onCopy={onCopy} />
-            </dd>
-            <dt>Service user ID</dt>
-            <dd>
-              <DiagnosticValue value={readiness.service_user_id} label="Service user ID" onCopy={onCopy} />
-            </dd>
-            <dt>Service user UPN</dt>
-            <dd>{readiness.service_user_principal_name || "-"}</dd>
-            <dt>Granted scopes</dt>
-            <dd>{readiness.scopes.join(", ") || "-"}</dd>
-            <dt>Missing scopes</dt>
-            <dd>{readiness.missing_scopes.join(", ") || "-"}</dd>
-          </dl>
-        </details>
       </div>
-    </Card>
+      <div className="status-relay-metrics">
+        <StatusOverviewMetric label="Overall" value={overallLabel} detail={overallTone === "success" ? "No active blockers." : "Review pipeline details."} tone={overallTone} />
+        <StatusOverviewMetric
+          label="Delivery"
+          value={readiness.delivery_mode === "real" ? "Real sends" : "Mock mode"}
+          detail={readiness.delivery_mode === "real" ? "Messages can reach Teams." : "Delivery is simulated."}
+          tone={readiness.delivery_mode === "real" ? "success" : "neutral"}
+        />
+        <StatusOverviewMetric
+          label="Tokens"
+          value={`${tokenCount}/${integrations.length} valid`}
+          detail="Bot, lookup and delegated checks."
+          tone={tokenCount === integrations.length ? "success" : tokenCount > 0 ? "warn" : "danger"}
+        />
+        <StatusOverviewMetric
+          label="Next"
+          value={attentionItems.length ? `${attentionItems.length} issue${attentionItems.length === 1 ? "" : "s"}` : "No blockers"}
+          detail={firstAction}
+          tone={attentionItems.length ? (attentionItems.some((item) => item.tone === "danger") ? "danger" : "warn") : "success"}
+        />
+      </div>
+    </section>
   );
 }
 
-function IntegrationReadinessCard({
-  authStatus,
-  badges,
-  credentialRows,
-  description,
-  message,
-  oauth,
-  onCopy,
-  title,
+function RelayPipelineLayout({
+  integrations,
+  onSelectComponent,
+  selectedComponentId,
+  selectedIntegration,
 }: {
-  authStatus: string;
-  badges: Array<{ label: string; tone?: "neutral" | "success" | "warn" | "danger" }>;
-  credentialRows: Array<[string, string]>;
-  description: string;
-  message: string;
-  oauth: OAuthDiagnosticsOut;
-  onCopy: (value: string, label: string) => void;
-  title: string;
+  integrations: IntegrationStatusView[];
+  onSelectComponent: (componentId: string) => void;
+  selectedComponentId: string;
+  selectedIntegration: IntegrationStatusView | null;
 }) {
-  const attentionItems = readinessAttentionItems(authStatus, message, oauth);
-  const permissionTone = oauth.token.succeeded && oauth.token.roles.length ? "success" : oauth.token.succeeded ? "neutral" : "warn";
-
   return (
-    <Card className="integration-readiness-card">
-      <div className="integration-card-content">
-        <div className="integration-status">
-          <div className="integration-status-main">
-            <div>
-              <p className="integration-kicker">{title}</p>
-              <h2>{description}</h2>
-            </div>
-            <div className={classNames("health-state", `health-state--${authStatusTone(authStatus)}`)}>
-              <span aria-hidden="true" />
-              <strong>{healthStateLabel(authStatus)}</strong>
-            </div>
-            <p>{readinessSummary(authStatus, message, oauth)}</p>
+    <section className="status-master-detail" aria-label="Delivery pipeline status">
+      <div className="status-master-pane">
+        <div className="status-pane-header">
+          <div>
+            <p className="integration-kicker">Delivery pipeline</p>
+            <h2>Components</h2>
           </div>
-          <div className="integration-status-badges">
-            <StatusBadge label={authStatusLabel(authStatus)} tone={authStatusTone(authStatus)} />
-            {badges.map((badge) => (
-              <StatusBadge key={badge.label} label={badge.label} tone={badge.tone ?? "neutral"} />
-            ))}
-          </div>
+          <span>{integrations.length} checks</span>
         </div>
+        <ComponentList integrations={integrations} onSelectComponent={onSelectComponent} selectedComponentId={selectedComponentId} />
+      </div>
+      <ComponentDetailPane integration={selectedIntegration} />
+    </section>
+  );
+}
 
-        <section className="settings-subsection">
-          <div className="settings-subsection-header">
-            <h3>Operational status</h3>
-          </div>
-          <dl className="settings-kv-list">
-            <KeyValue label="Token" tone={oauth.token.succeeded ? "success" : oauth.token.checked ? "danger" : "neutral"}>
-              {tokenFact(oauth)}
-            </KeyValue>
-            <KeyValue label="Token expires" tone={oauth.token.succeeded ? "success" : "neutral"}>
-              {tokenExpirationLabel(oauth)}
-            </KeyValue>
-            <KeyValue label="Credential source">{oauthCredentialSourceLabel(oauth.credential_source)}</KeyValue>
-            <KeyValue label="Scope">{compactScope(oauth.scope || oauth.token.audience)}</KeyValue>
-          </dl>
+function ComponentList({
+  integrations,
+  onSelectComponent,
+  selectedComponentId,
+}: {
+  integrations: IntegrationStatusView[];
+  onSelectComponent: (componentId: string) => void;
+  selectedComponentId: string;
+}) {
+  return (
+    <div className="status-component-list" role="list">
+      {integrations.map((integration) => {
+        const topIssue = integration.attentionItems[0];
+        const tokenFact = integration.facts.find((fact) => fact.label === "Token");
+        return (
+          <button
+            aria-pressed={selectedComponentId === integration.id}
+            className={classNames("status-component-row", `status-component-row--${integration.tone}`, selectedComponentId === integration.id && "status-component-row--selected")}
+            key={integration.id}
+            onClick={() => onSelectComponent(integration.id)}
+            type="button"
+          >
+            <span className={classNames("status-dot", `status-dot--${integration.tone}`)} aria-hidden="true" />
+            <span className="status-component-row-main">
+              <span className="status-component-row-title">
+                <strong>{integration.title}</strong>
+                <small>{integration.statusLabel}</small>
+              </span>
+              <span>{topIssue ? topIssue.title : integration.summary}</span>
+            </span>
+            <span className="status-component-row-meta">
+              <span>{tokenFact ? tokenFact.value : "Token unknown"}</span>
+              <span>{integration.lastCheckedLabel}</span>
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ComponentDetailPane({ integration }: { integration: IntegrationStatusView | null }) {
+  if (!integration) return null;
+  return (
+    <aside className="status-detail-pane" aria-label={`${integration.title} details`}>
+      <div className="status-detail-header">
+        <div>
+          <p className="integration-kicker">Selected component</p>
+          <h2>{integration.title}</h2>
+          <p>{integration.description}</p>
+        </div>
+        <div className={classNames("status-health-pill", `status-health-pill--${integration.tone}`)}>
+          <span aria-hidden="true" />
+          <strong>{integration.statusLabel}</strong>
+        </div>
+      </div>
+
+      {integration.attentionItems.length ? (
+        <div className={classNames("status-detail-alert", `status-detail-alert--${integration.attentionItems[0].tone}`)}>
+          <strong>{integration.attentionItems[0].title}</strong>
+          <span>{integration.attentionItems[0].description}</span>
+        </div>
+      ) : null}
+
+      <section className="status-detail-section">
+        <h3>Overview</h3>
+        <p>{integration.summary}</p>
+        <StatusFactList facts={integration.facts} />
+      </section>
+
+      <section className="status-detail-section">
+        <h3>Health checks</h3>
+        <StatusCheckList checks={integration.healthChecks} />
+      </section>
+
+      <section className="status-detail-section">
+        <h3>Capabilities</h3>
+        <StatusFactList facts={integration.capabilities} />
+      </section>
+
+      {integration.primaryActionSlot ? (
+        <section className="status-detail-section">
+          <h3>Actions</h3>
+          <div className="status-detail-actions">{integration.primaryActionSlot}</div>
         </section>
+      ) : null}
 
-        <section className="settings-subsection">
-          <div className="settings-subsection-header">
-            <h3>Credentials</h3>
-          </div>
+      <details className="status-detail-disclosure">
+        <summary>
+          <span>Diagnostics</span>
+          <small>Credentials, permissions and check output</small>
+        </summary>
+        <div className="status-detail-disclosure-body">
           <div className="credential-check-grid">
-            {credentialRows.map(([label, value]) => (
+            {integration.credentials.map(([label, value]) => (
               <CredentialCheck key={label} label={label} value={value} />
             ))}
           </div>
-        </section>
-
-        <section className="settings-subsection">
-          <div className="settings-subsection-header">
-            <h3>Permissions</h3>
-            <p>{permissionSummary(oauth)}</p>
-          </div>
+          <p>{integration.permissionSummary}</p>
           <div className="permission-badge-list">
-            {oauth.token.roles.length ? (
-              oauth.token.roles.map((role) => (
-                <span className="permission-badge permission-badge--success" key={role}>
-                  {role}
-                </span>
-              ))
-            ) : (
-              <span className={classNames("permission-badge", `permission-badge--${permissionTone}`)}>
-                {oauth.token.succeeded ? "No roles reported" : "Permissions not verified"}
+            {integration.permissionBadges.map((badge) => (
+              <span className={classNames("permission-badge", `permission-badge--${badge.tone}`)} key={badge.label}>
+                {badge.label}
               </span>
-            )}
+            ))}
           </div>
-        </section>
-
-        {attentionItems.length ? (
-          <section className="settings-subsection">
-            <div className="settings-subsection-header">
-              <h3>Needs attention</h3>
-            </div>
-            <ul className="attention-list">
-              {attentionItems.map((item) => (
-                <li className={classNames("attention-item", `attention-item--${item.tone}`)} key={item.title}>
-                  <strong>{item.title}</strong>
-                  <span>{item.description}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
-
-        <details className="advanced-details">
-          <summary>
-            <span>Advanced technical details</span>
-            <small>IDs, claims and directory metadata</small>
-          </summary>
           <dl className="definition-list definition-list--compact advanced-definition-list">
-            <dt>Tenant ID</dt>
-            <dd>
-              <DiagnosticValue value={oauth.tenant_id} label="Tenant ID" onCopy={onCopy} />
-            </dd>
-            <dt>Client ID</dt>
-            <dd>
-              <DiagnosticValue value={oauth.client_id} label="Client ID" onCopy={onCopy} />
-            </dd>
-            <dt>Audience</dt>
-            <dd>{oauth.token.audience || "-"}</dd>
-            <dt>Issuer</dt>
-            <dd>{oauth.token.issuer || "-"}</dd>
-            <dt>App name</dt>
-            <dd>{oauth.app.display_name || "-"}</dd>
-            <dt>App ID</dt>
-            <dd>
-              <DiagnosticValue value={oauth.app.app_id} label="App ID" onCopy={onCopy} />
-            </dd>
-            <dt>Service principal</dt>
-            <dd>
-              <DiagnosticValue value={oauth.app.service_principal_id} label="Service principal ID" onCopy={onCopy} />
-            </dd>
-            <dt>Principal type</dt>
-            <dd>{oauth.app.service_principal_type || "-"}</dd>
-            <dt>Account enabled</dt>
-            <dd>{oauth.app.account_enabled === null ? "-" : yesNo(oauth.app.account_enabled)}</dd>
-            <dt>Tenant</dt>
-            <dd>{oauth.tenant.display_name || "-"}</dd>
-            <dt>Primary domain</dt>
-            <dd>{oauth.tenant.primary_domain || "-"}</dd>
+            {integration.diagnosticRows.map((row) => (
+              <FragmentPair key={row.label} label={row.label} value={row.value} />
+            ))}
           </dl>
-        </details>
-      </div>
+        </div>
+      </details>
+
+      <details className="status-detail-disclosure">
+        <summary>
+          <span>Technical information</span>
+          <small>IDs, claims and copyable values</small>
+        </summary>
+        <div className="status-detail-disclosure-body">
+          <dl className="definition-list definition-list--compact advanced-definition-list">
+            {integration.technicalRows.map((row) => (
+              <FragmentPair key={row.label} label={row.label} value={row.value} />
+            ))}
+          </dl>
+        </div>
+      </details>
+    </aside>
+  );
+}
+
+function StatusCheckList({ checks }: { checks: StatusCheck[] }) {
+  return (
+    <div className="status-check-list">
+      {checks.map((check) => (
+        <div className="status-check-row" key={check.label}>
+          <span className={classNames("status-dot", `status-dot--${check.tone}`)} aria-hidden="true" />
+          <span>
+            <strong>{check.label}</strong>
+            {check.detail ? <small>{check.detail}</small> : null}
+          </span>
+          <em>{check.value}</em>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function StatusFactList({ facts }: { facts: StatusFact[] }) {
+  return (
+    <dl className="status-detail-facts">
+      {facts.map((fact) => (
+        <FragmentPair
+          key={fact.label}
+          label={fact.label}
+          value={<span className={classNames("status-detail-fact-value", fact.tone && fact.tone !== "neutral" && `status-detail-fact-value--${fact.tone}`)}>{fact.value}</span>}
+        />
+      ))}
+    </dl>
+  );
+}
+
+function StatusOverviewMetric({
+  detail,
+  label,
+  tone = "neutral",
+  value,
+}: {
+  detail: string;
+  label: string;
+  tone?: StatusTone;
+  value: string;
+}) {
+  return (
+    <div className={classNames("status-overview-item", tone !== "neutral" && `status-overview-item--${tone}`)}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <p>{detail}</p>
+    </div>
+  );
+}
+
+function FragmentPair({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <>
+      <dt>{label}</dt>
+      <dd>{value}</dd>
+    </>
+  );
+}
+
+function GraphDeliveryActionBar({
+  busy,
+  configured,
+  enabled,
+  onConnect,
+  onDisconnect,
+}: {
+  busy: boolean;
+  configured: boolean;
+  enabled: boolean;
+  onConnect: () => void;
+  onDisconnect: () => void;
+}) {
+  return (
+    <div className="graph-delivery-action-bar">
+      <button className="secondary-button secondary-button--small" type="button" onClick={onConnect} disabled={busy || !enabled}>
+        {configured ? "Reconnect service user" : "Connect service user"}
+      </button>
+      {configured ? (
+        <button className="ghost-button ghost-button--small" type="button" onClick={onDisconnect} disabled={busy}>
+          Disconnect
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function RuntimeSnapshotCard({ onCopy, readiness }: { onCopy: (value: string, label: string) => void; readiness: AdminReadinessOut }) {
+  return (
+    <Card className="status-context-card" title="Runtime snapshot" description="Effective values used by relay operations.">
+      <dl className="status-runtime-list">
+        <dt>Application</dt>
+        <dd>
+          {readiness.app_name} {readiness.app_version}
+        </dd>
+        <dt>Public URL</dt>
+        <dd>
+          <CopyInlineValue label="Public URL" onCopy={onCopy} value={readiness.runtime.app_public_base_url} />
+        </dd>
+        <dt>Frontend URL</dt>
+        <dd>
+          <CopyInlineValue label="Frontend URL" onCopy={onCopy} value={readiness.runtime.frontend_base_url} />
+        </dd>
+        <dt>CORS origins</dt>
+        <dd>{readiness.runtime.cors_origins.join(", ") || "-"}</dd>
+        <dt>Payload limit</dt>
+        <dd>{formatBytes(readiness.runtime.webhook_max_payload_bytes)}</dd>
+        <dt>Log retention</dt>
+        <dd>{readiness.runtime.log_retention_days} days</dd>
+        <dt>Cleanup interval</dt>
+        <dd>{readiness.runtime.log_cleanup_interval_minutes} minutes</dd>
+        <dt>Secure session cookie</dt>
+        <dd>{yesNo(readiness.runtime.session_secure_cookie)}</dd>
+      </dl>
     </Card>
   );
 }
 
-function KeyValue({
-  children,
-  label,
-  tone = "neutral",
-}: {
-  children: ReactNode;
-  label: string;
-  tone?: "neutral" | "success" | "warn" | "danger";
-}) {
+function CopyInlineValue({ label, onCopy, value }: { label: string; onCopy: (value: string, label: string) => void; value: string }) {
+  if (!value) return <>-</>;
   return (
-    <>
-      <dt>{label}</dt>
-      <dd className={classNames("settings-kv-value", tone !== "neutral" && `settings-kv-value--${tone}`)}>
-        <span aria-hidden="true" />
-        <strong>{children}</strong>
-      </dd>
-    </>
+    <span className="copy-inline-value">
+      <code>{value}</code>
+      <button className="icon-button icon-button--tiny" type="button" onClick={() => onCopy(value, label)} aria-label={`Copy ${label}`} title={`Copy ${label}`}>
+        <ClipboardCopy aria-hidden="true" focusable="false" />
+      </button>
+    </span>
   );
 }
 
@@ -3831,11 +4800,11 @@ function tokenFact(oauth: OAuthDiagnosticsOut): string {
   return `Valid ${formatRelativeTime(oauth.token.expires_at)}`;
 }
 
-function tokenExpirationLabel(oauth: OAuthDiagnosticsOut): string {
+function tokenExpirationShortLabel(oauth: OAuthDiagnosticsOut): string {
   if (!oauth.token.checked) return "Not checked";
   if (!oauth.token.succeeded) return "Unavailable";
   if (!oauth.token.expires_at) return "Not provided";
-  return `${formatRelativeTime(oauth.token.expires_at)} (${formatDateTime(oauth.token.expires_at)})`;
+  return formatRelativeTime(oauth.token.expires_at);
 }
 
 function readinessSummary(authStatus: string, message: string, oauth: OAuthDiagnosticsOut): string {
@@ -3903,18 +4872,6 @@ function oauthCredentialSourceLabel(source: string): string {
 function credentialStatusLabel(status?: string): string {
   if (status === "configured") return "Configured";
   return "Missing";
-}
-
-function authStatusLabel(status: string): string {
-  if (status === "disabled") return "Disabled";
-  if (status === "mock") return "Mock mode";
-  if (status === "ready") return "Ready";
-  if (status === "missing") return "Not connected";
-  if (status === "expired") return "Connection expired";
-  if (status === "permission_warning") return "Ready with permission warning";
-  if (status === "token_error") return "Token request failed";
-  if (status === "incomplete") return "Incomplete configuration";
-  return "Unknown";
 }
 
 function authStatusTone(status: string): "neutral" | "success" | "warn" | "danger" {
