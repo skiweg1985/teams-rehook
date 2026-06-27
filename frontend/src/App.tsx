@@ -1520,6 +1520,7 @@ function WebhooksPage() {
             </div>,
             <div className="stacked-cell">
               <strong>{route.target_name}</strong>
+              <small>{deliveryBackendLabel(route.delivery_backend)}</small>
               <GraphTargetSummary
                 kind={route.graph_target_kind}
                 targetName={route.target_name}
@@ -1906,6 +1907,7 @@ function emptyWebhookRoute(botDefaultServiceUrl = ""): WebhookRouteOut {
     organization_id: "",
     name: "",
     is_active: true,
+    delivery_backend: "bot_framework",
     target_type: "bot_conversation",
     target_name: "",
     bot_service_url: botDefaultServiceUrl,
@@ -1958,6 +1960,7 @@ function WebhookRouteModal({
   const { session, notify } = useAppContext();
   const [name, setName] = useState(initial.name);
   const [isActive, setIsActive] = useState(initial.is_active);
+  const [deliveryBackend] = useState(initial.delivery_backend);
   const [targetName, setTargetName] = useState(initial.target_name);
   const [botServiceUrl, setBotServiceUrl] = useState(initial.bot_service_url);
   const [botConversationId, setBotConversationId] = useState(initial.bot_conversation_id);
@@ -2035,6 +2038,7 @@ function WebhookRouteModal({
     const body = {
       name: name.trim(),
       is_active: isActive,
+      delivery_backend: deliveryBackend,
       target_type: "bot_conversation" as const,
       target_name: targetName.trim(),
       bot_service_url: botServiceUrl.trim(),
@@ -2295,12 +2299,13 @@ function WebhookDeliveryLogsModal({ route, onClose }: { route: WebhookRouteOut; 
       </div>
       <div className="delivery-log-layout">
         <DataTable
-          columns={["Status", "Time", "Message", "Payload", "Mode", "Error"]}
+          columns={["Status", "Time", "Message", "Payload", "Backend", "Mode", "Error"]}
           rows={events.map((event) => [
             <DeliveryEventStatusBadge status={event.status} />,
             formatDateTime(event.created_at),
             <span>{eventTitle(event)}</span>,
             <span className="muted">{eventPayloadType(event)}</span>,
+            <span className="muted">{eventDeliveryBackend(event)}</span>,
             <span className="muted">{eventDeliveryMode(event)}</span>,
             event.error ? <span className="form-error">{event.error}</span> : <span className="muted">-</span>,
           ])}
@@ -2344,6 +2349,8 @@ function DeliveryEventDetails({ event }: { event: WebhookDeliveryEventOut & Part
         <dd>{event.route_name || (event.route_id ? shortId(event.route_id) : "-")}</dd>
         <dt>Target</dt>
         <dd>{event.target_name || "-"}</dd>
+        <dt>Backend</dt>
+        <dd>{eventDeliveryBackend(event)}</dd>
         <dt>Mode</dt>
         <dd>{stringField(deliveryResult, "mode")}</dd>
         <dt>Status code</dt>
@@ -2430,9 +2437,24 @@ function eventDeliveryMode(event: WebhookDeliveryEventOut): string {
   return typeof statusCode === "number" ? `${modeText} / ${statusCode}` : modeText;
 }
 
+function eventDeliveryBackend(event: WebhookDeliveryEventOut): string {
+  const backend = event.delivery_result.backend;
+  return typeof backend === "string" && backend.trim() ? deliveryBackendLabel(backend) : "-";
+}
+
 function deliverySummaryMode(event: WebhookDeliveryEventSummaryOut): string {
   const mode = event.delivery_mode || "-";
   return typeof event.status_code === "number" ? `${mode} / ${event.status_code}` : mode;
+}
+
+function deliverySummaryBackend(event: WebhookDeliveryEventSummaryOut): string {
+  return event.delivery_backend ? deliveryBackendLabel(event.delivery_backend) : "-";
+}
+
+function deliveryBackendLabel(backend: string): string {
+  if (backend === "bot_framework") return "Bot Framework";
+  if (backend === "graph") return "Microsoft Graph";
+  return backend || "-";
 }
 
 function UsersPage() {
@@ -3356,7 +3378,7 @@ function MessageLogsPage() {
         </div>
         <div className="logs-list-panel">
           <DataTable
-            columns={["Status", "Time", "Route", "Message", "Mode", "Error"]}
+            columns={["Status", "Time", "Route", "Message", "Backend", "Mode", "Error"]}
             rows={deliveryEvents.map((event) => [
               <DeliveryEventStatusBadge status={event.status} />,
               formatDateTime(event.created_at),
@@ -3368,6 +3390,7 @@ function MessageLogsPage() {
                 <span>{event.title || "-"}</span>
                 <span className="muted">{event.payload_type || "-"}</span>
               </div>,
+              <span className="muted">{deliverySummaryBackend(event)}</span>,
               <span className="muted">{deliverySummaryMode(event)}</span>,
               event.error ? <span className="form-error">{event.error}</span> : <span className="muted">-</span>,
             ])}

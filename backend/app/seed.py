@@ -233,6 +233,7 @@ def _ensure_additive_schema() -> None:
     table_columns = {
         "webhook_routes": {
             "route_token": "TEXT DEFAULT '' NOT NULL",
+            "delivery_backend": "VARCHAR(32) DEFAULT 'bot_framework' NOT NULL",
             "graph_target_kind": "VARCHAR(32) DEFAULT '' NOT NULL",
             "graph_target_id": "TEXT DEFAULT '' NOT NULL",
             "graph_team_id": "TEXT DEFAULT '' NOT NULL",

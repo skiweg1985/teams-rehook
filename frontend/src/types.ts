@@ -62,6 +62,7 @@ export type SystemLogEventOut = {
 };
 
 export type WebhookTargetType = "bot_conversation";
+export type DeliveryBackend = "bot_framework" | "graph";
 export type GraphTargetKind = "user" | "team" | "channel";
 
 export type WebhookRouteOut = {
@@ -69,6 +70,7 @@ export type WebhookRouteOut = {
   organization_id: string;
   name: string;
   is_active: boolean;
+  delivery_backend: DeliveryBackend;
   target_type: WebhookTargetType;
   target_name: string;
   bot_service_url: string;
@@ -92,6 +94,7 @@ export type WebhookRouteOut = {
 export type WebhookRouteCreate = {
   name: string;
   is_active: boolean;
+  delivery_backend?: DeliveryBackend;
   target_type: WebhookTargetType;
   target_name: string;
   bot_service_url: string;
@@ -154,6 +157,7 @@ export type WebhookDeliveryEventSummaryOut = {
   status: WebhookDeliveryStatus;
   title: string;
   payload_type: string;
+  delivery_backend: string;
   delivery_mode: string;
   status_code: number | null;
   error: string;

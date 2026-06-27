@@ -36,6 +36,8 @@ from app.services.webhook_payloads import NormalizedMessage, WebhookPayloadError
 router = APIRouter(tags=["webhook-routes"])
 
 DeliveryStatusFilter = Literal["delivered", "failed", "rejected"]
+DELIVERY_BACKEND_BOT = "bot_framework"
+DELIVERY_BACKEND_GRAPH = "graph"
 
 
 @router.get("/webhook-routes", response_model=list[WebhookRouteOut])
@@ -73,6 +75,7 @@ def create_webhook_route(
         is_active=payload.is_active,
         route_token_hash=lookup_secret_hash(route_token),
         route_token=route_token,
+        delivery_backend=payload.delivery_backend,
         target_type=payload.target_type,
         target_name=payload.target_name.strip(),
         bot_service_url=payload.bot_service_url.strip(),
@@ -117,6 +120,8 @@ def update_webhook_route(
         route.name = payload.name.strip()
     if payload.is_active is not None:
         route.is_active = payload.is_active
+    if payload.delivery_backend is not None:
+        route.delivery_backend = payload.delivery_backend
     if payload.target_type is not None:
         route.target_type = payload.target_type
     if payload.target_name is not None:
@@ -491,11 +496,14 @@ def _get_org_route(db: Session, organization_id: str, route_id: str) -> WebhookR
 
 
 def _validate_target(route: WebhookRoute) -> None:
+    backend = _route_delivery_backend(route)
+    if backend not in {DELIVERY_BACKEND_BOT, DELIVERY_BACKEND_GRAPH}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported delivery backend")
     if route.target_type != "bot_conversation":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported target type")
     if not route.target_name.strip():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Target name is required")
-    if not route.bot_service_url.strip() or not route.bot_conversation_id.strip():
+    if backend == DELIVERY_BACKEND_BOT and (not route.bot_service_url.strip() or not route.bot_conversation_id.strip()):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Bot service URL and conversation ID are required")
 
 
@@ -506,12 +514,33 @@ def _deliver_to_route(
     *,
     request_metadata: dict,
 ) -> WebhookDeliveryEvent:
+    backend = _route_delivery_backend(route)
+    if backend == DELIVERY_BACKEND_GRAPH:
+        return _record_failed_delivery(
+            db,
+            route,
+            message,
+            request_metadata,
+            "Graph delivery is not implemented yet",
+            delivery_result={"backend": DELIVERY_BACKEND_GRAPH},
+        )
+    if backend != DELIVERY_BACKEND_BOT:
+        return _record_failed_delivery(
+            db,
+            route,
+            message,
+            request_metadata,
+            f"Unsupported delivery backend: {backend}",
+            delivery_result={"backend": backend},
+        )
     try:
         result = send_bot_activity(
             service_url=route.bot_service_url,
             conversation_id=route.bot_conversation_id,
             message=message,
         )
+        delivery_result = result.to_dict()
+        delivery_result["backend"] = DELIVERY_BACKEND_BOT
         route.last_delivery_status = "delivered"
         route.last_delivery_at = utcnow()
         return _record_event(
@@ -521,20 +550,40 @@ def _deliver_to_route(
             status_value="delivered",
             request_metadata=request_metadata,
             normalized_message=message.to_dict(),
-            delivery_result=result.to_dict(),
+            delivery_result=delivery_result,
         )
     except BotDeliveryError as exc:
-        route.last_delivery_status = "failed"
-        route.last_delivery_at = utcnow()
-        return _record_event(
+        return _record_failed_delivery(
             db,
-            route=route,
-            route_token_hash=route.route_token_hash,
-            status_value="failed",
-            request_metadata=request_metadata,
-            normalized_message=message.to_dict(),
-            error=str(exc),
+            route,
+            message,
+            request_metadata,
+            str(exc),
+            delivery_result={"backend": DELIVERY_BACKEND_BOT},
         )
+
+
+def _record_failed_delivery(
+    db: Session,
+    route: WebhookRoute,
+    message: NormalizedMessage,
+    request_metadata: dict,
+    error: str,
+    *,
+    delivery_result: dict,
+) -> WebhookDeliveryEvent:
+    route.last_delivery_status = "failed"
+    route.last_delivery_at = utcnow()
+    return _record_event(
+        db,
+        route=route,
+        route_token_hash=route.route_token_hash,
+        status_value="failed",
+        request_metadata=request_metadata,
+        normalized_message=message.to_dict(),
+        delivery_result=delivery_result,
+        error=error,
+    )
 
 
 def _record_event(
@@ -606,6 +655,7 @@ def _route_out(
         "organization_id": route.organization_id,
         "name": route.name,
         "is_active": route.is_active,
+        "delivery_backend": _route_delivery_backend(route),
         "target_type": route.target_type,
         "target_name": route.target_name,
         "bot_service_url": route.bot_service_url,
@@ -654,6 +704,7 @@ def _delivery_event_summary_out(event: WebhookDeliveryEvent, route: WebhookRoute
         status=event.status,
         title=_string_value(normalized_message, "title"),
         payload_type=_string_value(normalized_message, "raw_type"),
+        delivery_backend=_string_value(delivery_result, "backend") or (_route_delivery_backend(route) if route else ""),
         delivery_mode=_string_value(delivery_result, "mode"),
         status_code=_int_value(delivery_result, "status_code"),
         error=event.error,
@@ -678,6 +729,11 @@ def _string_value(record: dict, key: str) -> str:
 def _int_value(record: dict, key: str) -> int | None:
     value = record.get(key)
     return value if isinstance(value, int) else None
+
+
+def _route_delivery_backend(route: WebhookRoute) -> str:
+    value = route.delivery_backend.strip() if isinstance(route.delivery_backend, str) else ""
+    return value or DELIVERY_BACKEND_BOT
 
 
 def _build_webhook_url(route_token: str) -> str:

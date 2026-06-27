@@ -63,6 +63,7 @@ class SystemLogEventOut(BaseModel):
 
 
 GraphTargetKind = Literal["user", "team", "channel"]
+DeliveryBackend = Literal["bot_framework", "graph"]
 WebhookTargetType = Literal["bot_conversation"]
 WebhookRouteStatus = Literal["delivered", "failed", "rejected"]
 
@@ -70,10 +71,11 @@ WebhookRouteStatus = Literal["delivered", "failed", "rejected"]
 class WebhookRouteBase(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     is_active: bool = True
+    delivery_backend: DeliveryBackend = "bot_framework"
     target_type: WebhookTargetType = "bot_conversation"
     target_name: str = Field(min_length=1, max_length=200)
-    bot_service_url: str = Field(min_length=1, max_length=2000)
-    bot_conversation_id: str = Field(min_length=1, max_length=2000)
+    bot_service_url: str = Field(default="", max_length=2000)
+    bot_conversation_id: str = Field(default="", max_length=2000)
     graph_target_kind: GraphTargetKind | None = None
     graph_target_id: str = Field(default="", max_length=2000)
     graph_team_id: str = Field(default="", max_length=2000)
@@ -89,10 +91,11 @@ class WebhookRouteCreate(WebhookRouteBase):
 class WebhookRouteUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     is_active: bool | None = None
+    delivery_backend: DeliveryBackend | None = None
     target_type: WebhookTargetType | None = None
     target_name: str | None = Field(default=None, min_length=1, max_length=200)
-    bot_service_url: str | None = Field(default=None, min_length=1, max_length=2000)
-    bot_conversation_id: str | None = Field(default=None, min_length=1, max_length=2000)
+    bot_service_url: str | None = Field(default=None, max_length=2000)
+    bot_conversation_id: str | None = Field(default=None, max_length=2000)
     graph_target_kind: GraphTargetKind | None = None
     graph_target_id: str | None = Field(default=None, max_length=2000)
     graph_team_id: str | None = Field(default=None, max_length=2000)
@@ -105,6 +108,7 @@ class WebhookRouteUpdate(BaseModel):
         if (
             self.name is None
             and self.is_active is None
+            and self.delivery_backend is None
             and self.target_type is None
             and self.target_name is None
             and self.bot_service_url is None
@@ -127,6 +131,7 @@ class WebhookRouteOut(BaseModel):
     organization_id: str
     name: str
     is_active: bool
+    delivery_backend: str
     target_type: str
     target_name: str
     bot_service_url: str
@@ -198,6 +203,7 @@ class WebhookDeliveryEventSummaryOut(BaseModel):
     status: str
     title: str = ""
     payload_type: str = ""
+    delivery_backend: str = ""
     delivery_mode: str = ""
     status_code: int | None = None
     error: str = ""

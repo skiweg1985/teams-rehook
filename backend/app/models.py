@@ -65,6 +65,7 @@ class WebhookRoute(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     route_token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     route_token: Mapped[str] = mapped_column(Text, default="")
+    delivery_backend: Mapped[str] = mapped_column(String(32), default="bot_framework")
     target_type: Mapped[str] = mapped_column(String(32), default="bot_conversation")
     target_name: Mapped[str] = mapped_column(String(200))
     bot_service_url: Mapped[str] = mapped_column(Text, default="")
