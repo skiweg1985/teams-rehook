@@ -80,7 +80,7 @@ type PayloadAction = {
 
 const NAV: Array<{ route: RouteName; label: string; path: string; icon: string }> = [
   { route: "dashboard", label: "Dashboard", path: "/dashboard", icon: "D" },
-  { route: "status", label: "Status", path: "/status", icon: "H" },
+  { route: "status", label: "Status", path: "/status", icon: "S" },
   { route: "webhooks", label: "Webhooks", path: "/webhooks", icon: "W" },
   { route: "payload-generator", label: "Payload Generator", path: "/payload-generator", icon: "P" },
   { route: "users", label: "Users", path: "/users", icon: "U" },
