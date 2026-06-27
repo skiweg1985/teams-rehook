@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-import base64
-import hashlib
 import threading
 from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-from cryptography.fernet import Fernet, InvalidToken
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
+from app.core.encrypted_secrets import decrypt_secret, encrypt_secret
 from app.models import AppSetting, utc_now
 
 SettingType = Literal["string", "int", "url", "enum", "secret"]
@@ -56,21 +54,14 @@ _override_cache: dict[str, str] = {}
 _cache_lock = threading.Lock()
 
 
-def _fernet() -> Fernet:
-    settings = get_settings()
-    source = (settings.settings_enc_key or settings.session_secret or "change-me-session-secret").strip()
-    digest = hashlib.sha256(source.encode("utf-8")).digest()
-    return Fernet(base64.urlsafe_b64encode(digest))
-
-
 def _encrypt_secret(value: str) -> str:
-    return _fernet().encrypt(value.encode("utf-8")).decode("utf-8")
+    return encrypt_secret(value)
 
 
 def _decrypt_secret(value: str) -> str:
     try:
-        return _fernet().decrypt(value.encode("utf-8")).decode("utf-8")
-    except InvalidToken as exc:
+        return decrypt_secret(value)
+    except HTTPException as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Stored secret override could not be decrypted",

@@ -150,6 +150,28 @@ class BotConversationReference(Base):
     )
 
 
+class GraphDelegatedCredential(Base):
+    __tablename__ = "graph_delegated_credentials"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    tenant_id: Mapped[str] = mapped_column(Text, default="")
+    client_id: Mapped[str] = mapped_column(Text, default="")
+    scopes: Mapped[str] = mapped_column(Text, default="")
+    encrypted_refresh_token: Mapped[str] = mapped_column(Text, default="")
+    service_user_id: Mapped[str] = mapped_column(Text, default="")
+    service_user_display_name: Mapped[str] = mapped_column(String(255), default="")
+    service_user_principal_name: Mapped[str] = mapped_column(String(255), default="")
+    last_status: Mapped[str] = mapped_column(String(40), default="missing", index=True)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    access_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    refresh_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+    __table_args__ = (UniqueConstraint("organization_id", name="uq_graph_delegated_credentials_org"),)
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_events"
 
