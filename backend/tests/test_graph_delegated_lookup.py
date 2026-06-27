@@ -308,6 +308,16 @@ def test_create_or_get_one_on_one_chat_posts_service_user_and_target(monkeypatch
     ]
 
 
+def test_create_or_get_one_on_one_chat_rejects_existing_chat_id(monkeypatch: pytest.MonkeyPatch):
+    def fail_refresh(*args, **kwargs):
+        raise AssertionError("delegated token should not be refreshed for invalid input")
+
+    monkeypatch.setattr("app.services.graph_delegated_lookup.refresh_delegated_access_token", fail_refresh)
+
+    with pytest.raises(GraphDelegatedLookupError, match="not an existing Teams chat ID"):
+        create_or_get_one_on_one_chat(SimpleNamespace(), organization_id="org-id", user_id="19:001dc@example-thread.v2")
+
+
 def test_create_or_get_one_on_one_chat_reports_missing_chat_id(monkeypatch: pytest.MonkeyPatch):
     def fake_refresh(db, *, organization_id: str, settings):
         return SimpleNamespace(

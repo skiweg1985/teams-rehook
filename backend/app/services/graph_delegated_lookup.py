@@ -116,6 +116,8 @@ def create_or_get_one_on_one_chat(
     user_id = user_id.strip()
     if not user_id:
         raise GraphDelegatedLookupError("A Microsoft Graph user ID or user principal name is required.")
+    if _looks_like_graph_chat_id(user_id):
+        raise GraphDelegatedLookupError("A one-on-one route requires a Microsoft 365 user ID or UPN, not an existing Teams chat ID.")
     settings = settings or get_effective_settings()
     try:
         token = refresh_delegated_access_token(db, organization_id=organization_id, settings=settings)
@@ -211,6 +213,11 @@ def _conversation_member(user_id: str) -> dict:
         "roles": ["owner"],
         "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{_odata_string(user_id)}')",
     }
+
+
+def _looks_like_graph_chat_id(value: str) -> bool:
+    normalized = value.strip().lower()
+    return normalized.startswith("19:") or "@thread." in normalized
 
 
 def _graph_get(path: str, access_token: str, params: dict[str, str]) -> dict:

@@ -2051,6 +2051,7 @@ function WebhookRouteModal({
     void loadReferences();
   }, [loadReferences]);
 
+  const visibleGraphUserTargetId = graphUserId.trim() || (showAdvancedTarget ? graphTargetId.trim() : "");
   const routeTargetReady =
     deliveryBackend === "bot_framework"
       ? Boolean(targetName.trim() && botServiceUrl.trim() && botConversationId.trim())
@@ -2059,7 +2060,7 @@ function WebhookRouteModal({
         : graphTargetKind === "chat"
           ? Boolean(targetName.trim() && graphTargetId.trim())
           : graphTargetKind === "user"
-            ? Boolean(targetName.trim() && (graphUserId.trim() || graphTargetId.trim()))
+            ? Boolean(targetName.trim() && visibleGraphUserTargetId)
           : false;
 
   function applyReference(reference: BotConversationReferenceOut) {
@@ -2173,6 +2174,22 @@ function WebhookRouteModal({
     setBotTargetSource("graph_lookup");
   }
 
+  function selectGraphTargetKind(kind: GraphTargetKind) {
+    setGraphTargetKind(kind);
+    setGraphSearchError("");
+    if (kind !== "channel") {
+      setGraphTeamId("");
+      setGraphTeamName("");
+      setGraphChannelId("");
+    }
+    if (kind !== "chat") setGraphTargetId("");
+    if (kind !== "user") {
+      setGraphUserId("");
+      setGraphUserDisplayName("");
+      setGraphUserPrincipalName("");
+    }
+  }
+
   function applyGraphUser(target: TeamsTargetSearchResult) {
     setDeliveryBackend("graph");
     setGraphTargetKind("user");
@@ -2202,7 +2219,7 @@ function WebhookRouteModal({
       bot_service_url: botServiceUrl.trim(),
       bot_conversation_id: botConversationId.trim(),
       graph_target_kind: graphTargetKind || null,
-      graph_target_id: graphTargetId.trim(),
+      graph_target_id: graphTargetKind === "user" ? visibleGraphUserTargetId : graphTargetId.trim(),
       graph_team_id: graphTeamId.trim(),
       graph_team_name: graphTeamName.trim(),
       graph_channel_id: graphChannelId.trim(),
@@ -2283,7 +2300,7 @@ function WebhookRouteModal({
                   setDeliveryBackend("graph");
                   setBotServiceUrl("");
                   setBotConversationId("");
-                  if (!graphTargetKind || graphTargetKind === "team") setGraphTargetKind("channel");
+                  if (!graphTargetKind || graphTargetKind === "team") selectGraphTargetKind("channel");
                 }}
               >
                 Microsoft Graph
@@ -2376,7 +2393,7 @@ function WebhookRouteModal({
                 type="button"
                 className={classNames("segmented-control-button", graphTargetKind === "channel" && "is-active")}
                 aria-pressed={graphTargetKind === "channel"}
-                onClick={() => setGraphTargetKind("channel")}
+                onClick={() => selectGraphTargetKind("channel")}
               >
                 Channel
               </button>
@@ -2384,7 +2401,7 @@ function WebhookRouteModal({
                 type="button"
                 className={classNames("segmented-control-button", graphTargetKind === "chat" && "is-active")}
                 aria-pressed={graphTargetKind === "chat"}
-                onClick={() => setGraphTargetKind("chat")}
+                onClick={() => selectGraphTargetKind("chat")}
               >
                 Existing chat
               </button>
@@ -2392,19 +2409,19 @@ function WebhookRouteModal({
                 type="button"
                 className={classNames("segmented-control-button", graphTargetKind === "user" && "is-active")}
                 aria-pressed={graphTargetKind === "user"}
-                onClick={() => setGraphTargetKind("user")}
+                onClick={() => selectGraphTargetKind("user")}
               >
                 One-on-one
               </button>
             </div>
-            {targetName ? (
+            {targetName && routeTargetReady ? (
               <div className="selected-conversation-summary">
                 <div className="selected-conversation-copy">
                   <span>Current Graph target</span>
                   <strong>{targetName}</strong>
                   <small>
                     {graphTargetKind === "user"
-                      ? graphUserPrincipalName || shortId(graphUserId || graphTargetId)
+                      ? graphUserPrincipalName || shortId(visibleGraphUserTargetId)
                       : graphTargetKind === "chat"
                         ? shortId(graphTargetId)
                         : [graphTeamName, shortId(graphChannelId)].filter(Boolean).join(" / ")}
@@ -2573,7 +2590,7 @@ function WebhookRouteModal({
             ) : (
               <>
                 <Field label="Graph target kind">
-                  <select value={graphTargetKind || "channel"} onChange={(event) => setGraphTargetKind(event.target.value as GraphTargetKind)}>
+                  <select value={graphTargetKind || "channel"} onChange={(event) => selectGraphTargetKind(event.target.value as GraphTargetKind)}>
                     <option value="channel">Channel</option>
                     <option value="chat">Existing chat</option>
                     <option value="user">One-on-one user</option>

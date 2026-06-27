@@ -348,14 +348,132 @@ def _ensure_webhook_route_name_backend_uniqueness() -> None:
                     )
                 )
         elif dialect == "sqlite":
-            indexes = connection.execute(text("PRAGMA index_list(webhook_routes)")).all()
-            has_new_index = any(row[1] == "uq_webhook_routes_org_name_backend" for row in indexes)
-            if not has_new_index:
-                connection.execute(
-                    text(
-                        """
-                        CREATE UNIQUE INDEX IF NOT EXISTS uq_webhook_routes_org_name_backend
-                        ON webhook_routes (organization_id, name, delivery_backend)
-                        """
-                    )
-                )
+            if _sqlite_has_unique_webhook_route_index(connection, ["organization_id", "name"]):
+                _sqlite_rebuild_webhook_routes_table(connection)
+            _sqlite_ensure_webhook_route_indexes(connection)
+
+
+def _sqlite_has_unique_webhook_route_index(connection, columns: list[str]) -> bool:
+    for row in connection.execute(text("PRAGMA index_list(webhook_routes)")).all():
+        index_name = row[1]
+        is_unique = bool(row[2])
+        if not is_unique:
+            continue
+        index_columns = [
+            column_row[2]
+            for column_row in connection.execute(
+                text(f"PRAGMA index_info({_sqlite_quote_literal(index_name)})")
+            ).all()
+        ]
+        if index_columns == columns:
+            return True
+    return False
+
+
+def _sqlite_rebuild_webhook_routes_table(connection) -> None:
+    columns = [
+        "id",
+        "organization_id",
+        "created_by_id",
+        "name",
+        "is_active",
+        "route_token_hash",
+        "route_token",
+        "delivery_backend",
+        "target_type",
+        "target_name",
+        "bot_service_url",
+        "bot_conversation_id",
+        "graph_target_kind",
+        "graph_target_id",
+        "graph_team_id",
+        "graph_team_name",
+        "graph_channel_id",
+        "graph_user_id",
+        "graph_user_display_name",
+        "graph_user_principal_name",
+        "bot_target_source",
+        "bot_registered_by_id",
+        "bot_registered_at",
+        "last_delivery_status",
+        "last_delivery_at",
+        "created_at",
+        "updated_at",
+    ]
+    column_list = ", ".join(columns)
+    connection.execute(text("DROP TABLE IF EXISTS webhook_routes_rebuild"))
+    connection.execute(
+        text(
+            """
+            CREATE TABLE webhook_routes_rebuild (
+                id VARCHAR(36) NOT NULL,
+                organization_id VARCHAR NOT NULL,
+                created_by_id VARCHAR,
+                name VARCHAR(200) NOT NULL,
+                is_active BOOLEAN NOT NULL,
+                route_token_hash VARCHAR(64) NOT NULL,
+                route_token TEXT NOT NULL,
+                delivery_backend VARCHAR(32) NOT NULL,
+                target_type VARCHAR(32) NOT NULL,
+                target_name VARCHAR(200) NOT NULL,
+                bot_service_url TEXT NOT NULL,
+                bot_conversation_id TEXT NOT NULL,
+                graph_target_kind VARCHAR(32) NOT NULL,
+                graph_target_id TEXT NOT NULL,
+                graph_team_id TEXT NOT NULL,
+                graph_team_name VARCHAR(200) NOT NULL,
+                graph_channel_id TEXT NOT NULL,
+                graph_user_id TEXT NOT NULL,
+                graph_user_display_name VARCHAR(255) NOT NULL,
+                graph_user_principal_name VARCHAR(255) NOT NULL,
+                bot_target_source VARCHAR(40) NOT NULL,
+                bot_registered_by_id TEXT NOT NULL,
+                bot_registered_at DATETIME,
+                last_delivery_status VARCHAR(32),
+                last_delivery_at DATETIME,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                PRIMARY KEY (id),
+                FOREIGN KEY(organization_id) REFERENCES organizations (id),
+                FOREIGN KEY(created_by_id) REFERENCES users (id)
+            )
+            """
+        )
+    )
+    connection.execute(
+        text(
+            f"""
+            INSERT INTO webhook_routes_rebuild ({column_list})
+            SELECT {column_list}
+            FROM webhook_routes
+            """
+        )
+    )
+    connection.execute(text("DROP TABLE webhook_routes"))
+    connection.execute(text("ALTER TABLE webhook_routes_rebuild RENAME TO webhook_routes"))
+
+
+def _sqlite_ensure_webhook_route_indexes(connection) -> None:
+    connection.execute(
+        text(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_webhook_routes_org_name_backend
+            ON webhook_routes (organization_id, name, delivery_backend)
+            """
+        )
+    )
+    connection.execute(
+        text(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS ix_webhook_routes_route_token_hash
+            ON webhook_routes (route_token_hash)
+            """
+        )
+    )
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_webhook_routes_organization_id ON webhook_routes (organization_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_webhook_routes_created_by_id ON webhook_routes (created_by_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_webhook_routes_is_active ON webhook_routes (is_active)"))
+
+
+def _sqlite_quote_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
