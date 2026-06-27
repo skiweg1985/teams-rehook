@@ -18,6 +18,7 @@ from app.services.log_retention import cleanup_log_events
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_additive_schema()
+    _ensure_obsolete_webhook_route_columns_removed()
     _ensure_webhook_route_name_backend_uniqueness()
     settings = get_settings()
     with Session(engine) as db:
@@ -288,6 +289,17 @@ def _ensure_additive_schema() -> None:
             for column_name, column_type in columns_to_add.items():
                 if column_name not in existing_columns:
                     connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
+
+
+def _ensure_obsolete_webhook_route_columns_removed() -> None:
+    with engine.begin() as connection:
+        dialect = engine.dialect.name
+        if dialect == "postgresql":
+            connection.execute(text("ALTER TABLE webhook_routes DROP COLUMN IF EXISTS source_system"))
+        elif dialect == "sqlite":
+            columns = {row[1] for row in connection.execute(text("PRAGMA table_info(webhook_routes)")).all()}
+            if "source_system" in columns:
+                connection.execute(text("ALTER TABLE webhook_routes DROP COLUMN source_system"))
 
 
 def _ensure_webhook_route_name_backend_uniqueness() -> None:
