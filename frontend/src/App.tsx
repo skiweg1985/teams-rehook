@@ -3179,6 +3179,11 @@ function DeliveryEventDetails({ event }: { event: WebhookDeliveryEventOut & Part
   const deliveryResult = event.delivery_result;
   const errorMessage = eventErrorMessage(event);
   const graphResponseMessage = stringField(deliveryResult, "graph_error_message");
+  const clientHostSource = stringField(requestMetadata, "client_host_source");
+  const directClientHost = stringField(requestMetadata, "direct_client_host");
+  const xForwardedFor = stringField(requestMetadata, "x_forwarded_for");
+  const hasForwardedHeader = xForwardedFor !== "-";
+  const usesForwardedHeader = clientHostSource === "x_forwarded_for";
   return (
     <aside className="delivery-event-detail" aria-label="Delivery event details">
       <div className="delivery-event-detail-header">
@@ -3226,14 +3231,21 @@ function DeliveryEventDetails({ event }: { event: WebhookDeliveryEventOut & Part
           <dd>{stringField(requestMetadata, "content_type")}</dd>
           <dt>Content length</dt>
           <dd>{primitiveField(requestMetadata, "content_length")}</dd>
-          <dt>Client host</dt>
+          <dt>Client IP</dt>
           <dd>{stringField(requestMetadata, "client_host")}</dd>
-          <dt>Client source</dt>
-          <dd>{stringField(requestMetadata, "client_host_source")}</dd>
-          <dt>Direct client</dt>
-          <dd>{stringField(requestMetadata, "direct_client_host")}</dd>
-          <dt>X-Forwarded-For</dt>
-          <dd>{stringField(requestMetadata, "x_forwarded_for")}</dd>
+          <dt>IP source</dt>
+          <dd>{usesForwardedHeader ? "Forwarded header" : "Direct connection"}</dd>
+          {usesForwardedHeader ? (
+            <>
+              <dt>Proxy peer</dt>
+              <dd>{directClientHost}</dd>
+            </>
+          ) : hasForwardedHeader ? (
+            <>
+              <dt>Forwarded header</dt>
+              <dd>{xForwardedFor} (not trusted)</dd>
+            </>
+          ) : null}
           <dt>Trigger</dt>
           <dd>{stringField(requestMetadata, "trigger")}</dd>
         </dl>
