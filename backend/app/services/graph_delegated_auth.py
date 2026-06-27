@@ -305,6 +305,8 @@ def _apply_successful_token_response(
     scopes = _scope_list(str(response.get("scope") or "")) or fallback_scopes
     if refresh_token:
         credential.encrypted_refresh_token = encrypt_secret(refresh_token)
+    if credential.encrypted_refresh_token and "offline_access" not in {scope.lower() for scope in scopes}:
+        scopes = ["offline_access", *scopes]
     credential.tenant_id = settings.ms_app_tenant_id
     credential.client_id = settings.ms_app_client_id
     credential.scopes = " ".join(scopes)

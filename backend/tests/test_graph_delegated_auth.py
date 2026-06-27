@@ -178,6 +178,42 @@ def test_refresh_delegated_access_token_rotates_refresh_token(
     assert "new-refresh" not in str(token.diagnostics.to_dict())
 
 
+def test_refresh_delegated_access_token_retains_offline_access_when_token_response_omits_it(
+    db_session: Session,
+    org_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    settings = Settings(ms_app_tenant_id="tenant", ms_app_client_id="client", ms_app_client_secret="secret")
+    db_session.add(
+        GraphDelegatedCredential(
+            organization_id=org_id,
+            tenant_id="tenant",
+            client_id="client",
+            scopes="offline_access ChannelMessage.Send ChatMessage.Send Chat.ReadBasic User.Read",
+            encrypted_refresh_token=encrypt_secret("refresh-token"),
+            last_status="ready",
+        )
+    )
+    db_session.commit()
+
+    def fake_urlopen(request, timeout=10):
+        return _json_response(
+            {
+                "access_token": _jwt({"oid": "user-id", "name": "Teams Sender"}),
+                "expires_in": 3600,
+                "scope": "ChannelMessage.Send ChatMessage.Send Chat.ReadBasic User.Read",
+            }
+        )
+
+    monkeypatch.setattr("app.services.graph_delegated_auth.urllib.request.urlopen", fake_urlopen)
+
+    token = refresh_delegated_access_token(db_session, organization_id=org_id, settings=settings)
+
+    assert "offline_access" in token.scopes
+    diagnostics = diagnostics_for_organization(db_session, org_id)
+    assert "offline_access" in diagnostics.scopes
+
+
 def test_missing_delegated_credential_returns_missing_diagnostics(db_session: Session, org_id: str):
     diagnostics = diagnostics_for_organization(db_session, org_id)
 
