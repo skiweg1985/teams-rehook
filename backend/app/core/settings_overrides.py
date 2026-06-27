@@ -1,21 +1,19 @@
 from __future__ import annotations
 
-import base64
-import hashlib
 import threading
 from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-from cryptography.fernet import Fernet, InvalidToken
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
+from app.core.encrypted_secrets import decrypt_secret, encrypt_secret
 from app.models import AppSetting, utc_now
 
-SettingType = Literal["string", "int", "url", "enum", "secret"]
+SettingType = Literal["string", "int", "url", "enum", "secret", "bool"]
 
 
 @dataclass(frozen=True)
@@ -30,6 +28,15 @@ class SettingDefinition:
 OVERRIDABLE_SETTINGS: dict[str, SettingDefinition] = {
     "bot_delivery_mode": SettingDefinition(
         "bot_delivery_mode", "Bot delivery mode", "enum", False, ("mock", "real")
+    ),
+    "bot_framework_enabled": SettingDefinition(
+        "bot_framework_enabled", "Bot Framework enabled", "bool", False
+    ),
+    "graph_lookup_enabled": SettingDefinition(
+        "graph_lookup_enabled", "Graph lookup enabled", "bool", False
+    ),
+    "graph_delivery_enabled": SettingDefinition(
+        "graph_delivery_enabled", "Graph delivery enabled", "bool", False
     ),
     "bot_default_service_url": SettingDefinition(
         "bot_default_service_url", "Bot default service URL", "url", False
@@ -56,21 +63,14 @@ _override_cache: dict[str, str] = {}
 _cache_lock = threading.Lock()
 
 
-def _fernet() -> Fernet:
-    settings = get_settings()
-    source = (settings.settings_enc_key or settings.session_secret or "change-me-session-secret").strip()
-    digest = hashlib.sha256(source.encode("utf-8")).digest()
-    return Fernet(base64.urlsafe_b64encode(digest))
-
-
 def _encrypt_secret(value: str) -> str:
-    return _fernet().encrypt(value.encode("utf-8")).decode("utf-8")
+    return encrypt_secret(value)
 
 
 def _decrypt_secret(value: str) -> str:
     try:
-        return _fernet().decrypt(value.encode("utf-8")).decode("utf-8")
-    except InvalidToken as exc:
+        return decrypt_secret(value)
+    except HTTPException as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Stored secret override could not be decrypted",
@@ -117,6 +117,14 @@ def _validate_and_normalize(key: str, value: str) -> str:
             )
         return str(parsed)
 
+    if definition.type == "bool":
+        normalized = raw.lower()
+        if normalized in {"true", "1", "yes", "on", "enabled"}:
+            return "true"
+        if normalized in {"false", "0", "no", "off", "disabled"}:
+            return "false"
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Value must be true or false")
+
     if definition.type == "enum":
         normalized = raw.lower()
         if normalized not in definition.enum_values:
@@ -142,6 +150,8 @@ def _coerce_for_settings(key: str, value: str) -> Any:
     definition = OVERRIDABLE_SETTINGS[key]
     if definition.type == "int":
         return int(value)
+    if definition.type == "bool":
+        return value.strip().lower() == "true"
     if definition.type == "enum":
         return value
     return value
@@ -155,11 +165,16 @@ def _display_value(key: str, value: str) -> str:
     definition = OVERRIDABLE_SETTINGS[key]
     if definition.is_secret:
         return _mask_secret(value)
+    if definition.type == "bool":
+        return "true" if str(value).strip().lower() in {"true", "1", "yes", "on"} else "false"
     return value
 
 
 def _env_value(settings: Settings, key: str) -> str:
-    return str(getattr(settings, key))
+    value = getattr(settings, key)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
 
 
 def load_overrides(db: Session) -> None:
@@ -196,6 +211,7 @@ def set_override(db: Session, *, key: str, value: str, updated_by_id: str | None
 
     definition = OVERRIDABLE_SETTINGS[key]
     stored = _serialize_for_storage(key, value)
+    _validate_feature_dependency(_hypothetical_overrides(key, _validate_and_normalize(key, value)))
     row = db.get(AppSetting, key)
     if row is None:
         row = AppSetting(key=key, value=stored, is_secret=definition.is_secret, updated_by_id=updated_by_id)
@@ -215,6 +231,7 @@ def clear_override(db: Session, *, key: str) -> None:
     if key not in OVERRIDABLE_SETTINGS:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown setting")
 
+    _validate_feature_dependency(_hypothetical_overrides(key, None))
     row = db.get(AppSetting, key)
     if row is not None:
         db.delete(row)
@@ -225,6 +242,27 @@ def clear_override(db: Session, *, key: str) -> None:
 
 def is_overridden(key: str) -> bool:
     return key in _override_cache
+
+
+def _hypothetical_overrides(key: str, value: str | None) -> dict[str, str]:
+    with _cache_lock:
+        overrides = dict(_override_cache)
+    if value is None:
+        overrides.pop(key, None)
+    else:
+        overrides[key] = value
+    return overrides
+
+
+def _validate_feature_dependency(overrides: dict[str, str]) -> None:
+    settings = get_settings()
+    updates = {key: _coerce_for_settings(key, value) for key, value in overrides.items()}
+    effective = settings.model_copy(update=updates)
+    if effective.graph_delivery_enabled and not effective.graph_lookup_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Graph delivery requires Graph lookup to be enabled",
+        )
 
 
 def list_setting_items() -> list[dict[str, Any]]:

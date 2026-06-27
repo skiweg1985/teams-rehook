@@ -1,77 +1,72 @@
 # Documentation Audit Report
 
-Audit date: 2026-06-26
+Audit date: 2026-06-27
 
 ## Scope
 
-Reviewed repository documentation and documentation-like files:
+Reviewed documentation and documentation-like sources:
 
-- `AGENTS.md`
 - `README.md`
-- `docs/CHANGELOG.md`
-- `docs/prd-teams-webhook-relay-service.md`
-- `docs/technical_documentation.md`
-- `docs/graph-autocomplete-spike.md`
-- `planning/coordination/WORKLOG.md`
-
-Compared documentation against the current FastAPI routers, settings model, frontend navigation/API client, Docker Compose stack, HAProxy config, package scripts, and `.env.example`.
-
-## Files modified
-
+- `.env.example`
+- `docs/*.md`
 - `AGENTS.md`
-  - Updated the backend syntax-check command to include `backend/app/services/*.py`, matching `package.json`.
-- `README.md`
-  - Added the implemented Payload Generator.
-  - Added implemented Teams bot commands.
-  - Clarified Users page limitations.
-  - Clarified local Vite proxy behavior when running frontend and backend separately.
-  - Added root-level validation commands.
-- `docs/technical_documentation.md`
-  - Added the verified list of overridable runtime settings and validation constraints.
-  - Added the implemented runtime API surface.
-  - Added Teams bot command behavior.
-  - Added payload handling behavior.
-- `docs/prd-teams-webhook-relay-service.md`
-  - Added Payload Generator and Teams bot commands as implemented MVP capabilities.
-  - Marked the current Users UI as list-only.
-- `docs/CHANGELOG.md`
-  - Added documentation-audit entries.
-  - Noted the Graph lookup document rename.
-- `docs/graph-target-lookup.md`
-  - Renamed from `docs/graph-autocomplete-spike.md`.
-  - Reframed from spike language to implemented Graph lookup notes.
-  - Added Graph name-refresh endpoints.
-- `docs/documentation-audit-report.md`
-  - Added this audit report.
+- `package.json`
+- `frontend/package.json`
+- `backend/requirements.txt`
+- `docker-compose.yml`
+- `backend/Dockerfile`
+- `frontend/Dockerfile`
+- `haproxy/haproxy.cfg`
+- FastAPI routers, schemas, settings, models, services, and tests under `backend/app` and `backend/tests`
+- Frontend API client and types under `frontend/src`
 
-## Obsolete documents or content removed
+## Decisions Applied
 
-- Renamed the obsolete spike-named document `docs/graph-autocomplete-spike.md` to `docs/graph-target-lookup.md`.
-- Removed or replaced wording that implied Graph target lookup was only a spike.
-- Replaced stale backend syntax-check documentation that omitted service modules.
+- Documentation language: English.
+- Repository visibility assumption: potentially public.
+- Documentation orientation: combined user, administrator, developer, and maintainer documentation.
+- Security posture: no internal hostnames, production URLs, customer data, private IP structures, real tokens, or tenant-specific secrets documented.
 
-No documentation file was deleted outright. `planning/coordination/WORKLOG.md` was left unchanged because it is a dated historical worklog rather than current-state documentation.
+## Consolidation Performed
 
-## Dead links and obsolete examples
+- README was shortened into a repository landing page.
+- Detailed user workflows moved to [User guide](user-guide.md).
+- Runtime and operations guidance moved to [Admin guide](admin-guide.md), [Configuration](configuration.md), [Deployment](deployment.md), and [Troubleshooting](troubleshooting.md).
+- API route details moved to [API reference](api.md).
+- SQLAlchemy model details moved to [Data model](data-model.md).
+- Technical architecture details moved to [Architecture](architecture.md).
+- `docs/technical_documentation.md` and `docs/CHANGELOG.md` now point to canonical documents to avoid duplicate sources of truth.
 
-- External Microsoft Learn links in the Graph lookup document were checked and resolved successfully.
-- No broken internal Markdown links were found.
-- OAuth scope strings such as `https://graph.microsoft.com/.default` and `https://api.botframework.com/.default` are configuration values, not documentation links; HTTP checks against them are not meaningful.
-- Localhost URLs in README depend on the stack running and were not treated as external dead links.
+## Corrected Or Removed Content
 
-## Remaining documentation gaps
+- Removed the long-form user/admin guide from README.
+- Avoided publishing real tenant-specific Microsoft values or production deployment assumptions.
+- Kept `.env.example` placeholder-only.
+- Marked missing production decisions as `TODO:` rather than inventing them.
 
-- There is no production operations runbook for backup/restore, monitoring, alerting, SLOs, incident response, or operational ownership.
-- There is no tenant-specific Microsoft Teams app/bot registration guide or app manifest in the repository.
-- There is no documented secret rotation procedure for `SESSION_SECRET`, `SETTINGS_ENC_KEY`, `MS_APP_CLIENT_SECRET`, route tokens, or Bot Framework credentials.
-- The Users page is list-only in the current implementation. There is no user invitation, creation, deactivation, role-management, or password-reset workflow to document from code.
-- The frontend calls `POST /api/v1/admin/logs/cleanup`, but the backend exposes `POST /api/v1/webhook-delivery-events/cleanup`. This appears to be an implementation mismatch, not a documentation issue; the technical documentation now records the backend route as implemented.
-- There is no database migration documentation or migration tooling visible in the repository; tables are created from SQLAlchemy metadata during startup.
+## Remaining TODOs
 
-## Could not verify from code alone
+- Add license information.
+- Add security contact address.
+- Define supported versions and security update policy.
+- Define production support and escalation contact.
+- Define production hosting, TLS, reverse proxy, and public URL policy.
+- Define backup, restore, retention, monitoring, alerting, rollout, and rollback processes.
+- Decide whether to introduce a formal database migration tool.
+- Define release versioning and changelog ownership.
 
-- Whether the Entra app registration has the required Microsoft Graph application permissions and admin consent in the target tenant.
-- Whether the Bot Framework app is installed in each target Teams chat or channel.
-- Whether real Teams delivery works in a specific tenant; the code path exists, but successful delivery depends on tenant configuration and captured conversation references.
-- Production public URLs, HTTPS termination details outside local HAProxy, and secure-cookie policy for the eventual deployment.
-- Long-term retention, audit, compliance, ownership, and support requirements.
+## Manual Review Recommended
+
+- Security contact and vulnerability reporting channel.
+- License choice.
+- Production deployment target and public URLs.
+- Microsoft tenant permissions and consent model.
+- Backup and restore expectations.
+- Supported versions and release process.
+- Operational ownership and support path.
+
+## Security Review
+
+No real secrets were intentionally copied into documentation. Placeholder values such as `change-me`, `admin@example.com`, and localhost URLs remain for local setup examples.
+
+Documentation now treats relay URLs, session secrets, Microsoft client secrets, monitoring API keys, bootstrap passwords, route tokens, and delegated Graph credential material as sensitive.

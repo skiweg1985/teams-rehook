@@ -61,7 +61,7 @@ def require_csrf(
 
 def clear_session_cookie(response: Response) -> None:
     settings = get_settings()
-    response.delete_cookie(settings.session_cookie_name, httponly=True, samesite="strict", path="/")
+    response.delete_cookie(settings.session_cookie_name, httponly=True, samesite="lax", path="/")
 
 
 def set_session_cookie(response: Response, session_token: str) -> None:
@@ -71,7 +71,7 @@ def set_session_cookie(response: Response, session_token: str) -> None:
         value=session_token,
         httponly=True,
         secure=settings.session_secure_cookie,
-        samesite="strict",
+        samesite="lax",
         max_age=settings.session_ttl_hours * 3600,
         path="/",
     )

@@ -22,6 +22,7 @@ from app.services.teams_bot import BotDeliveryError, send_bot_activity
 from app.services.webhook_payloads import NormalizedMessage
 
 router = APIRouter(tags=["bot-messages"])
+DELIVERY_BACKEND_BOT = "bot_framework"
 
 
 @router.post("/bot/messages", response_model=BotActivityIngestOut)
@@ -667,6 +668,7 @@ def _register_route_from_command(
         select(WebhookRoute).where(
             WebhookRoute.organization_id == organization.id,
             WebhookRoute.name == route_name,
+            WebhookRoute.delivery_backend == DELIVERY_BACKEND_BOT,
         )
     )
     created = route is None
@@ -684,6 +686,7 @@ def _register_route_from_command(
         )
         db.add(route)
     route.is_active = True
+    route.delivery_backend = DELIVERY_BACKEND_BOT
     route.bot_service_url = effective["service_url"]
     route.bot_conversation_id = effective["conversation_id"]
     route.target_name = _target_name(effective)

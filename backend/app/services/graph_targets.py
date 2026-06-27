@@ -14,7 +14,7 @@ from app.core.settings_overrides import get_effective_settings
 from app.security import utcnow
 
 
-GraphTargetKind = Literal["user", "team", "channel"]
+GraphTargetKind = Literal["user", "team", "channel", "chat"]
 
 
 class GraphConfigError(RuntimeError):

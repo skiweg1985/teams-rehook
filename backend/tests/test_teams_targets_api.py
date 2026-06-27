@@ -12,6 +12,7 @@ from app.database import Base, get_db
 from app.main import create_app
 from app.models import Organization, User
 from app.security import hash_secret
+from app.services.graph_delegated_lookup import DelegatedGraphChat, GraphDelegatedLookupError
 from app.services.graph_targets import GraphConfigError, GraphTarget
 
 
@@ -142,3 +143,42 @@ def test_team_channels_returns_channel_results(client: TestClient, monkeypatch: 
     assert response.status_code == 200
     assert response.json()[0]["kind"] == "channel"
     assert response.json()[0]["channel_id"] == "channel-id"
+
+
+def test_service_user_chats_returns_delegated_chat_results(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    login_admin(client)
+
+    def fake_chats(db, *, organization_id: str, query: str):
+        assert query == "ops"
+        return [DelegatedGraphChat(id="chat-id", display_name="Ops chat", subtitle="group")]
+
+    monkeypatch.setattr("app.routers.teams_targets.list_service_user_chats", fake_chats)
+
+    response = client.get("/api/v1/teams-targets/chats?q=ops")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "kind": "chat",
+            "id": "chat-id",
+            "display_name": "Ops chat",
+            "subtitle": "group",
+            "team_id": None,
+            "team_name": None,
+            "channel_id": None,
+        }
+    ]
+
+
+def test_service_user_chats_reports_delegated_lookup_error(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    login_admin(client)
+
+    def fail_chats(db, *, organization_id: str, query: str):
+        raise GraphDelegatedLookupError("Delegated Graph delivery is not connected")
+
+    monkeypatch.setattr("app.routers.teams_targets.list_service_user_chats", fail_chats)
+
+    response = client.get("/api/v1/teams-targets/chats")
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "Delegated Graph delivery is not connected"

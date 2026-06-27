@@ -27,15 +27,19 @@ from app.schemas import (
     WebhookRouteUpdate,
 )
 from app.security import dumps_json, issue_plain_secret, loads_json, lookup_secret_hash, utcnow
+from app.services.graph_delegated_lookup import GraphDelegatedLookupError, create_or_get_one_on_one_chat
 from app.services.graph_name_resolution import refresh_graph_names, resolve_route_graph_names, try_resolve_route_graph_names
 from app.services.graph_targets import GraphConfigError, GraphRequestError
 from app.services.log_retention import cleanup_log_events
 from app.services.teams_bot import BotDeliveryError, send_bot_activity
+from app.services.teams_graph_delivery import GraphDeliveryError, send_graph_message
 from app.services.webhook_payloads import NormalizedMessage, WebhookPayloadError, normalize_webhook_payload, payload_preview
 
 router = APIRouter(tags=["webhook-routes"])
 
 DeliveryStatusFilter = Literal["delivered", "failed", "rejected"]
+DELIVERY_BACKEND_BOT = "bot_framework"
+DELIVERY_BACKEND_GRAPH = "graph"
 
 
 @router.get("/webhook-routes", response_model=list[WebhookRouteOut])
@@ -65,6 +69,7 @@ def create_webhook_route(
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
+    settings = get_effective_settings()
     route_token = issue_plain_secret(24)
     route = WebhookRoute(
         organization_id=admin.organization_id,
@@ -73,6 +78,7 @@ def create_webhook_route(
         is_active=payload.is_active,
         route_token_hash=lookup_secret_hash(route_token),
         route_token=route_token,
+        delivery_backend=payload.delivery_backend,
         target_type=payload.target_type,
         target_name=payload.target_name.strip(),
         bot_service_url=payload.bot_service_url.strip(),
@@ -82,10 +88,17 @@ def create_webhook_route(
         graph_team_id=payload.graph_team_id.strip(),
         graph_team_name=payload.graph_team_name.strip(),
         graph_channel_id=payload.graph_channel_id.strip(),
+        graph_user_id=payload.graph_user_id.strip(),
+        graph_user_display_name=payload.graph_user_display_name.strip(),
+        graph_user_principal_name=payload.graph_user_principal_name.strip(),
         bot_target_source=payload.bot_target_source.strip(),
     )
-    try_resolve_route_graph_names(route)
+    _ensure_route_feature_enabled(route, settings)
+    _materialize_graph_user_target(db, admin.organization_id, route)
+    if settings.graph_lookup_enabled:
+        try_resolve_route_graph_names(route)
     _validate_target(route)
+    _ensure_route_name_available(db, admin.organization_id, route.name, _route_delivery_backend(route))
     db.add(route)
     try:
         db.flush()
@@ -112,11 +125,15 @@ def update_webhook_route(
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
+    settings = get_effective_settings()
     route = _get_org_route(db, admin.organization_id, route_id)
+    _ensure_delivery_backend_feature_enabled(payload.delivery_backend or _route_delivery_backend(route), settings)
     if payload.name is not None:
         route.name = payload.name.strip()
     if payload.is_active is not None:
         route.is_active = payload.is_active
+    if payload.delivery_backend is not None:
+        route.delivery_backend = payload.delivery_backend
     if payload.target_type is not None:
         route.target_type = payload.target_type
     if payload.target_name is not None:
@@ -135,10 +152,20 @@ def update_webhook_route(
         route.graph_team_name = payload.graph_team_name.strip()
     if payload.graph_channel_id is not None:
         route.graph_channel_id = payload.graph_channel_id.strip()
+    if payload.graph_user_id is not None:
+        route.graph_user_id = payload.graph_user_id.strip()
+    if payload.graph_user_display_name is not None:
+        route.graph_user_display_name = payload.graph_user_display_name.strip()
+    if payload.graph_user_principal_name is not None:
+        route.graph_user_principal_name = payload.graph_user_principal_name.strip()
     if payload.bot_target_source is not None:
         route.bot_target_source = payload.bot_target_source.strip()
-    try_resolve_route_graph_names(route)
+    _ensure_route_feature_enabled(route, settings)
+    _materialize_graph_user_target(db, admin.organization_id, route)
+    if settings.graph_lookup_enabled:
+        try_resolve_route_graph_names(route)
     _validate_target(route)
+    _ensure_route_name_available(db, admin.organization_id, route.name, _route_delivery_backend(route), route_id=route.id)
     record_audit(
         db,
         action="webhook_route.updated",
@@ -158,6 +185,7 @@ def update_webhook_route(
 
 @router.post("/webhook-routes/refresh-graph-names", response_model=WebhookRouteNameRefreshOut, dependencies=[Depends(require_csrf)])
 def refresh_webhook_route_graph_names(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    _ensure_graph_lookup_enabled()
     result = refresh_graph_names(db, organization_id=admin.organization_id)
     if result.error:
         db.rollback()
@@ -198,6 +226,7 @@ def refresh_single_webhook_route_graph_names(
     db: Session = Depends(get_db),
 ):
     route = _get_org_route(db, admin.organization_id, route_id)
+    _ensure_graph_lookup_enabled()
     try:
         updated = resolve_route_graph_names(route, force=True)
     except (GraphConfigError, GraphRequestError) as exc:
@@ -384,6 +413,7 @@ def test_webhook_route(
     db: Session = Depends(get_db),
 ):
     route = _get_org_route(db, admin.organization_id, route_id)
+    _ensure_route_feature_enabled(route, get_effective_settings())
     message = NormalizedMessage(
         title=payload.title.strip(),
         text=payload.text.strip(),
@@ -453,6 +483,20 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
         route.last_delivery_at = utcnow()
         db.commit()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=event.error)
+    disabled_message = _route_feature_disabled_message(route, settings)
+    if disabled_message:
+        event = _record_event(
+            db,
+            route=route,
+            route_token_hash=token_hash,
+            status_value="rejected",
+            request_metadata=_request_metadata(request, body),
+            error=disabled_message,
+        )
+        route.last_delivery_status = "rejected"
+        route.last_delivery_at = utcnow()
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=event.error)
 
     try:
         message = normalize_webhook_payload(body, request.headers.get("content-type"))
@@ -490,13 +534,108 @@ def _get_org_route(db: Session, organization_id: str, route_id: str) -> WebhookR
     return route
 
 
+def _materialize_graph_user_target(db: Session, organization_id: str, route: WebhookRoute) -> None:
+    if _route_delivery_backend(route) != DELIVERY_BACKEND_GRAPH or (route.graph_target_kind or "").strip() != "user":
+        return
+    user_id = route.graph_user_id.strip() or route.graph_target_id.strip()
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Graph one-on-one routes require a user ID")
+    try:
+        chat = create_or_get_one_on_one_chat(
+            db,
+            organization_id=organization_id,
+            user_id=user_id,
+            user_display_name=route.graph_user_display_name or route.target_name,
+            user_principal_name=route.graph_user_principal_name,
+        )
+    except GraphDelegatedLookupError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    route.graph_target_kind = "chat"
+    route.graph_target_id = chat.id
+    route.graph_user_id = chat.user_id
+    route.graph_user_display_name = chat.user_display_name
+    route.graph_user_principal_name = chat.user_principal_name
+    route.graph_team_id = ""
+    route.graph_team_name = ""
+    route.graph_channel_id = ""
+    route.bot_service_url = ""
+    route.bot_conversation_id = ""
+    if not route.bot_target_source.strip():
+        route.bot_target_source = "graph_user_lookup"
+
+
+def _ensure_graph_lookup_enabled() -> None:
+    if not get_effective_settings().graph_lookup_enabled:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Microsoft Graph lookup is disabled")
+
+
+def _ensure_route_feature_enabled(route: WebhookRoute, settings) -> None:
+    message = _delivery_backend_disabled_message(_route_delivery_backend(route), settings)
+    if message:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=message)
+
+
+def _route_feature_disabled_message(route: WebhookRoute, settings) -> str:
+    return _delivery_backend_disabled_message(_route_delivery_backend(route), settings)
+
+
+def _ensure_delivery_backend_feature_enabled(backend: str, settings) -> None:
+    message = _delivery_backend_disabled_message(backend, settings)
+    if message:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=message)
+
+
+def _delivery_backend_disabled_message(backend: str, settings) -> str:
+    if backend == DELIVERY_BACKEND_BOT and not settings.bot_framework_enabled:
+        return "Bot Framework delivery is disabled"
+    if backend == DELIVERY_BACKEND_GRAPH:
+        if not settings.graph_lookup_enabled:
+            return "Microsoft Graph delivery requires Graph lookup to be enabled"
+        if not settings.graph_delivery_enabled:
+            return "Microsoft Graph delivery is disabled"
+    return ""
+
+
 def _validate_target(route: WebhookRoute) -> None:
+    backend = _route_delivery_backend(route)
+    if backend not in {DELIVERY_BACKEND_BOT, DELIVERY_BACKEND_GRAPH}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported delivery backend")
     if route.target_type != "bot_conversation":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported target type")
     if not route.target_name.strip():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Target name is required")
-    if not route.bot_service_url.strip() or not route.bot_conversation_id.strip():
+    if backend == DELIVERY_BACKEND_BOT and (not route.bot_service_url.strip() or not route.bot_conversation_id.strip()):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Bot service URL and conversation ID are required")
+    if backend == DELIVERY_BACKEND_GRAPH:
+        kind = (route.graph_target_kind or "").strip()
+        if kind == "channel" and (not route.graph_team_id.strip() or not route.graph_channel_id.strip()):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Graph channel routes require a team ID and channel ID")
+        if kind == "chat" and not route.graph_target_id.strip():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Graph chat routes require an existing chat ID")
+        if kind not in {"channel", "chat"}:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Graph delivery supports channel and existing chat targets in V1")
+
+
+def _ensure_route_name_available(
+    db: Session,
+    organization_id: str,
+    name: str,
+    delivery_backend: str,
+    *,
+    route_id: str | None = None,
+) -> None:
+    statement = select(WebhookRoute.id).where(
+        WebhookRoute.organization_id == organization_id,
+        WebhookRoute.name == name,
+        WebhookRoute.delivery_backend == delivery_backend,
+    )
+    if route_id:
+        statement = statement.where(WebhookRoute.id != route_id)
+    if db.scalar(statement):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Webhook route name already exists for this delivery backend",
+        )
 
 
 def _deliver_to_route(
@@ -506,12 +645,47 @@ def _deliver_to_route(
     *,
     request_metadata: dict,
 ) -> WebhookDeliveryEvent:
+    backend = _route_delivery_backend(route)
+    if backend == DELIVERY_BACKEND_GRAPH:
+        try:
+            result = send_graph_message(db, organization_id=route.organization_id, route=route, message=message)
+            route.last_delivery_status = "delivered"
+            route.last_delivery_at = utcnow()
+            return _record_event(
+                db,
+                route=route,
+                route_token_hash=route.route_token_hash,
+                status_value="delivered",
+                request_metadata=request_metadata,
+                normalized_message=message.to_dict(),
+                delivery_result=result.to_dict(),
+            )
+        except GraphDeliveryError as exc:
+            return _record_failed_delivery(
+                db,
+                route,
+                message,
+                request_metadata,
+                str(exc),
+                delivery_result=exc.result or {"backend": DELIVERY_BACKEND_GRAPH, "error_type": exc.error_type},
+            )
+    if backend != DELIVERY_BACKEND_BOT:
+        return _record_failed_delivery(
+            db,
+            route,
+            message,
+            request_metadata,
+            f"Unsupported delivery backend: {backend}",
+            delivery_result={"backend": backend},
+        )
     try:
         result = send_bot_activity(
             service_url=route.bot_service_url,
             conversation_id=route.bot_conversation_id,
             message=message,
         )
+        delivery_result = result.to_dict()
+        delivery_result["backend"] = DELIVERY_BACKEND_BOT
         route.last_delivery_status = "delivered"
         route.last_delivery_at = utcnow()
         return _record_event(
@@ -521,20 +695,40 @@ def _deliver_to_route(
             status_value="delivered",
             request_metadata=request_metadata,
             normalized_message=message.to_dict(),
-            delivery_result=result.to_dict(),
+            delivery_result=delivery_result,
         )
     except BotDeliveryError as exc:
-        route.last_delivery_status = "failed"
-        route.last_delivery_at = utcnow()
-        return _record_event(
+        return _record_failed_delivery(
             db,
-            route=route,
-            route_token_hash=route.route_token_hash,
-            status_value="failed",
-            request_metadata=request_metadata,
-            normalized_message=message.to_dict(),
-            error=str(exc),
+            route,
+            message,
+            request_metadata,
+            str(exc),
+            delivery_result={"backend": DELIVERY_BACKEND_BOT},
         )
+
+
+def _record_failed_delivery(
+    db: Session,
+    route: WebhookRoute,
+    message: NormalizedMessage,
+    request_metadata: dict,
+    error: str,
+    *,
+    delivery_result: dict,
+) -> WebhookDeliveryEvent:
+    route.last_delivery_status = "failed"
+    route.last_delivery_at = utcnow()
+    return _record_event(
+        db,
+        route=route,
+        route_token_hash=route.route_token_hash,
+        status_value="failed",
+        request_metadata=request_metadata,
+        normalized_message=message.to_dict(),
+        delivery_result=delivery_result,
+        error=error,
+    )
 
 
 def _record_event(
@@ -587,6 +781,9 @@ def _manual_test_metadata(route: WebhookRoute) -> dict:
             "team_id": route.graph_team_id,
             "team_name": route.graph_team_name,
             "channel_id": route.graph_channel_id,
+            "user_id": route.graph_user_id,
+            "user_display_name": route.graph_user_display_name,
+            "user_principal_name": route.graph_user_principal_name,
         },
         "bot_target": {
             "service_url": route.bot_service_url,
@@ -606,6 +803,7 @@ def _route_out(
         "organization_id": route.organization_id,
         "name": route.name,
         "is_active": route.is_active,
+        "delivery_backend": _route_delivery_backend(route),
         "target_type": route.target_type,
         "target_name": route.target_name,
         "bot_service_url": route.bot_service_url,
@@ -615,6 +813,9 @@ def _route_out(
         "graph_team_id": route.graph_team_id,
         "graph_team_name": route.graph_team_name,
         "graph_channel_id": route.graph_channel_id,
+        "graph_user_id": route.graph_user_id,
+        "graph_user_display_name": route.graph_user_display_name,
+        "graph_user_principal_name": route.graph_user_principal_name,
         "bot_target_source": route.bot_target_source,
         "bot_registered_by_id": route.bot_registered_by_id,
         "bot_registered_at": route.bot_registered_at,
@@ -654,6 +855,7 @@ def _delivery_event_summary_out(event: WebhookDeliveryEvent, route: WebhookRoute
         status=event.status,
         title=_string_value(normalized_message, "title"),
         payload_type=_string_value(normalized_message, "raw_type"),
+        delivery_backend=_string_value(delivery_result, "backend") or (_route_delivery_backend(route) if route else ""),
         delivery_mode=_string_value(delivery_result, "mode"),
         status_code=_int_value(delivery_result, "status_code"),
         error=event.error,
@@ -678,6 +880,11 @@ def _string_value(record: dict, key: str) -> str:
 def _int_value(record: dict, key: str) -> int | None:
     value = record.get(key)
     return value if isinstance(value, int) else None
+
+
+def _route_delivery_backend(route: WebhookRoute) -> str:
+    value = route.delivery_backend.strip() if isinstance(route.delivery_backend, str) else ""
+    return value or DELIVERY_BACKEND_BOT
 
 
 def _build_webhook_url(route_token: str) -> str:

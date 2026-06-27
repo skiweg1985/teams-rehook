@@ -62,13 +62,15 @@ export type SystemLogEventOut = {
 };
 
 export type WebhookTargetType = "bot_conversation";
-export type GraphTargetKind = "user" | "team" | "channel";
+export type DeliveryBackend = "bot_framework" | "graph";
+export type GraphTargetKind = "user" | "team" | "channel" | "chat";
 
 export type WebhookRouteOut = {
   id: string;
   organization_id: string;
   name: string;
   is_active: boolean;
+  delivery_backend: DeliveryBackend;
   target_type: WebhookTargetType;
   target_name: string;
   bot_service_url: string;
@@ -78,6 +80,9 @@ export type WebhookRouteOut = {
   graph_team_id: string;
   graph_team_name: string;
   graph_channel_id: string;
+  graph_user_id: string;
+  graph_user_display_name: string;
+  graph_user_principal_name: string;
   bot_target_source: string;
   bot_registered_by_id: string;
   bot_registered_at: string | null;
@@ -92,6 +97,7 @@ export type WebhookRouteOut = {
 export type WebhookRouteCreate = {
   name: string;
   is_active: boolean;
+  delivery_backend?: DeliveryBackend;
   target_type: WebhookTargetType;
   target_name: string;
   bot_service_url: string;
@@ -101,6 +107,9 @@ export type WebhookRouteCreate = {
   graph_team_id?: string;
   graph_team_name?: string;
   graph_channel_id?: string;
+  graph_user_id?: string;
+  graph_user_display_name?: string;
+  graph_user_principal_name?: string;
   bot_target_source?: string;
 };
 
@@ -154,6 +163,7 @@ export type WebhookDeliveryEventSummaryOut = {
   status: WebhookDeliveryStatus;
   title: string;
   payload_type: string;
+  delivery_backend: string;
   delivery_mode: string;
   status_code: number | null;
   error: string;
@@ -187,11 +197,15 @@ export type LogCleanupOut = {
 export type SettingItemOut = {
   key: string;
   label: string;
-  type: "string" | "int" | "url" | "enum" | "secret";
+  type: "string" | "int" | "url" | "enum" | "secret" | "bool";
   enum_values: string[];
   env_default: string;
   effective_value: string;
   is_overridden: boolean;
+};
+
+export type GraphDeliveryOAuthStartOut = {
+  authorization_url: string;
 };
 
 export type AdminReadinessOut = {
@@ -199,6 +213,7 @@ export type AdminReadinessOut = {
   app_version: string;
   delivery_mode: "mock" | "real" | string;
   bot: {
+    enabled: boolean;
     ready: boolean;
     auth_status: string;
     message: string;
@@ -210,7 +225,8 @@ export type AdminReadinessOut = {
     credential_fields: Record<string, string>;
     oauth: OAuthDiagnosticsOut;
   };
-  graph: {
+  graph_lookup: {
+    enabled: boolean;
     ready: boolean;
     auth_status: string;
     message: string;
@@ -220,6 +236,26 @@ export type AdminReadinessOut = {
     credential_source: "ms_app" | "missing" | string;
     credential_fields: Record<string, string>;
     oauth: OAuthDiagnosticsOut;
+  };
+  graph_delivery: {
+    enabled: boolean;
+    ready: boolean;
+    auth_status: string;
+    message: string;
+    token_checked: boolean;
+    token_request_succeeded: boolean;
+    configured: boolean;
+    credential_source: "delegated_service_user" | "missing" | string;
+    tenant_id: string;
+    client_id: string;
+    scopes: string[];
+    required_scopes: string[];
+    missing_scopes: string[];
+    service_user_id: string;
+    service_user_display_name: string;
+    service_user_principal_name: string;
+    access_token_expires_at: string | null;
+    refresh_checked_at: string | null;
   };
   runtime: {
     app_public_base_url: string;

@@ -65,6 +65,7 @@ class WebhookRoute(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     route_token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     route_token: Mapped[str] = mapped_column(Text, default="")
+    delivery_backend: Mapped[str] = mapped_column(String(32), default="bot_framework")
     target_type: Mapped[str] = mapped_column(String(32), default="bot_conversation")
     target_name: Mapped[str] = mapped_column(String(200))
     bot_service_url: Mapped[str] = mapped_column(Text, default="")
@@ -74,6 +75,9 @@ class WebhookRoute(Base):
     graph_team_id: Mapped[str] = mapped_column(Text, default="")
     graph_team_name: Mapped[str] = mapped_column(String(200), default="")
     graph_channel_id: Mapped[str] = mapped_column(Text, default="")
+    graph_user_id: Mapped[str] = mapped_column(Text, default="")
+    graph_user_display_name: Mapped[str] = mapped_column(String(255), default="")
+    graph_user_principal_name: Mapped[str] = mapped_column(String(255), default="")
     bot_target_source: Mapped[str] = mapped_column(String(40), default="")
     bot_registered_by_id: Mapped[str] = mapped_column(Text, default="")
     bot_registered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -82,7 +86,9 @@ class WebhookRoute(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
-    __table_args__ = (UniqueConstraint("organization_id", "name", name="uq_webhook_routes_org_name"),)
+    __table_args__ = (
+        UniqueConstraint("organization_id", "name", "delivery_backend", name="uq_webhook_routes_org_name_backend"),
+    )
 
 
 class WebhookDeliveryEvent(Base):
@@ -147,6 +153,28 @@ class BotConversationReference(Base):
     __table_args__ = (
         UniqueConstraint("conversation_id", name="uq_bot_conversation_references_conversation_id"),
     )
+
+
+class GraphDelegatedCredential(Base):
+    __tablename__ = "graph_delegated_credentials"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    tenant_id: Mapped[str] = mapped_column(Text, default="")
+    client_id: Mapped[str] = mapped_column(Text, default="")
+    scopes: Mapped[str] = mapped_column(Text, default="")
+    encrypted_refresh_token: Mapped[str] = mapped_column(Text, default="")
+    service_user_id: Mapped[str] = mapped_column(Text, default="")
+    service_user_display_name: Mapped[str] = mapped_column(String(255), default="")
+    service_user_principal_name: Mapped[str] = mapped_column(String(255), default="")
+    last_status: Mapped[str] = mapped_column(String(40), default="missing", index=True)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    access_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    refresh_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+    __table_args__ = (UniqueConstraint("organization_id", name="uq_graph_delegated_credentials_org"),)
 
 
 class AuditEvent(Base):

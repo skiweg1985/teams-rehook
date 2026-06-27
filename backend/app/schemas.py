@@ -62,7 +62,8 @@ class SystemLogEventOut(BaseModel):
     created_at: datetime
 
 
-GraphTargetKind = Literal["user", "team", "channel"]
+GraphTargetKind = Literal["user", "team", "channel", "chat"]
+DeliveryBackend = Literal["bot_framework", "graph"]
 WebhookTargetType = Literal["bot_conversation"]
 WebhookRouteStatus = Literal["delivered", "failed", "rejected"]
 
@@ -70,15 +71,19 @@ WebhookRouteStatus = Literal["delivered", "failed", "rejected"]
 class WebhookRouteBase(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     is_active: bool = True
+    delivery_backend: DeliveryBackend = "bot_framework"
     target_type: WebhookTargetType = "bot_conversation"
     target_name: str = Field(min_length=1, max_length=200)
-    bot_service_url: str = Field(min_length=1, max_length=2000)
-    bot_conversation_id: str = Field(min_length=1, max_length=2000)
+    bot_service_url: str = Field(default="", max_length=2000)
+    bot_conversation_id: str = Field(default="", max_length=2000)
     graph_target_kind: GraphTargetKind | None = None
     graph_target_id: str = Field(default="", max_length=2000)
     graph_team_id: str = Field(default="", max_length=2000)
     graph_team_name: str = Field(default="", max_length=200)
     graph_channel_id: str = Field(default="", max_length=2000)
+    graph_user_id: str = Field(default="", max_length=2000)
+    graph_user_display_name: str = Field(default="", max_length=255)
+    graph_user_principal_name: str = Field(default="", max_length=255)
     bot_target_source: str = Field(default="", max_length=40)
 
 
@@ -89,15 +94,19 @@ class WebhookRouteCreate(WebhookRouteBase):
 class WebhookRouteUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     is_active: bool | None = None
+    delivery_backend: DeliveryBackend | None = None
     target_type: WebhookTargetType | None = None
     target_name: str | None = Field(default=None, min_length=1, max_length=200)
-    bot_service_url: str | None = Field(default=None, min_length=1, max_length=2000)
-    bot_conversation_id: str | None = Field(default=None, min_length=1, max_length=2000)
+    bot_service_url: str | None = Field(default=None, max_length=2000)
+    bot_conversation_id: str | None = Field(default=None, max_length=2000)
     graph_target_kind: GraphTargetKind | None = None
     graph_target_id: str | None = Field(default=None, max_length=2000)
     graph_team_id: str | None = Field(default=None, max_length=2000)
     graph_team_name: str | None = Field(default=None, max_length=200)
     graph_channel_id: str | None = Field(default=None, max_length=2000)
+    graph_user_id: str | None = Field(default=None, max_length=2000)
+    graph_user_display_name: str | None = Field(default=None, max_length=255)
+    graph_user_principal_name: str | None = Field(default=None, max_length=255)
     bot_target_source: str | None = Field(default=None, max_length=40)
 
     @model_validator(mode="after")
@@ -105,6 +114,7 @@ class WebhookRouteUpdate(BaseModel):
         if (
             self.name is None
             and self.is_active is None
+            and self.delivery_backend is None
             and self.target_type is None
             and self.target_name is None
             and self.bot_service_url is None
@@ -114,6 +124,9 @@ class WebhookRouteUpdate(BaseModel):
             and self.graph_team_id is None
             and self.graph_team_name is None
             and self.graph_channel_id is None
+            and self.graph_user_id is None
+            and self.graph_user_display_name is None
+            and self.graph_user_principal_name is None
             and self.bot_target_source is None
         ):
             raise ValueError("At least one field must be provided")
@@ -127,6 +140,7 @@ class WebhookRouteOut(BaseModel):
     organization_id: str
     name: str
     is_active: bool
+    delivery_backend: str
     target_type: str
     target_name: str
     bot_service_url: str
@@ -136,6 +150,9 @@ class WebhookRouteOut(BaseModel):
     graph_team_id: str
     graph_team_name: str
     graph_channel_id: str
+    graph_user_id: str
+    graph_user_display_name: str
+    graph_user_principal_name: str
     bot_target_source: str
     bot_registered_by_id: str
     bot_registered_at: datetime | None = None
@@ -198,6 +215,7 @@ class WebhookDeliveryEventSummaryOut(BaseModel):
     status: str
     title: str = ""
     payload_type: str = ""
+    delivery_backend: str = ""
     delivery_mode: str = ""
     status_code: int | None = None
     error: str = ""
@@ -229,6 +247,7 @@ class LogCleanupOut(BaseModel):
 
 
 class ReadinessComponentOut(BaseModel):
+    enabled: bool = True
     ready: bool
     auth_status: str
     message: str
@@ -290,6 +309,21 @@ class GraphReadinessOut(ReadinessComponentOut):
     oauth: OAuthDiagnosticsOut
 
 
+class GraphDeliveryReadinessOut(ReadinessComponentOut):
+    configured: bool
+    credential_source: str
+    tenant_id: str = ""
+    client_id: str = ""
+    scopes: list[str] = Field(default_factory=list)
+    required_scopes: list[str] = Field(default_factory=list)
+    missing_scopes: list[str] = Field(default_factory=list)
+    service_user_id: str = ""
+    service_user_display_name: str = ""
+    service_user_principal_name: str = ""
+    access_token_expires_at: datetime | None = None
+    refresh_checked_at: datetime | None = None
+
+
 class RuntimeReadinessOut(BaseModel):
     app_public_base_url: str
     frontend_base_url: str
@@ -305,14 +339,15 @@ class AdminReadinessOut(BaseModel):
     app_version: str
     delivery_mode: str
     bot: BotReadinessOut
-    graph: GraphReadinessOut
+    graph_lookup: GraphReadinessOut
+    graph_delivery: GraphDeliveryReadinessOut
     runtime: RuntimeReadinessOut
 
 
 class SettingItemOut(BaseModel):
     key: str
     label: str
-    type: Literal["string", "int", "url", "enum", "secret"]
+    type: Literal["string", "int", "url", "enum", "secret", "bool"]
     enum_values: list[str] = Field(default_factory=list)
     env_default: str
     effective_value: str
@@ -321,6 +356,77 @@ class SettingItemOut(BaseModel):
 
 class SettingUpdateIn(BaseModel):
     value: str = Field(max_length=4000)
+
+
+class MonitoringDatabaseOut(BaseModel):
+    ok: bool
+    message: str = ""
+
+
+class MonitoringReadinessComponentOut(BaseModel):
+    enabled: bool = True
+    ready: bool
+    auth_status: str
+
+
+class MonitoringGraphReadinessOut(MonitoringReadinessComponentOut):
+    credential_source: str
+
+
+class MonitoringReadinessOut(BaseModel):
+    bot: MonitoringReadinessComponentOut
+    graph_lookup: MonitoringGraphReadinessOut
+    graph_delivery: MonitoringGraphReadinessOut
+
+
+class MonitoringRoutesOut(BaseModel):
+    total: int = 0
+    active: int = 0
+    inactive: int = 0
+    with_last_failure: int = 0
+    with_last_rejection: int = 0
+    untested_active: int = 0
+
+
+class MonitoringDeliveriesOut(BaseModel):
+    last_success_at: datetime | None = None
+    last_failure_at: datetime | None = None
+    last_rejection_at: datetime | None = None
+
+
+class MonitoringRollingWindowOut(BaseModel):
+    delivery_success_count: int = 0
+    delivery_failure_count: int = 0
+    delivery_rejection_count: int = 0
+    success_rate: float | None = None
+
+
+class MonitoringProblemRouteOut(BaseModel):
+    id: str
+    name: str
+    delivery_backend: str
+    is_active: bool
+    last_delivery_status: str | None = None
+    last_delivery_at: datetime | None = None
+
+
+class MonitoringStatusOut(BaseModel):
+    ok: bool
+    status: str
+    service: str
+    version: str
+    generated_at: datetime
+    database: MonitoringDatabaseOut
+    delivery_mode: str
+    readiness: MonitoringReadinessOut
+    routes: MonitoringRoutesOut
+    deliveries: MonitoringDeliveriesOut
+    rolling_windows: dict[str, MonitoringRollingWindowOut]
+    problem_routes: list[MonitoringProblemRouteOut]
+
+
+class GraphDeliveryOAuthStartOut(BaseModel):
+    authorization_url: str
 
 
 class TeamsTargetSearchOut(BaseModel):

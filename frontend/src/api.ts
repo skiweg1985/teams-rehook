@@ -3,6 +3,7 @@ import type {
   ApiError,
   AuditEventOut,
   BotConversationReferenceOut,
+  GraphDeliveryOAuthStartOut,
   LogCleanupOut,
   SessionResponse,
   SettingItemOut,
@@ -98,6 +99,18 @@ export const api = {
   },
   adminSettings(csrfToken: string) {
     return request<SettingItemOut[]>("/api/v1/admin/settings", { csrfToken });
+  },
+  startGraphDeliveryOAuth(csrfToken: string) {
+    return request<GraphDeliveryOAuthStartOut>("/api/v1/admin/graph-delivery/oauth/start", {
+      method: "POST",
+      csrfToken,
+    });
+  },
+  disconnectGraphDeliveryOAuth(csrfToken: string) {
+    return request<void>("/api/v1/admin/graph-delivery/oauth", {
+      method: "DELETE",
+      csrfToken,
+    });
   },
   updateSetting(csrfToken: string, key: string, value: string) {
     return request<SettingItemOut>(`/api/v1/admin/settings/${encodeURIComponent(key)}`, {
@@ -211,5 +224,9 @@ export const api = {
     return request<TeamsTargetSearchResult[]>(
       `/api/v1/teams-targets/teams/${encodeURIComponent(teamId)}/channels?${params.toString()}`,
     );
+  },
+  serviceUserChats(query: string) {
+    const params = new URLSearchParams({ q: query });
+    return request<TeamsTargetSearchResult[]>(`/api/v1/teams-targets/chats?${params.toString()}`);
   },
 };
