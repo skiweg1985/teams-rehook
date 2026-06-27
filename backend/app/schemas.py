@@ -296,6 +296,21 @@ class GraphReadinessOut(ReadinessComponentOut):
     oauth: OAuthDiagnosticsOut
 
 
+class GraphDeliveryReadinessOut(ReadinessComponentOut):
+    configured: bool
+    credential_source: str
+    tenant_id: str = ""
+    client_id: str = ""
+    scopes: list[str] = Field(default_factory=list)
+    required_scopes: list[str] = Field(default_factory=list)
+    missing_scopes: list[str] = Field(default_factory=list)
+    service_user_id: str = ""
+    service_user_display_name: str = ""
+    service_user_principal_name: str = ""
+    access_token_expires_at: datetime | None = None
+    refresh_checked_at: datetime | None = None
+
+
 class RuntimeReadinessOut(BaseModel):
     app_public_base_url: str
     frontend_base_url: str
@@ -311,7 +326,8 @@ class AdminReadinessOut(BaseModel):
     app_version: str
     delivery_mode: str
     bot: BotReadinessOut
-    graph: GraphReadinessOut
+    graph_lookup: GraphReadinessOut
+    graph_delivery: GraphDeliveryReadinessOut
     runtime: RuntimeReadinessOut
 
 

@@ -214,7 +214,7 @@ export type AdminReadinessOut = {
     credential_fields: Record<string, string>;
     oauth: OAuthDiagnosticsOut;
   };
-  graph: {
+  graph_lookup: {
     ready: boolean;
     auth_status: string;
     message: string;
@@ -224,6 +224,25 @@ export type AdminReadinessOut = {
     credential_source: "ms_app" | "missing" | string;
     credential_fields: Record<string, string>;
     oauth: OAuthDiagnosticsOut;
+  };
+  graph_delivery: {
+    ready: boolean;
+    auth_status: string;
+    message: string;
+    token_checked: boolean;
+    token_request_succeeded: boolean;
+    configured: boolean;
+    credential_source: "delegated_service_user" | "missing" | string;
+    tenant_id: string;
+    client_id: string;
+    scopes: string[];
+    required_scopes: string[];
+    missing_scopes: string[];
+    service_user_id: string;
+    service_user_display_name: string;
+    service_user_principal_name: string;
+    access_token_expires_at: string | null;
+    refresh_checked_at: string | null;
   };
   runtime: {
     app_public_base_url: string;

@@ -20,6 +20,7 @@ from app.schemas import (
     AdminReadinessOut,
     AuditEventOut,
     BotReadinessOut,
+    GraphDeliveryReadinessOut,
     GraphReadinessOut,
     LogCleanupOut,
     OAuthAppDiagnosticsOut,
@@ -33,6 +34,13 @@ from app.schemas import (
     UserOut,
 )
 from app.security import loads_json, utcnow
+from app.services.graph_delegated_auth import (
+    DEFAULT_DELEGATED_GRAPH_SCOPES,
+    GraphDelegatedAuthError,
+    GraphDelegatedConfigError,
+    diagnostics_for_organization,
+    refresh_delegated_access_token,
+)
 from app.services.graph_targets import GraphConfigError, GraphRequestError
 from app.services.log_retention import cleanup_log_events
 from app.services.teams_bot import BotDeliveryError
@@ -113,19 +121,22 @@ def list_users(admin: User = Depends(require_admin), db: Session = Depends(get_d
 
 
 @router.get("/readiness", response_model=AdminReadinessOut, dependencies=[Depends(require_csrf)])
-def readiness(admin: User = Depends(require_admin)):
-    _ = admin
+def readiness(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     settings = get_effective_settings()
     delivery_mode = settings.bot_delivery_mode_normalized
     bot = _bot_readiness(settings, delivery_mode)
-    graph = _graph_readiness(settings)
+    graph_lookup = _graph_lookup_readiness(settings)
+    graph_delivery = _graph_delivery_readiness(db, admin.organization_id, settings)
+    if graph_delivery.token_checked:
+        db.commit()
 
     return AdminReadinessOut(
         app_name=settings.app_name,
         app_version=settings.app_version,
         delivery_mode=delivery_mode,
         bot=bot,
-        graph=graph,
+        graph_lookup=graph_lookup,
+        graph_delivery=graph_delivery,
         runtime=RuntimeReadinessOut(
             app_public_base_url=settings.app_public_base_url,
             frontend_base_url=settings.frontend_base_url,
@@ -241,7 +252,7 @@ def _bot_readiness(settings, delivery_mode: str) -> BotReadinessOut:
     )
 
 
-def _graph_readiness(settings) -> GraphReadinessOut:
+def _graph_lookup_readiness(settings) -> GraphReadinessOut:
     credential_fields = {
         "tenant_id": _configured_status(settings.ms_app_tenant_id),
         "client_id": _configured_status(settings.ms_app_client_id),
@@ -336,6 +347,133 @@ def _graph_readiness(settings) -> GraphReadinessOut:
             else "Microsoft Graph token request succeeded. Lookup can still work, but optional directory metadata is limited by tenant permissions."
         ),
     )
+
+
+def _graph_delivery_readiness(db: Session, organization_id: str, settings) -> GraphDeliveryReadinessOut:
+    diagnostics = diagnostics_for_organization(db, organization_id)
+    required_scopes = list(DEFAULT_DELEGATED_GRAPH_SCOPES)
+    credential_source = "delegated_service_user" if diagnostics.configured else "missing"
+
+    if not diagnostics.configured:
+        return _graph_delivery_readiness_out(
+            diagnostics=diagnostics,
+            settings=settings,
+            required_scopes=required_scopes,
+            credential_source=credential_source,
+            ready=False,
+            auth_status="missing",
+            token_checked=False,
+            token_request_succeeded=False,
+            message="Delegated Graph delivery has not been configured.",
+        )
+
+    try:
+        access_token = refresh_delegated_access_token(
+            db,
+            organization_id=organization_id,
+            settings=settings,
+            scopes=DEFAULT_DELEGATED_GRAPH_SCOPES,
+        )
+        diagnostics = access_token.diagnostics
+    except GraphDelegatedConfigError:
+        diagnostics = diagnostics_for_organization(db, organization_id)
+        return _graph_delivery_readiness_out(
+            diagnostics=diagnostics,
+            settings=settings,
+            required_scopes=required_scopes,
+            credential_source=credential_source,
+            ready=False,
+            auth_status="incomplete",
+            token_checked=False,
+            token_request_succeeded=False,
+            message="Delegated Graph delivery requires MS_APP_TENANT_ID, MS_APP_CLIENT_ID and MS_APP_CLIENT_SECRET.",
+        )
+    except GraphDelegatedAuthError:
+        diagnostics = diagnostics_for_organization(db, organization_id)
+        auth_status = diagnostics.status if diagnostics.status in {"expired", "token_error"} else "token_error"
+        message = (
+            "Delegated Graph refresh token is expired or revoked. Reconnect the service user."
+            if auth_status == "expired"
+            else "Delegated Graph token refresh failed. Check the service-user connection and Microsoft tenant access."
+        )
+        return _graph_delivery_readiness_out(
+            diagnostics=diagnostics,
+            settings=settings,
+            required_scopes=required_scopes,
+            credential_source=credential_source,
+            ready=False,
+            auth_status=auth_status,
+            token_checked=True,
+            token_request_succeeded=False,
+            message=message,
+        )
+
+    missing_scopes = _missing_required_scopes(diagnostics.scopes or [], required_scopes)
+    if missing_scopes:
+        return _graph_delivery_readiness_out(
+            diagnostics=diagnostics,
+            settings=settings,
+            required_scopes=required_scopes,
+            credential_source=credential_source,
+            ready=False,
+            auth_status="permission_warning",
+            token_checked=True,
+            token_request_succeeded=True,
+            missing_scopes=missing_scopes,
+            message=f"Delegated Graph token refresh succeeded, but required scopes are missing: {', '.join(missing_scopes)}.",
+        )
+
+    return _graph_delivery_readiness_out(
+        diagnostics=diagnostics,
+        settings=settings,
+        required_scopes=required_scopes,
+        credential_source=credential_source,
+        ready=True,
+        auth_status="ready",
+        token_checked=True,
+        token_request_succeeded=True,
+        message="Delegated Graph token refresh succeeded. Graph delivery prerequisites are usable.",
+    )
+
+
+def _graph_delivery_readiness_out(
+    *,
+    diagnostics,
+    settings,
+    required_scopes: list[str],
+    credential_source: str,
+    ready: bool,
+    auth_status: str,
+    token_checked: bool,
+    token_request_succeeded: bool,
+    message: str,
+    missing_scopes: list[str] | None = None,
+) -> GraphDeliveryReadinessOut:
+    granted_scopes = diagnostics.scopes or []
+    return GraphDeliveryReadinessOut(
+        ready=ready,
+        auth_status=auth_status,
+        token_checked=token_checked,
+        token_request_succeeded=token_request_succeeded,
+        configured=diagnostics.configured,
+        credential_source=credential_source,
+        tenant_id=diagnostics.tenant_id or settings.ms_app_tenant_id,
+        client_id=diagnostics.client_id or settings.ms_app_client_id,
+        scopes=granted_scopes,
+        required_scopes=required_scopes,
+        missing_scopes=missing_scopes if missing_scopes is not None else _missing_required_scopes(granted_scopes, required_scopes),
+        service_user_id=diagnostics.service_user_id,
+        service_user_display_name=diagnostics.service_user_display_name,
+        service_user_principal_name=diagnostics.service_user_principal_name,
+        access_token_expires_at=diagnostics.access_token_expires_at,
+        refresh_checked_at=diagnostics.refresh_checked_at,
+        message=message,
+    )
+
+
+def _missing_required_scopes(granted_scopes: list[str], required_scopes: list[str]) -> list[str]:
+    granted = {scope.lower() for scope in granted_scopes}
+    return [scope for scope in required_scopes if scope.lower() not in granted]
 
 
 def _fetch_oauth_token(

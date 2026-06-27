@@ -2712,24 +2712,25 @@ function SettingsPage() {
                 onCopy={copyDiagnosticValue}
               />
               <IntegrationReadinessCard
-                title="Microsoft Graph"
+                title="Graph lookup"
                 description="Target search and display-name resolution readiness."
-                authStatus={readiness.graph.auth_status}
+                authStatus={readiness.graph_lookup.auth_status}
                 badges={[
                   {
-                    label: graphCredentialLabel(readiness.graph.credential_source),
-                    tone: readiness.graph.credential_source === "missing" ? "warn" : "neutral",
+                    label: graphCredentialLabel(readiness.graph_lookup.credential_source),
+                    tone: readiness.graph_lookup.credential_source === "missing" ? "warn" : "neutral",
                   },
                 ]}
-                message={readiness.graph.message}
-                oauth={readiness.graph.oauth}
+                message={readiness.graph_lookup.message}
+                oauth={readiness.graph_lookup.oauth}
                 credentialRows={[
-                  ["Tenant ID", credentialStatusLabel(readiness.graph.credential_fields.tenant_id)],
-                  ["Client ID", credentialStatusLabel(readiness.graph.credential_fields.client_id)],
-                  ["Client secret", credentialStatusLabel(readiness.graph.credential_fields.client_secret)],
+                  ["Tenant ID", credentialStatusLabel(readiness.graph_lookup.credential_fields.tenant_id)],
+                  ["Client ID", credentialStatusLabel(readiness.graph_lookup.credential_fields.client_id)],
+                  ["Client secret", credentialStatusLabel(readiness.graph_lookup.credential_fields.client_secret)],
                 ]}
                 onCopy={copyDiagnosticValue}
               />
+              <GraphDeliveryReadinessCard readiness={readiness.graph_delivery} onCopy={copyDiagnosticValue} />
             </div>
           </section>
 
@@ -2913,6 +2914,121 @@ function RuntimeSettingRow({
         />
       ) : null}
     </div>
+  );
+}
+
+function GraphDeliveryReadinessCard({
+  onCopy,
+  readiness,
+}: {
+  onCopy: (value: string, label: string) => void;
+  readiness: AdminReadinessOut["graph_delivery"];
+}) {
+  const serviceUser = readiness.service_user_display_name || readiness.service_user_principal_name || readiness.service_user_id || "-";
+  const missingScopes = new Set(readiness.missing_scopes.map((scope) => scope.toLowerCase()));
+  const attentionItems = graphDeliveryAttentionItems(readiness);
+
+  return (
+    <Card className="integration-readiness-card">
+      <div className="integration-card-content">
+        <div className="integration-status">
+          <div className="integration-status-main">
+            <div>
+              <p className="integration-kicker">Graph delivery</p>
+              <h2>Delegated Teams message delivery readiness.</h2>
+            </div>
+            <div className={classNames("health-state", `health-state--${authStatusTone(readiness.auth_status)}`)}>
+              <span aria-hidden="true" />
+              <strong>{healthStateLabel(readiness.auth_status)}</strong>
+            </div>
+            <p>{graphDeliverySummary(readiness)}</p>
+          </div>
+          <div className="integration-status-badges">
+            <StatusBadge label={authStatusLabel(readiness.auth_status)} tone={authStatusTone(readiness.auth_status)} />
+            <StatusBadge
+              label={readiness.credential_source === "delegated_service_user" ? "Delegated service user" : "Not connected"}
+              tone={readiness.credential_source === "delegated_service_user" ? "success" : "warn"}
+            />
+          </div>
+        </div>
+
+        <section className="settings-subsection">
+          <div className="settings-subsection-header">
+            <h3>Operational status</h3>
+          </div>
+          <dl className="settings-kv-list">
+            <KeyValue label="Token" tone={readiness.token_request_succeeded ? "success" : readiness.token_checked ? "danger" : "neutral"}>
+              {delegatedTokenFact(readiness)}
+            </KeyValue>
+            <KeyValue label="Token expires" tone={readiness.access_token_expires_at ? "success" : "neutral"}>
+              {readiness.access_token_expires_at ? `${formatRelativeTime(readiness.access_token_expires_at)} (${formatDateTime(readiness.access_token_expires_at)})` : "-"}
+            </KeyValue>
+            <KeyValue label="Last checked">{readiness.refresh_checked_at ? formatDateTime(readiness.refresh_checked_at) : "Not checked"}</KeyValue>
+            <KeyValue label="Service user">{serviceUser}</KeyValue>
+          </dl>
+        </section>
+
+        <section className="settings-subsection">
+          <div className="settings-subsection-header">
+            <h3>Delegated scopes</h3>
+            <p>{graphDeliveryScopeSummary(readiness)}</p>
+          </div>
+          <div className="permission-badge-list">
+            {readiness.required_scopes.map((scope) => (
+              <span
+                className={classNames("permission-badge", missingScopes.has(scope.toLowerCase()) ? "permission-badge--warn" : "permission-badge--success")}
+                key={scope}
+              >
+                {scope}
+              </span>
+            ))}
+          </div>
+        </section>
+
+        {attentionItems.length ? (
+          <section className="settings-subsection">
+            <div className="settings-subsection-header">
+              <h3>Needs attention</h3>
+            </div>
+            <ul className="attention-list">
+              {attentionItems.map((item) => (
+                <li className={classNames("attention-item", `attention-item--${item.tone}`)} key={item.title}>
+                  <strong>{item.title}</strong>
+                  <span>{item.description}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+
+        <details className="advanced-details">
+          <summary>
+            <span>Advanced technical details</span>
+            <small>Delegated account, IDs and scope state</small>
+          </summary>
+          <dl className="definition-list definition-list--compact advanced-definition-list">
+            <dt>Tenant ID</dt>
+            <dd>
+              <DiagnosticValue value={readiness.tenant_id} label="Tenant ID" onCopy={onCopy} />
+            </dd>
+            <dt>Client ID</dt>
+            <dd>
+              <DiagnosticValue value={readiness.client_id} label="Client ID" onCopy={onCopy} />
+            </dd>
+            <dt>Service user ID</dt>
+            <dd>
+              <DiagnosticValue value={readiness.service_user_id} label="Service user ID" onCopy={onCopy} />
+            </dd>
+            <dt>Service user UPN</dt>
+            <dd>{readiness.service_user_principal_name || "-"}</dd>
+            <dt>Granted scopes</dt>
+            <dd>{readiness.scopes.join(", ") || "-"}</dd>
+            <dt>Missing scopes</dt>
+            <dd>{readiness.missing_scopes.join(", ") || "-"}</dd>
+          </dl>
+        </details>
+      </div>
+    </Card>
   );
 }
 
@@ -3134,6 +3250,30 @@ function readinessSummary(authStatus: string, message: string, oauth: OAuthDiagn
   return message || "Readiness could not be fully determined.";
 }
 
+function graphDeliverySummary(readiness: AdminReadinessOut["graph_delivery"]): string {
+  if (readiness.auth_status === "ready") return "Delegated token checks passed, required scopes are present and Graph delivery can be used.";
+  if (readiness.auth_status === "missing") return readiness.message || "Connect a delegated service user before Microsoft Graph delivery can send messages.";
+  if (readiness.auth_status === "expired") return readiness.message || "The delegated service-user connection has expired or was revoked.";
+  if (readiness.auth_status === "permission_warning") return readiness.message || "The delegated token is valid, but required Graph delivery scopes are missing.";
+  if (readiness.auth_status === "token_error") return readiness.message || "Delegated token verification failed.";
+  if (readiness.auth_status === "incomplete") return readiness.message || "Required app registration settings are missing.";
+  return readiness.message || "Graph delivery readiness could not be fully determined.";
+}
+
+function delegatedTokenFact(readiness: AdminReadinessOut["graph_delivery"]): string {
+  if (!readiness.token_checked) return "Not checked";
+  if (!readiness.token_request_succeeded) return "Failed";
+  if (!readiness.access_token_expires_at) return "Valid";
+  return `Valid ${formatRelativeTime(readiness.access_token_expires_at)}`;
+}
+
+function graphDeliveryScopeSummary(readiness: AdminReadinessOut["graph_delivery"]): string {
+  if (!readiness.token_checked) return "Scopes are verified after a delegated token refresh succeeds.";
+  if (!readiness.token_request_succeeded) return "Scopes cannot be verified until delegated token refresh succeeds.";
+  if (readiness.missing_scopes.length) return `${readiness.missing_scopes.length} required delegated scope${readiness.missing_scopes.length === 1 ? "" : "s"} missing.`;
+  return "All required delegated delivery scopes are present.";
+}
+
 function compactScope(value: string): string {
   if (!value) return "-";
   return value.replace(/^https:\/\/(graph\.microsoft\.com|api\.botframework\.com)\//, "");
@@ -3166,6 +3306,8 @@ function credentialStatusLabel(status?: string): string {
 function authStatusLabel(status: string): string {
   if (status === "mock") return "Mock mode";
   if (status === "ready") return "Ready";
+  if (status === "missing") return "Not connected";
+  if (status === "expired") return "Connection expired";
   if (status === "permission_warning") return "Ready with permission warning";
   if (status === "token_error") return "Token request failed";
   if (status === "incomplete") return "Incomplete configuration";
@@ -3176,13 +3318,15 @@ function authStatusTone(status: string): "neutral" | "success" | "warn" | "dange
   if (status === "ready") return "success";
   if (status === "permission_warning") return "warn";
   if (status === "token_error") return "danger";
+  if (status === "expired") return "danger";
+  if (status === "missing") return "warn";
   if (status === "incomplete") return "warn";
   return "neutral";
 }
 
 function healthStateLabel(status: string): string {
   if (status === "ready" || status === "mock") return "Ready";
-  if (status === "token_error") return "Error";
+  if (status === "token_error" || status === "expired") return "Error";
   return "Warning";
 }
 
@@ -3224,6 +3368,44 @@ function readinessAttentionItems(authStatus: string, message: string, oauth: OAu
     items.push({
       title: "Tenant metadata is limited",
       description: `${oauth.tenant.message || "Tenant metadata is not available."} Optional: this only affects tenant display details.`,
+      tone: "warn",
+    });
+  }
+
+  return items;
+}
+
+function graphDeliveryAttentionItems(readiness: AdminReadinessOut["graph_delivery"]): Array<{ title: string; description: string; tone: "warn" | "danger" }> {
+  const items: Array<{ title: string; description: string; tone: "warn" | "danger" }> = [];
+
+  if (readiness.auth_status === "missing") {
+    items.push({
+      title: "Delegated service user missing",
+      description: readiness.message || "Required: connect a delegated Graph service user before selecting Microsoft Graph delivery.",
+      tone: "warn",
+    });
+  }
+
+  if (readiness.auth_status === "expired") {
+    items.push({
+      title: "Delegated connection expired",
+      description: readiness.message || "Required: reconnect the service user because Microsoft rejected the refresh token.",
+      tone: "danger",
+    });
+  }
+
+  if (readiness.auth_status === "token_error") {
+    items.push({
+      title: "Delegated token check failed",
+      description: readiness.message || "Required: verify the service-user connection and tenant access.",
+      tone: "danger",
+    });
+  }
+
+  if (readiness.missing_scopes.length) {
+    items.push({
+      title: "Required scopes missing",
+      description: `Required: grant ${readiness.missing_scopes.join(", ")} to the delegated Microsoft Graph connection.`,
       tone: "warn",
     });
   }
