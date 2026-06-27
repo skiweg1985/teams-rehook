@@ -3228,6 +3228,12 @@ function DeliveryEventDetails({ event }: { event: WebhookDeliveryEventOut & Part
           <dd>{primitiveField(requestMetadata, "content_length")}</dd>
           <dt>Client host</dt>
           <dd>{stringField(requestMetadata, "client_host")}</dd>
+          <dt>Client source</dt>
+          <dd>{stringField(requestMetadata, "client_host_source")}</dd>
+          <dt>Direct client</dt>
+          <dd>{stringField(requestMetadata, "direct_client_host")}</dd>
+          <dt>X-Forwarded-For</dt>
+          <dd>{stringField(requestMetadata, "x_forwarded_for")}</dd>
           <dt>Trigger</dt>
           <dd>{stringField(requestMetadata, "trigger")}</dd>
         </dl>
@@ -3695,6 +3701,18 @@ const SETTING_META: Record<string, SettingMeta> = {
     unit: "minutes",
     display: "number",
   },
+  trust_x_forwarded_for: {
+    section: "runtime",
+    label: "Trust X-Forwarded-For",
+    description: "Use forwarded client IPs only when the direct peer is trusted.",
+    display: "switch",
+  },
+  trusted_proxy_ips: {
+    section: "runtime",
+    label: "Trusted proxy IPs",
+    description: "Comma-separated proxy IPs or CIDR ranges allowed to supply forwarded client IPs.",
+    display: "technical",
+  },
   app_public_base_url: {
     section: "runtime",
     label: "Public URL",
@@ -3753,6 +3771,8 @@ const RUNTIME_SETTING_KEYS = [
   "webhook_max_payload_bytes",
   "log_retention_days",
   "log_cleanup_interval_minutes",
+  "trust_x_forwarded_for",
+  "trusted_proxy_ips",
 ] as const;
 
 const ADVANCED_IDENTITY_SETTING_KEYS = [
@@ -4070,6 +4090,7 @@ function RuntimeDefaultsCard({
   const urlSettings = settings.filter((item) => item.type === "url" && item.key !== "bot_default_service_url");
   const limitSettings = settings.filter((item) => item.type === "int");
   const fallbackSettings = settings.filter((item) => item.key === "bot_default_service_url");
+  const proxySettings = settings.filter((item) => item.key === "trust_x_forwarded_for" || item.key === "trusted_proxy_ips");
 
   return (
     <Card className="settings-card" title="Runtime defaults" description="Effective URLs, limits and retention used by relay operations.">
@@ -4104,6 +4125,23 @@ function RuntimeDefaultsCard({
               notify={notify}
               settingsByKey={settingsByKey}
               compact
+            />
+          ))}
+        </div>
+        <div className="settings-card-block">
+          <div className="settings-card-block-header">
+            <h3>Proxy logging</h3>
+            <p>Controls how source IPs are recorded for incoming webhook logs.</p>
+          </div>
+          {proxySettings.map((item) => (
+            <RuntimeSettingControl
+              key={item.key}
+              item={item}
+              csrfToken={csrfToken}
+              onChanged={onChanged}
+              notify={notify}
+              settingsByKey={settingsByKey}
+              compact={item.type === "bool"}
             />
           ))}
         </div>

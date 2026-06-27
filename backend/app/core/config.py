@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     webhook_max_payload_bytes: int = 64_000
     log_retention_days: int = 7
     log_cleanup_interval_minutes: int = 60
+    trust_x_forwarded_for: bool = False
+    trusted_proxy_ips: str = ""
     settings_enc_key: str = ""
     monitoring_api_key: str = ""
 

@@ -98,6 +98,13 @@ def test_list_settings_returns_env_defaults(db_session: Session, monkeypatch: py
         assert bot_enabled["type"] == "bool"
         assert bot_enabled["env_default"] == "true"
         assert bot_enabled["effective_value"] == "true"
+        trust_xff = next(item for item in payload if item["key"] == "trust_x_forwarded_for")
+        assert trust_xff["type"] == "bool"
+        assert trust_xff["env_default"] == "false"
+        assert trust_xff["effective_value"] == "false"
+        trusted_proxies = next(item for item in payload if item["key"] == "trusted_proxy_ips")
+        assert trusted_proxies["type"] == "string"
+        assert trusted_proxies["effective_value"] == ""
 
 
 def test_override_and_reset_setting(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -138,6 +145,36 @@ def test_secret_override_is_masked(db_session: Session, monkeypatch: pytest.Monk
         updated = put.json()
         assert updated["effective_value"] == "configured"
         assert "example-secret-value" not in str(updated)
+
+
+def test_trusted_proxy_settings_can_be_overridden_and_validated(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with make_client(db_session, monkeypatch) as client:
+        csrf = login_admin(client)
+        enabled = client.put(
+            "/api/v1/admin/settings/trust_x_forwarded_for",
+            headers={"X-CSRF-Token": csrf},
+            json={"value": "true"},
+        )
+        assert enabled.status_code == 200
+        assert enabled.json()["effective_value"] == "true"
+
+        proxies = client.put(
+            "/api/v1/admin/settings/trusted_proxy_ips",
+            headers={"X-CSRF-Token": csrf},
+            json={"value": "127.0.0.1, 10.0.0.0/24"},
+        )
+        assert proxies.status_code == 200
+        assert proxies.json()["effective_value"] == "127.0.0.1/32,10.0.0.0/24"
+
+        rejected = client.put(
+            "/api/v1/admin/settings/trusted_proxy_ips",
+            headers={"X-CSRF-Token": csrf},
+            json={"value": "127.0.0.1, not-an-ip"},
+        )
+        assert rejected.status_code == 400
+        assert rejected.json()["detail"] == "Trusted proxy IPs must be comma-separated IP addresses or CIDR ranges"
 
 
 def test_graph_delivery_requires_graph_lookup_enabled(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -758,7 +759,7 @@ def _record_event(
 
 
 def _request_metadata(request: Request, body: bytes) -> dict:
-    client_host = request.client.host if request.client else ""
+    client_host, direct_client_host, x_forwarded_for, client_host_source = _resolve_client_host(request)
     return {
         "trigger": "external_webhook",
         "method": request.method,
@@ -766,9 +767,76 @@ def _request_metadata(request: Request, body: bytes) -> dict:
         "content_type": request.headers.get("content-type", ""),
         "content_length": request.headers.get("content-length", str(len(body))),
         "client_host": client_host,
+        "direct_client_host": direct_client_host,
+        "x_forwarded_for": x_forwarded_for,
+        "client_host_source": client_host_source,
         "user_agent": request.headers.get("user-agent", ""),
         "payload_preview": payload_preview(body),
     }
+
+
+def _resolve_client_host(request: Request) -> tuple[str, str, str, str]:
+    direct_client_host = request.client.host if request.client else ""
+    x_forwarded_for = request.headers.get("x-forwarded-for", "")
+    settings = get_effective_settings()
+    trusted_proxy_networks = _trusted_proxy_networks(settings.trusted_proxy_ips)
+    if (
+        not settings.trust_x_forwarded_for
+        or not x_forwarded_for.strip()
+        or not _host_in_networks(direct_client_host, trusted_proxy_networks)
+    ):
+        return direct_client_host, direct_client_host, x_forwarded_for, "direct"
+
+    forwarded_hosts = _forwarded_host_chain(x_forwarded_for)
+    if not forwarded_hosts:
+        return direct_client_host, direct_client_host, x_forwarded_for, "direct"
+
+    for forwarded_host in reversed(forwarded_hosts):
+        if not _ip_in_networks(forwarded_host, trusted_proxy_networks):
+            return str(forwarded_host), direct_client_host, x_forwarded_for, "x_forwarded_for"
+    return str(forwarded_hosts[0]), direct_client_host, x_forwarded_for, "x_forwarded_for"
+
+
+def _trusted_proxy_networks(value: str) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for part in value.split(","):
+        candidate = part.strip()
+        if not candidate:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(candidate, strict=False))
+        except ValueError:
+            return []
+    return networks
+
+
+def _forwarded_host_chain(value: str) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    hosts: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    for part in value.split(","):
+        candidate = part.strip()
+        if not candidate:
+            return []
+        try:
+            hosts.append(ipaddress.ip_address(candidate))
+        except ValueError:
+            return []
+    return hosts
+
+
+def _host_in_networks(host: str, networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network]) -> bool:
+    if not host or not networks:
+        return False
+    try:
+        return _ip_in_networks(ipaddress.ip_address(host), networks)
+    except ValueError:
+        return False
+
+
+def _ip_in_networks(
+    host: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network],
+) -> bool:
+    return any(host in network for network in networks)
 
 
 def _manual_test_metadata(route: WebhookRoute) -> dict:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import threading
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -48,6 +49,10 @@ OVERRIDABLE_SETTINGS: dict[str, SettingDefinition] = {
     "log_cleanup_interval_minutes": SettingDefinition(
         "log_cleanup_interval_minutes", "Log cleanup interval", "int", False
     ),
+    "trust_x_forwarded_for": SettingDefinition(
+        "trust_x_forwarded_for", "Trust X-Forwarded-For", "bool", False
+    ),
+    "trusted_proxy_ips": SettingDefinition("trusted_proxy_ips", "Trusted proxy IPs", "string", False),
     "app_public_base_url": SettingDefinition("app_public_base_url", "Public URL", "url", False),
     "frontend_base_url": SettingDefinition("frontend_base_url", "Frontend URL", "url", False),
     "ms_app_tenant_id": SettingDefinition("ms_app_tenant_id", "Microsoft tenant ID", "string", False),
@@ -143,7 +148,28 @@ def _validate_and_normalize(key: str, value: str) -> str:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Value must be a valid HTTP URL")
         return raw.rstrip("/")
 
+    if key == "trusted_proxy_ips":
+        return _normalize_trusted_proxy_ips(raw)
+
     return raw
+
+
+def _normalize_trusted_proxy_ips(value: str) -> str:
+    if not value:
+        return ""
+    networks: list[str] = []
+    for part in value.split(","):
+        candidate = part.strip()
+        if not candidate:
+            continue
+        try:
+            networks.append(str(ipaddress.ip_network(candidate, strict=False)))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Trusted proxy IPs must be comma-separated IP addresses or CIDR ranges",
+            ) from exc
+    return ",".join(networks)
 
 
 def _coerce_for_settings(key: str, value: str) -> Any:

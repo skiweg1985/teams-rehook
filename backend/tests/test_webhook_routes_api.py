@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from datetime import timedelta
 import json
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,6 +17,7 @@ from app.main import create_app
 from app.models import AuditEvent, BotActivityEvent, Organization, User, WebhookDeliveryEvent, WebhookRoute
 from app.security import dumps_json, hash_secret, lookup_secret_hash
 from app.security import utcnow
+from app.routers.webhook_routes import _resolve_client_host
 
 
 @pytest.fixture()
@@ -119,7 +121,99 @@ def test_public_webhook_delivers_known_active_route(client: TestClient, db_sessi
     events = db_session.scalars(select(WebhookDeliveryEvent).where(WebhookDeliveryEvent.route_id == route.id)).all()
     assert len(events) == 1
     assert events[0].status == "delivered"
+    request_metadata = json.loads(events[0].request_metadata_json)
+    assert request_metadata["client_host"]
+    assert request_metadata["direct_client_host"] == request_metadata["client_host"]
+    assert request_metadata["client_host_source"] == "direct"
     assert json.loads(events[0].delivery_result_json)["backend"] == "bot_framework"
+
+
+def test_client_host_ignores_x_forwarded_for_by_default(monkeypatch: pytest.MonkeyPatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("TRUST_X_FORWARDED_FOR", "false")
+    monkeypatch.setenv("TRUSTED_PROXY_IPS", "10.0.0.0/24")
+    get_settings.cache_clear()
+    request = SimpleNamespace(
+        client=SimpleNamespace(host="10.0.0.10"),
+        headers={"x-forwarded-for": "203.0.113.42, 10.0.0.10"},
+    )
+
+    try:
+        assert _resolve_client_host(request) == (
+            "10.0.0.10",
+            "10.0.0.10",
+            "203.0.113.42, 10.0.0.10",
+            "direct",
+        )
+    finally:
+        get_settings.cache_clear()
+
+
+def test_client_host_uses_x_forwarded_for_from_trusted_proxy(monkeypatch: pytest.MonkeyPatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("TRUST_X_FORWARDED_FOR", "true")
+    monkeypatch.setenv("TRUSTED_PROXY_IPS", "10.0.0.0/24")
+    get_settings.cache_clear()
+    request = SimpleNamespace(
+        client=SimpleNamespace(host="10.0.0.10"),
+        headers={"x-forwarded-for": "203.0.113.42, 10.0.0.9"},
+    )
+
+    try:
+        assert _resolve_client_host(request) == (
+            "203.0.113.42",
+            "10.0.0.10",
+            "203.0.113.42, 10.0.0.9",
+            "x_forwarded_for",
+        )
+    finally:
+        get_settings.cache_clear()
+
+
+def test_client_host_ignores_x_forwarded_for_from_untrusted_proxy(monkeypatch: pytest.MonkeyPatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("TRUST_X_FORWARDED_FOR", "true")
+    monkeypatch.setenv("TRUSTED_PROXY_IPS", "10.0.0.0/24")
+    get_settings.cache_clear()
+    request = SimpleNamespace(
+        client=SimpleNamespace(host="198.51.100.10"),
+        headers={"x-forwarded-for": "203.0.113.42"},
+    )
+
+    try:
+        assert _resolve_client_host(request) == (
+            "198.51.100.10",
+            "198.51.100.10",
+            "203.0.113.42",
+            "direct",
+        )
+    finally:
+        get_settings.cache_clear()
+
+
+def test_client_host_falls_back_when_x_forwarded_for_is_malformed(monkeypatch: pytest.MonkeyPatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("TRUST_X_FORWARDED_FOR", "true")
+    monkeypatch.setenv("TRUSTED_PROXY_IPS", "10.0.0.0/24")
+    get_settings.cache_clear()
+    request = SimpleNamespace(
+        client=SimpleNamespace(host="10.0.0.10"),
+        headers={"x-forwarded-for": "203.0.113.42, not-an-ip"},
+    )
+
+    try:
+        assert _resolve_client_host(request) == (
+            "10.0.0.10",
+            "10.0.0.10",
+            "203.0.113.42, not-an-ip",
+            "direct",
+        )
+    finally:
+        get_settings.cache_clear()
 
 
 def test_public_webhook_rejects_unknown_token(client: TestClient, db_session: Session):
