@@ -60,7 +60,7 @@ Important constraints for this product:
 | Target type | V1 decision | Required route identifiers | Delivery endpoint | Delegated permissions |
 | --- | --- | --- | --- | --- |
 | Team channel | Supported first | `team_id`, `channel_id` | `POST /teams/{team-id}/channels/{channel-id}/messages` | `ChannelMessage.Send` |
-| Existing group chat | Supported after chat discovery/selection is available | `chat_id` | `POST /chats/{chat-id}/messages` | `ChatMessage.Send` |
+| Existing group chat | Supported for chats the service user belongs to | `chat_id` | `POST /chats/{chat-id}/messages` | `ChatMessage.Send`; `Chat.ReadBasic` for service-user chat search |
 | User / 1:1 | Deferred for first send implementation | `chat_id` once resolved or created | `POST /chats/{chat-id}/messages` | `ChatMessage.Send`; `Chat.Create` only if route setup creates/resolves the 1:1 chat |
 
 V1 should not treat a Graph user ID alone as a sendable delivery target. A user
@@ -88,10 +88,27 @@ Operational rules:
 
 Minimum delegated permission set for V1:
 
+- `offline_access` so Teams Rehook can refresh the delegated service-user
+  connection.
+- `User.Read` as the delegated sign-in baseline.
 - `ChannelMessage.Send` for channel routes.
 - `ChatMessage.Send` for existing chat routes.
+- `Chat.ReadBasic` for listing existing chats that the delegated service user
+  belongs to.
 - `Chat.Create` only when the product explicitly implements chat creation or
   one-on-one chat resolution during route setup.
+
+The Entra app registration must also include this web redirect URI:
+
+```text
+{APP_PUBLIC_BASE_URL}/api/v1/admin/graph-delivery/oauth/callback
+```
+
+With the local `.env.example` defaults, that is:
+
+```text
+http://localhost:8080/api/v1/admin/graph-delivery/oauth/callback
+```
 
 ## Route Metadata
 

@@ -98,17 +98,42 @@ GRAPH_SCOPE=https://graph.microsoft.com/.default
 
 ### Microsoft Graph Permissions
 
-Graph access is optional and only supports target search and display-name resolution. Teams delivery itself does not use Microsoft Graph message send or message read APIs; delivery uses Bot Framework credentials plus a captured Teams conversation reference.
+Teams Rehook uses Microsoft Graph in two separate ways:
 
-Configure these permissions as Microsoft Graph **Application permissions** on the Entra app registration used by `MS_APP_CLIENT_ID`, then grant tenant admin consent. Teams Rehook requests tokens with the client credentials flow and `GRAPH_SCOPE=https://graph.microsoft.com/.default`.
+- Graph lookup uses app-only client credentials for target search and display-name resolution.
+- Graph delivery uses a delegated service-user connection for Microsoft Graph-backed route delivery.
 
-The current Graph calls need:
+Configure these Microsoft Graph **Application permissions** on the Entra app registration used by `MS_APP_CLIENT_ID`, then grant tenant admin consent. Teams Rehook requests lookup tokens with the client credentials flow and `GRAPH_SCOPE=https://graph.microsoft.com/.default`.
+
+Graph lookup needs:
 
 - `User.Read.All` for user search and name resolution through `/users` and `/users/{id}`.
 - `Team.ReadBasic.All` for team search and name resolution through `/teams` and `/teams/{team-id}`.
 - `Channel.ReadBasic.All` for channel lookup and name resolution through `/teams/{team-id}/channels` and `/teams/{team-id}/channels/{channel-id}`.
 
 Settings > Readiness also performs optional read-only diagnostics against `/servicePrincipals` and `/organization` to display the app registration and tenant metadata behind the token. If those diagnostic metadata calls are not available in a tenant, target search can still work as long as the required permissions above are present; the page will show a permission warning for the missing optional metadata.
+
+Configure these Microsoft Graph **Delegated permissions** on the same Entra app registration for Graph delivery, then grant consent as required by the tenant:
+
+- `offline_access` so Teams Rehook can refresh the delegated service-user connection.
+- `User.Read` for the delegated sign-in baseline.
+- `ChannelMessage.Send` for Graph channel delivery.
+- `ChatMessage.Send` for delivery into existing chats.
+- `Chat.ReadBasic` for service-user chat search in the route UI.
+
+Add this redirect URI under the app registration's web authentication platform:
+
+```text
+{APP_PUBLIC_BASE_URL}/api/v1/admin/graph-delivery/oauth/callback
+```
+
+With the local defaults from `.env.example`, the callback URL is:
+
+```text
+http://localhost:8080/api/v1/admin/graph-delivery/oauth/callback
+```
+
+Graph delivery messages appear in Teams as the connected delegated service user. The service user must be licensed and must already be a member of the selected Teams channels or chats. Teams Rehook does not create 1:1 chats in V1.
 
 Use **Settings > Readiness** to verify delivery mode, credential completeness, Bot and Graph token request status, public URLs, payload limits, log retention, and cookie configuration.
 
