@@ -19,8 +19,8 @@ from sqlalchemy.orm import Session
 
 from app.core.settings_overrides import clear_override, get_effective_settings, list_setting_items, set_override
 from app.database import get_db
-from app.deps import record_audit, require_admin, require_csrf
-from app.models import AuditEvent, BotActivityEvent, GraphDelegatedCredential, User
+from app.deps import get_current_session, record_audit, require_admin, require_csrf
+from app.models import AuditEvent, BotActivityEvent, GraphDelegatedCredential, Session as UserSession, User
 from app.schemas import (
     AdminReadinessOut,
     AuditEventOut,
@@ -37,9 +37,12 @@ from app.schemas import (
     SettingItemOut,
     SettingUpdateIn,
     SystemLogEventOut,
+    UserCreateIn,
     UserOut,
+    UserPasswordUpdateIn,
+    UserUpdateIn,
 )
-from app.security import loads_json, utcnow
+from app.security import hash_secret, loads_json, utcnow
 from app.services.graph_delegated_auth import (
     DEFAULT_DELEGATED_GRAPH_SCOPES,
     GraphDelegatedAuthError,
@@ -201,6 +204,181 @@ def list_users(admin: User = Depends(require_admin), db: Session = Depends(get_d
         .where(User.organization_id == admin.organization_id)
         .order_by(User.created_at.desc())
     ).all()
+
+
+@router.post("/users", response_model=UserOut, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_csrf)])
+def create_user(payload: UserCreateIn, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    email = _normalize_user_email(payload.email)
+    _ensure_user_email_available(db, admin.organization_id, email)
+    user = User(
+        organization_id=admin.organization_id,
+        email=email,
+        display_name=payload.display_name.strip(),
+        password_hash=hash_secret(payload.password),
+        is_admin=payload.is_admin,
+        is_active=payload.is_active,
+    )
+    db.add(user)
+    db.flush()
+    record_audit(
+        db,
+        action="admin.user.created",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata={
+            "user_id": user.id,
+            "email": user.email,
+            "is_admin": user.is_admin,
+            "is_active": user.is_active,
+        },
+    )
+    db.commit()
+    return user
+
+
+@router.patch("/users/{user_id}", response_model=UserOut, dependencies=[Depends(require_csrf)])
+def update_user(
+    user_id: str,
+    payload: UserUpdateIn,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    user = _get_org_user(db, admin.organization_id, user_id)
+    next_email = _normalize_user_email(payload.email) if payload.email is not None else user.email
+    next_display_name = payload.display_name.strip() if payload.display_name is not None else user.display_name
+    next_is_admin = payload.is_admin if payload.is_admin is not None else user.is_admin
+    next_is_active = payload.is_active if payload.is_active is not None else user.is_active
+
+    if next_email != user.email:
+        _ensure_user_email_available(db, admin.organization_id, next_email, user_id=user.id)
+    _ensure_user_update_allowed(db, actor=admin, user=user, next_is_admin=next_is_admin, next_is_active=next_is_active)
+
+    before = {
+        "email": user.email,
+        "display_name": user.display_name,
+        "is_admin": user.is_admin,
+        "is_active": user.is_active,
+    }
+    user.email = next_email
+    user.display_name = next_display_name
+    user.is_admin = next_is_admin
+    user.is_active = next_is_active
+    revoked_sessions = 0
+    if not user.is_active:
+        revoked_sessions = _revoke_user_sessions(db, user.id)
+    record_audit(
+        db,
+        action="admin.user.updated",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata={
+            "user_id": user.id,
+            "before": before,
+            "after": {
+                "email": user.email,
+                "display_name": user.display_name,
+                "is_admin": user.is_admin,
+                "is_active": user.is_active,
+            },
+        },
+    )
+    if revoked_sessions:
+        _record_session_revocation(db, admin, user, revoked_sessions, "user_deactivated")
+    db.commit()
+    return user
+
+
+@router.put("/users/{user_id}/password", response_model=UserOut, dependencies=[Depends(require_csrf)])
+def update_user_password(
+    user_id: str,
+    payload: UserPasswordUpdateIn,
+    admin: User = Depends(require_admin),
+    current_session: UserSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+):
+    user = _get_org_user(db, admin.organization_id, user_id)
+    user.password_hash = hash_secret(payload.password)
+    revoked_sessions = _revoke_user_sessions(db, user.id, exclude_session_id=current_session.id if user.id == admin.id else None)
+    record_audit(
+        db,
+        action="admin.user.password_changed",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata={"user_id": user.id, "email": user.email},
+    )
+    if revoked_sessions:
+        _record_session_revocation(db, admin, user, revoked_sessions, "password_changed")
+    db.commit()
+    return user
+
+
+def _normalize_user_email(email: str) -> str:
+    value = str(email or "").strip().lower()
+    if "@" not in value:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A valid email address is required")
+    return value
+
+
+def _get_org_user(db: Session, organization_id: str, user_id: str) -> User:
+    user = db.scalar(select(User).where(User.id == user_id, User.organization_id == organization_id))
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return user
+
+
+def _ensure_user_email_available(db: Session, organization_id: str, email: str, user_id: str | None = None) -> None:
+    existing = db.scalar(select(User).where(User.organization_id == organization_id, User.email == email))
+    if existing is not None and existing.id != user_id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A user with this email already exists")
+
+
+def _ensure_user_update_allowed(
+    db: Session,
+    *,
+    actor: User,
+    user: User,
+    next_is_admin: bool,
+    next_is_active: bool,
+) -> None:
+    if user.id == actor.id and not next_is_admin:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot remove your own admin access")
+    if user.id == actor.id and not next_is_active:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot deactivate your own user")
+    if user.is_admin and user.is_active and (not next_is_admin or not next_is_active):
+        active_admins = db.scalars(
+            select(User.id).where(
+                User.organization_id == actor.organization_id,
+                User.is_admin.is_(True),
+                User.is_active.is_(True),
+            )
+        ).all()
+        if len(active_admins) <= 1:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="At least one active admin is required")
+
+
+def _revoke_user_sessions(db: Session, user_id: str, exclude_session_id: str | None = None) -> int:
+    filters = [UserSession.user_id == user_id, UserSession.revoked_at.is_(None)]
+    if exclude_session_id:
+        filters.append(UserSession.id != exclude_session_id)
+    sessions = db.scalars(select(UserSession).where(*filters)).all()
+    revoked_at = utcnow()
+    for session in sessions:
+        session.revoked_at = revoked_at
+    return len(sessions)
+
+
+def _record_session_revocation(db: Session, admin: User, user: User, revoked_sessions: int, reason: str) -> None:
+    record_audit(
+        db,
+        action="admin.user.sessions_revoked",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata={"user_id": user.id, "email": user.email, "count": revoked_sessions, "reason": reason},
+    )
 
 
 @router.get("/readiness", response_model=AdminReadinessOut, dependencies=[Depends(require_csrf)])

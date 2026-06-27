@@ -25,6 +25,25 @@ export type SessionState =
   | { status: "anonymous"; user: null; csrfToken: "" }
   | { status: "authenticated"; user: UserOut; csrfToken: string };
 
+export type UserCreate = {
+  email: string;
+  display_name: string;
+  password: string;
+  is_admin: boolean;
+  is_active: boolean;
+};
+
+export type UserUpdate = {
+  email?: string;
+  display_name?: string;
+  is_admin?: boolean;
+  is_active?: boolean;
+};
+
+export type UserPasswordUpdate = {
+  password: string;
+};
+
 export type ToastTone = "success" | "error" | "info";
 
 export type Toast = {

@@ -303,7 +303,7 @@ function LoginScreen() {
             <input
               value={email}
               autoComplete="email"
-              placeholder="admin@example.com"
+              placeholder="admin@example.local"
               required
               onChange={(event) => setEmail(event.target.value)}
             />
@@ -3316,11 +3316,15 @@ function deliveryBackendLabel(backend: string): string {
 }
 
 function UsersPage() {
-  const { session } = useAppContext();
+  const { notify, refreshSession, session } = useAppContext();
   const [users, setUsers] = useState<UserOut[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [editingUser, setEditingUser] = useState<UserOut | null>(null);
+  const [passwordUser, setPasswordUser] = useState<UserOut | null>(null);
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
+  const currentUserId = session.status === "authenticated" ? session.user.id : "";
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -3344,19 +3348,35 @@ function UsersPage() {
         eyebrow="Admin"
         title="Users"
         description="Manage administrator access for Teams Rehook operations."
+        actions={
+          <button className="primary-button button-with-icon" type="button" onClick={() => setCreateOpen(true)}>
+            <Plus aria-hidden="true" className="button-icon" focusable="false" />
+            <span>Create user</span>
+          </button>
+        }
       />
       <Card>
         <DataTable
-          columns={["Name", "Email", "Role", "Status", "Created"]}
+          columns={["Name", "Email", "Role", "Status", "Created", "Actions"]}
           rows={users.map((user) => [
-            <strong>{user.display_name}</strong>,
+            <span className="user-name-cell">
+              <strong>{user.display_name}</strong>
+              {user.id === currentUserId ? <StatusBadge label="You" /> : null}
+            </span>,
             user.email,
             user.is_admin ? <StatusBadge label="Admin" tone="success" /> : <StatusBadge label="Member" />,
             user.is_active ? <StatusBadge label="Active" tone="success" /> : <StatusBadge label="Disabled" tone="danger" />,
             formatDateTime(user.created_at),
+            <RowActionMenu
+              label={`Actions for ${user.display_name}`}
+              items={[
+                { label: "Edit user", icon: Pencil, onClick: () => setEditingUser(user) },
+                { label: "Set password", icon: RotateCcwKey, onClick: () => setPasswordUser(user) },
+              ]}
+            />,
           ])}
           emptyTitle="No users"
-          emptyBody="Users appear here after bootstrap or invitation flows."
+          emptyBody="Users appear here after bootstrap or creation."
           loading={loading}
           loadingLabel="Loading users..."
           error={error}
@@ -3364,7 +3384,247 @@ function UsersPage() {
           rowKey={(index) => users[index]?.id ?? index}
         />
       </Card>
+      {createOpen ? (
+        <UserCreateModal
+          csrfToken={csrfToken}
+          onClose={() => setCreateOpen(false)}
+          onSaved={() => {
+            setCreateOpen(false);
+            notify({ tone: "success", title: "User created" });
+            void refresh();
+          }}
+        />
+      ) : null}
+      {editingUser ? (
+        <UserEditModal
+          csrfToken={csrfToken}
+          currentUserId={currentUserId}
+          user={editingUser}
+          onClose={() => setEditingUser(null)}
+          onSaved={(updatedUser) => {
+            setEditingUser(null);
+            notify({ tone: "success", title: "User updated" });
+            void refresh();
+            if (updatedUser.id === currentUserId) void refreshSession();
+          }}
+        />
+      ) : null}
+      {passwordUser ? (
+        <UserPasswordModal
+          csrfToken={csrfToken}
+          currentUserId={currentUserId}
+          user={passwordUser}
+          onClose={() => setPasswordUser(null)}
+          onSaved={(updatedUser) => {
+            setPasswordUser(null);
+            notify({ tone: "success", title: "Password updated" });
+            void refresh();
+            if (updatedUser.id === currentUserId) void refreshSession();
+          }}
+        />
+      ) : null}
     </>
+  );
+}
+
+function UserCreateModal({
+  csrfToken,
+  onClose,
+  onSaved,
+}: {
+  csrfToken: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [email, setEmail] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [password, setPassword] = useState("");
+  const [isAdmin, setIsAdmin] = useState(true);
+  const [isActive, setIsActive] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await api.createAdminUser(csrfToken, {
+        email,
+        display_name: displayName,
+        password,
+        is_admin: isAdmin,
+        is_active: isActive,
+      });
+      onSaved();
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "User could not be created.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Create user" onClose={onClose}>
+      <form className="user-form" onSubmit={(event) => void submit(event)}>
+        <Field label="Display name">
+          <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} required maxLength={255} autoFocus />
+        </Field>
+        <Field label="Email">
+          <input value={email} onChange={(event) => setEmail(event.target.value)} required maxLength={255} type="email" autoComplete="email" />
+        </Field>
+        <Field label="Password">
+          <input value={password} onChange={(event) => setPassword(event.target.value)} required minLength={8} maxLength={200} type="password" autoComplete="new-password" />
+        </Field>
+        <UserToggleRow label="Admin access" checked={isAdmin} onChange={setIsAdmin} />
+        <UserToggleRow label="Active" checked={isActive} onChange={setIsActive} />
+        {error ? <p className="form-error">{error}</p> : null}
+        <div className="form-actions">
+          <button className="secondary-button" type="button" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button className="primary-button" type="submit" disabled={busy}>
+            {busy ? "Creating..." : "Create user"}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function UserEditModal({
+  csrfToken,
+  currentUserId,
+  user,
+  onClose,
+  onSaved,
+}: {
+  csrfToken: string;
+  currentUserId: string;
+  user: UserOut;
+  onClose: () => void;
+  onSaved: (user: UserOut) => void;
+}) {
+  const [email, setEmail] = useState(user.email);
+  const [displayName, setDisplayName] = useState(user.display_name);
+  const [isAdmin, setIsAdmin] = useState(user.is_admin);
+  const [isActive, setIsActive] = useState(user.is_active);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const isCurrentUser = user.id === currentUserId;
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const updatedUser = await api.updateAdminUser(csrfToken, user.id, {
+        email,
+        display_name: displayName,
+        is_admin: isAdmin,
+        is_active: isActive,
+      });
+      onSaved(updatedUser);
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "User could not be updated.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Edit user" description={user.email} onClose={onClose}>
+      <form className="user-form" onSubmit={(event) => void submit(event)}>
+        <Field label="Display name">
+          <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} required maxLength={255} autoFocus />
+        </Field>
+        <Field label="Email">
+          <input value={email} onChange={(event) => setEmail(event.target.value)} required maxLength={255} type="email" autoComplete="email" />
+        </Field>
+        <UserToggleRow label="Admin access" checked={isAdmin} disabled={isCurrentUser} onChange={setIsAdmin} />
+        <UserToggleRow label="Active" checked={isActive} disabled={isCurrentUser} onChange={setIsActive} />
+        {error ? <p className="form-error">{error}</p> : null}
+        <div className="form-actions">
+          <button className="secondary-button" type="button" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button className="primary-button" type="submit" disabled={busy}>
+            {busy ? "Saving..." : "Save changes"}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function UserPasswordModal({
+  csrfToken,
+  currentUserId,
+  user,
+  onClose,
+  onSaved,
+}: {
+  csrfToken: string;
+  currentUserId: string;
+  user: UserOut;
+  onClose: () => void;
+  onSaved: (user: UserOut) => void;
+}) {
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const isCurrentUser = user.id === currentUserId;
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const updatedUser = await api.updateAdminUserPassword(csrfToken, user.id, { password });
+      onSaved(updatedUser);
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Password could not be updated.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Set password" description={isCurrentUser ? "Your current session stays active." : user.email} onClose={onClose}>
+      <form className="user-form" onSubmit={(event) => void submit(event)}>
+        <Field label="New password">
+          <input value={password} onChange={(event) => setPassword(event.target.value)} required minLength={8} maxLength={200} type="password" autoComplete="new-password" autoFocus />
+        </Field>
+        {error ? <p className="form-error">{error}</p> : null}
+        <div className="form-actions">
+          <button className="secondary-button" type="button" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button className="primary-button" type="submit" disabled={busy}>
+            {busy ? "Saving..." : "Set password"}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function UserToggleRow({
+  label,
+  checked,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="user-toggle-row">
+      <input type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} />
+      <span>{label}</span>
+    </label>
   );
 }
 

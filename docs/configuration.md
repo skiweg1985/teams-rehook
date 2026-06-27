@@ -43,9 +43,8 @@ Use `.env.example` as the safe template. Do not commit a populated `.env`.
 | `SESSION_SECURE_COOKIE` | Sets the session cookie `Secure` flag. Use `true` behind HTTPS. | No | `false` | `true` | Yes |
 | `DEFAULT_ORG_SLUG` | Bootstrap organization slug. Code default only; not listed in `.env.example`. | No | `default` | `default` | No |
 | `DEFAULT_ORG_NAME` | Bootstrap organization display name. Code default only; not listed in `.env.example`. | No | `Default Organization` | `Operations` | No |
-| `BOOTSTRAP_ADMIN_EMAIL` | Bootstrap admin email. | Yes for first startup | `admin@example.com` | `admin@example.com` | No |
-| `BOOTSTRAP_ADMIN_PASSWORD` | Bootstrap admin password. | Yes for first startup | `change-me-admin-password` | `change-me` | Yes |
-| `BOOTSTRAP_ADMIN_DISPLAY_NAME` | Bootstrap admin display name. | No | `App Admin` | `App Admin` | No |
+
+When the default organization has no users, startup creates `admin@example.local` with password `change-me-admin-password`. These bootstrap credentials are fixed code defaults and are not environment settings.
 
 ## Docker Compose Overrides
 

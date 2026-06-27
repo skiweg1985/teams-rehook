@@ -131,7 +131,7 @@ The MVP is suitable for further evaluation when:
 - The MVP is not yet a complete production operations platform.
 - High availability, backup/restore, monitoring, alerting, and SLOs still need to be defined.
 - The organization model is minimal and evaluation-oriented.
-- The Users page lists existing users only; invitation, creation, editing, role management, and password reset are not implemented in the current UI.
+- The Users page supports lightweight administrator-managed creation, editing, status changes, role changes, and password resets.
 - Graph permissions and tenant admin consent must be clarified per tenant.
 - Graph search results are not a guarantee of Bot Framework or Graph delivery sendability.
 - The bot must be installed in the target context and provide a valid conversation reference for Bot Framework routes.

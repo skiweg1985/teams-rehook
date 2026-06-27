@@ -14,6 +14,10 @@ from app.models import BotActivityEvent, BotConversationReference, Organization,
 from app.security import hash_secret
 from app.services.log_retention import cleanup_log_events
 
+DEFAULT_BOOTSTRAP_ADMIN_EMAIL = "admin@example.local"
+DEFAULT_BOOTSTRAP_ADMIN_PASSWORD = "change-me-admin-password"
+DEFAULT_BOOTSTRAP_ADMIN_DISPLAY_NAME = "App Admin"
+
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
@@ -33,18 +37,18 @@ def init_db() -> None:
             db.add(org)
             db.flush()
 
-        bootstrap_email = str(settings.bootstrap_admin_email or "").strip().lower()
-        admin = db.scalar(select(User).where(User.organization_id == org.id, User.email == bootstrap_email))
-        if not admin:
-            admin = User(
-                organization_id=org.id,
-                email=bootstrap_email,
-                display_name=settings.bootstrap_admin_display_name,
-                password_hash=hash_secret(settings.bootstrap_admin_password),
-                is_admin=True,
-                is_active=True,
+        user_count = len(db.scalars(select(User.id).where(User.organization_id == org.id)).all())
+        if user_count == 0:
+            db.add(
+                User(
+                    organization_id=org.id,
+                    email=DEFAULT_BOOTSTRAP_ADMIN_EMAIL,
+                    display_name=DEFAULT_BOOTSTRAP_ADMIN_DISPLAY_NAME,
+                    password_hash=hash_secret(DEFAULT_BOOTSTRAP_ADMIN_PASSWORD),
+                    is_admin=True,
+                    is_active=True,
+                )
             )
-            db.add(admin)
             db.flush()
 
         db.commit()

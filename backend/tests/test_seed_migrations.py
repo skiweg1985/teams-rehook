@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+from sqlalchemy.pool import StaticPool
 
+from app.database import Base
+from app.models import Organization, User
+from app.security import hash_secret, verify_secret
+from app.seed import DEFAULT_BOOTSTRAP_ADMIN_EMAIL, DEFAULT_BOOTSTRAP_ADMIN_PASSWORD, init_db
 from app.seed import _ensure_webhook_route_name_backend_uniqueness
 
 
@@ -235,3 +241,63 @@ def test_sqlite_route_name_migration_replaces_old_name_unique_constraint(monkeyp
                     """
                 )
             )
+
+
+def test_init_db_bootstraps_default_admin_for_empty_org(monkeypatch: pytest.MonkeyPatch):
+    from app.core.config import get_settings
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
+    monkeypatch.setattr("app.seed.engine", engine)
+    get_settings.cache_clear()
+    try:
+        init_db()
+        with Session(engine) as db:
+            user = db.scalar(select(User).where(User.email == DEFAULT_BOOTSTRAP_ADMIN_EMAIL))
+            assert user is not None
+            assert user.is_admin is True
+            assert user.is_active is True
+            assert verify_secret(DEFAULT_BOOTSTRAP_ADMIN_PASSWORD, user.password_hash)
+    finally:
+        get_settings.cache_clear()
+
+
+def test_init_db_does_not_bootstrap_default_admin_when_org_has_user(monkeypatch: pytest.MonkeyPatch):
+    from app.core.config import get_settings
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
+    Base.metadata.create_all(bind=engine)
+    with Session(engine) as db:
+        org = Organization(slug="default", name="Default")
+        db.add(org)
+        db.flush()
+        db.add(
+            User(
+                organization_id=org.id,
+                email="existing@example.com",
+                display_name="Existing",
+                password_hash=hash_secret("existing-password"),
+                is_admin=True,
+                is_active=True,
+            )
+        )
+        db.commit()
+
+    monkeypatch.setattr("app.seed.engine", engine)
+    get_settings.cache_clear()
+    try:
+        init_db()
+        with Session(engine) as db:
+            users = db.scalars(select(User)).all()
+            assert [user.email for user in users] == ["existing@example.com"]
+    finally:
+        get_settings.cache_clear()

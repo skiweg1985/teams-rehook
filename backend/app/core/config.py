@@ -23,10 +23,6 @@ class Settings(BaseSettings):
 
     default_org_slug: str = "default"
     default_org_name: str = "Default Organization"
-    bootstrap_admin_email: str = "admin@example.com"
-    bootstrap_admin_password: str = "change-me-admin-password"
-    bootstrap_admin_display_name: str = "App Admin"
-
     ms_app_tenant_id: str = ""
     ms_app_client_id: str = ""
     ms_app_client_secret: str = ""
