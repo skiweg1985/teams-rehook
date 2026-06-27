@@ -61,12 +61,12 @@ Important constraints for this product:
 | --- | --- | --- | --- | --- |
 | Team channel | Supported first | `team_id`, `channel_id` | `POST /teams/{team-id}/channels/{channel-id}/messages` | `ChannelMessage.Send` |
 | Existing group chat | Supported for chats the service user belongs to | `chat_id` | `POST /chats/{chat-id}/messages` | `ChatMessage.Send`; `Chat.ReadBasic` for service-user chat search |
-| User / 1:1 | Deferred for first send implementation | `chat_id` once resolved or created | `POST /chats/{chat-id}/messages` | `ChatMessage.Send`; `Chat.Create` only if route setup creates/resolves the 1:1 chat |
+| User / 1:1 | Supported in V1 via route-setup chat resolution/creation | `chat_id` once resolved or created | `POST /chats/{chat-id}/messages` | `ChatMessage.Send`; `Chat.Create` for route setup resolving/creating the 1:1 chat |
 
 V1 should not treat a Graph user ID alone as a sendable delivery target. A user
-selection can be useful during route setup, but delivery needs a chat target.
-The implementation can later add an explicit "resolve or create 1:1 chat" flow
-that uses `Chat.Create` and stores the resulting `chat_id`.
+selection is used during route setup, where Teams Rehook resolves or creates
+the one-on-one chat via `Chat.Create` and stores the resulting `chat_id` for
+later delivery.
 
 ## Delegated Service-User Model
 
@@ -95,8 +95,8 @@ Minimum delegated permission set for V1:
 - `ChatMessage.Send` for existing chat routes.
 - `Chat.ReadBasic` for listing existing chats that the delegated service user
   belongs to.
-- `Chat.Create` only when the product explicitly implements chat creation or
-  one-on-one chat resolution during route setup.
+- `Chat.Create` for one-on-one route setup so Teams Rehook can resolve or
+  create the chat target before later message delivery.
 
 The Entra app registration must also include this web redirect URI:
 
@@ -164,7 +164,6 @@ These are explicitly out of scope for Variante A V1:
 - Generic tenant-wide app-only Graph sending.
 - Resource-specific consent send permissions such as
   `ChannelMessage.Send.Group` or `ChatMessage.Send.Chat`.
-- Automatic 1:1 chat creation during the first Graph delivery implementation.
 - Full Adaptive Card parity between Bot Framework activities and Graph
   `chatMessage` payloads.
 
