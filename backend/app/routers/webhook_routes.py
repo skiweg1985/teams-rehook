@@ -90,6 +90,7 @@ def create_webhook_route(
     )
     try_resolve_route_graph_names(route)
     _validate_target(route)
+    _ensure_route_name_available(db, admin.organization_id, route.name, _route_delivery_backend(route))
     db.add(route)
     try:
         db.flush()
@@ -145,6 +146,7 @@ def update_webhook_route(
         route.bot_target_source = payload.bot_target_source.strip()
     try_resolve_route_graph_names(route)
     _validate_target(route)
+    _ensure_route_name_available(db, admin.organization_id, route.name, _route_delivery_backend(route), route_id=route.id)
     record_audit(
         db,
         action="webhook_route.updated",
@@ -514,6 +516,28 @@ def _validate_target(route: WebhookRoute) -> None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Graph chat routes require an existing chat ID")
         if kind not in {"channel", "chat"}:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Graph delivery supports channel and existing chat targets in V1")
+
+
+def _ensure_route_name_available(
+    db: Session,
+    organization_id: str,
+    name: str,
+    delivery_backend: str,
+    *,
+    route_id: str | None = None,
+) -> None:
+    statement = select(WebhookRoute.id).where(
+        WebhookRoute.organization_id == organization_id,
+        WebhookRoute.name == name,
+        WebhookRoute.delivery_backend == delivery_backend,
+    )
+    if route_id:
+        statement = statement.where(WebhookRoute.id != route_id)
+    if db.scalar(statement):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Webhook route name already exists for this delivery backend",
+        )
 
 
 def _deliver_to_route(

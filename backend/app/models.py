@@ -83,7 +83,9 @@ class WebhookRoute(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
-    __table_args__ = (UniqueConstraint("organization_id", "name", name="uq_webhook_routes_org_name"),)
+    __table_args__ = (
+        UniqueConstraint("organization_id", "name", "delivery_backend", name="uq_webhook_routes_org_name_backend"),
+    )
 
 
 class WebhookDeliveryEvent(Base):

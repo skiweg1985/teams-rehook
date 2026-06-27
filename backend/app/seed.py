@@ -18,6 +18,7 @@ from app.services.log_retention import cleanup_log_events
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_additive_schema()
+    _ensure_webhook_route_name_backend_uniqueness()
     settings = get_settings()
     with Session(engine) as db:
         _backfill_bot_reference_metadata(db)
@@ -284,3 +285,62 @@ def _ensure_additive_schema() -> None:
             for column_name, column_type in columns_to_add.items():
                 if column_name not in existing_columns:
                     connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
+
+
+def _ensure_webhook_route_name_backend_uniqueness() -> None:
+    with engine.begin() as connection:
+        dialect = engine.dialect.name
+        connection.execute(
+            text(
+                """
+                UPDATE webhook_routes
+                SET delivery_backend = 'bot_framework'
+                WHERE delivery_backend IS NULL OR trim(delivery_backend) = ''
+                """
+            )
+        )
+        if dialect == "postgresql":
+            old_constraint = connection.execute(
+                text(
+                    """
+                    SELECT 1
+                    FROM information_schema.table_constraints
+                    WHERE table_name = 'webhook_routes'
+                      AND constraint_name = 'uq_webhook_routes_org_name'
+                    """
+                )
+            ).first()
+            if old_constraint:
+                connection.execute(text("ALTER TABLE webhook_routes DROP CONSTRAINT uq_webhook_routes_org_name"))
+            new_constraint = connection.execute(
+                text(
+                    """
+                    SELECT 1
+                    FROM information_schema.table_constraints
+                    WHERE table_name = 'webhook_routes'
+                      AND constraint_name = 'uq_webhook_routes_org_name_backend'
+                    """
+                )
+            ).first()
+            if not new_constraint:
+                connection.execute(
+                    text(
+                        """
+                        ALTER TABLE webhook_routes
+                        ADD CONSTRAINT uq_webhook_routes_org_name_backend
+                        UNIQUE (organization_id, name, delivery_backend)
+                        """
+                    )
+                )
+        elif dialect == "sqlite":
+            indexes = connection.execute(text("PRAGMA index_list(webhook_routes)")).all()
+            has_new_index = any(row[1] == "uq_webhook_routes_org_name_backend" for row in indexes)
+            if not has_new_index:
+                connection.execute(
+                    text(
+                        """
+                        CREATE UNIQUE INDEX IF NOT EXISTS uq_webhook_routes_org_name_backend
+                        ON webhook_routes (organization_id, name, delivery_backend)
+                        """
+                    )
+                )

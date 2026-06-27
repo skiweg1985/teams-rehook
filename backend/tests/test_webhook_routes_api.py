@@ -231,6 +231,70 @@ def test_create_route_can_store_graph_delivery_backend(client: TestClient):
     assert body["bot_conversation_id"] == ""
 
 
+def test_create_route_allows_same_name_across_delivery_backends(client: TestClient):
+    csrf_token = login_admin(client)
+    name = "Shared alert route"
+
+    bot_response = client.post(
+        "/api/v1/webhook-routes",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "name": name,
+            "is_active": True,
+            "delivery_backend": "bot_framework",
+            "target_type": "bot_conversation",
+            "target_name": "Monitoring / Alerts",
+            "bot_service_url": "https://smba.trafficmanager.net/emea/example",
+            "bot_conversation_id": "conversation-id",
+        },
+    )
+    graph_response = client.post(
+        "/api/v1/webhook-routes",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "name": name,
+            "is_active": True,
+            "delivery_backend": "graph",
+            "target_type": "bot_conversation",
+            "target_name": "Monitoring / Alerts",
+            "graph_target_kind": "channel",
+            "graph_target_id": "channel-id",
+            "graph_team_id": "team-id",
+            "graph_team_name": "Monitoring",
+            "graph_channel_id": "channel-id",
+        },
+    )
+
+    assert bot_response.status_code == 200
+    assert graph_response.status_code == 200
+    assert bot_response.json()["name"] == graph_response.json()["name"] == name
+    assert bot_response.json()["delivery_backend"] == "bot_framework"
+    assert graph_response.json()["delivery_backend"] == "graph"
+
+
+def test_create_route_rejects_same_name_with_same_delivery_backend(client: TestClient):
+    csrf_token = login_admin(client)
+    payload = {
+        "name": "Duplicate Graph route",
+        "is_active": True,
+        "delivery_backend": "graph",
+        "target_type": "bot_conversation",
+        "target_name": "Monitoring / Alerts",
+        "graph_target_kind": "channel",
+        "graph_target_id": "channel-id",
+        "graph_team_id": "team-id",
+        "graph_team_name": "Monitoring",
+        "graph_channel_id": "channel-id",
+    }
+
+    first_response = client.post("/api/v1/webhook-routes", headers={"X-CSRF-Token": csrf_token}, json=payload)
+    second_response = client.post("/api/v1/webhook-routes", headers={"X-CSRF-Token": csrf_token}, json=payload)
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 409
+    assert second_response.json()["detail"] == "Webhook route name already exists for this delivery backend"
+
+
 def test_update_route_delivery_backend(client: TestClient, db_session: Session):
     route = add_route(db_session)
     csrf_token = login_admin(client)
