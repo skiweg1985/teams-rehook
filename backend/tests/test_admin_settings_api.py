@@ -94,6 +94,10 @@ def test_list_settings_returns_env_defaults(db_session: Session, monkeypatch: py
         assert delivery["env_default"] == "mock"
         assert delivery["effective_value"] == "mock"
         assert delivery["is_overridden"] is False
+        bot_enabled = next(item for item in payload if item["key"] == "bot_framework_enabled")
+        assert bot_enabled["type"] == "bool"
+        assert bot_enabled["env_default"] == "true"
+        assert bot_enabled["effective_value"] == "true"
 
 
 def test_override_and_reset_setting(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -134,3 +138,30 @@ def test_secret_override_is_masked(db_session: Session, monkeypatch: pytest.Monk
         updated = put.json()
         assert updated["effective_value"] == "configured"
         assert "example-secret-value" not in str(updated)
+
+
+def test_graph_delivery_requires_graph_lookup_enabled(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    with make_client(db_session, monkeypatch) as client:
+        csrf = login_admin(client)
+        rejected = client.put(
+            "/api/v1/admin/settings/graph_lookup_enabled",
+            headers={"X-CSRF-Token": csrf},
+            json={"value": "false"},
+        )
+        assert rejected.status_code == 400
+        assert rejected.json()["detail"] == "Graph delivery requires Graph lookup to be enabled"
+
+        delivery = client.put(
+            "/api/v1/admin/settings/graph_delivery_enabled",
+            headers={"X-CSRF-Token": csrf},
+            json={"value": "false"},
+        )
+        assert delivery.status_code == 200
+
+        lookup = client.put(
+            "/api/v1/admin/settings/graph_lookup_enabled",
+            headers={"X-CSRF-Token": csrf},
+            json={"value": "false"},
+        )
+        assert lookup.status_code == 200
+        assert lookup.json()["effective_value"] == "false"

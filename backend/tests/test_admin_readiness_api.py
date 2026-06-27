@@ -169,6 +169,28 @@ def test_readiness_reports_mock_delivery_ready_without_bot_credentials(db_sessio
     assert body["graph_delivery"]["auth_status"] == "missing"
 
 
+def test_readiness_marks_disabled_features_without_token_checks(db_session: Session, monkeypatch: pytest.MonkeyPatch):
+    with make_client(
+        db_session,
+        monkeypatch,
+        BOT_FRAMEWORK_ENABLED="false",
+        GRAPH_LOOKUP_ENABLED="false",
+        GRAPH_DELIVERY_ENABLED="false",
+    ) as client:
+        csrf_token = login_admin(client)
+        response = client.get("/api/v1/admin/readiness", headers={"X-CSRF-Token": csrf_token})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["bot"]["enabled"] is False
+    assert body["bot"]["auth_status"] == "disabled"
+    assert body["bot"]["token_checked"] is False
+    assert body["graph_lookup"]["enabled"] is False
+    assert body["graph_lookup"]["auth_status"] == "disabled"
+    assert body["graph_delivery"]["enabled"] is False
+    assert body["graph_delivery"]["auth_status"] == "disabled"
+
+
 def test_readiness_reports_real_delivery_missing_bot_credentials(db_session: Session, monkeypatch: pytest.MonkeyPatch):
     with make_client(db_session, monkeypatch, BOT_DELIVERY_MODE="real") as client:
         csrf_token = login_admin(client)

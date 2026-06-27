@@ -10,6 +10,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.core.settings_overrides import reset_override_state
 from app.database import Base, get_db
 from app.main import create_app
 from app.models import AuditEvent, BotActivityEvent, Organization, User, WebhookDeliveryEvent, WebhookRoute
@@ -63,6 +64,7 @@ def client(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> Iterator[Tes
             yield test_client
     finally:
         get_settings.cache_clear()
+        reset_override_state()
 
 
 def add_route(db: Session, *, token: str = "route-token", active: bool = True) -> WebhookRoute:
@@ -229,6 +231,35 @@ def test_create_route_can_store_graph_delivery_backend(client: TestClient):
     assert body["delivery_backend"] == "graph"
     assert body["bot_service_url"] == ""
     assert body["bot_conversation_id"] == ""
+
+
+def test_create_graph_route_rejects_disabled_graph_delivery(client: TestClient):
+    csrf_token = login_admin(client)
+    settings_response = client.put(
+        "/api/v1/admin/settings/graph_delivery_enabled",
+        headers={"X-CSRF-Token": csrf_token},
+        json={"value": "false"},
+    )
+    assert settings_response.status_code == 200
+
+    response = client.post(
+        "/api/v1/webhook-routes",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "name": "Disabled Graph route",
+            "is_active": True,
+            "delivery_backend": "graph",
+            "target_type": "bot_conversation",
+            "target_name": "Monitoring / Alerts",
+            "graph_target_kind": "channel",
+            "graph_target_id": "channel-id",
+            "graph_team_id": "team-id",
+            "graph_channel_id": "channel-id",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Microsoft Graph delivery is disabled"
 
 
 def test_create_route_allows_same_name_across_delivery_backends(client: TestClient):

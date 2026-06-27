@@ -9,7 +9,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.core.settings_overrides import load_overrides, reset_override_state
+from app.core.settings_overrides import load_overrides, reset_override_state, set_override
 from app.database import Base, get_db
 from app.main import create_app
 from app.models import Organization, User, WebhookDeliveryEvent, WebhookRoute
@@ -229,3 +229,41 @@ def test_monitoring_status_has_null_success_rate_without_delivery_events(client:
     assert body["rolling_windows"]["5m"]["success_rate"] is None
     assert body["rolling_windows"]["15m"]["success_rate"] is None
     assert body["rolling_windows"]["1h"]["success_rate"] is None
+
+
+def test_monitoring_rollup_ignores_disabled_graph_features(client: TestClient, db_session: Session):
+    admin = db_session.scalar(select(User).where(User.email == "admin@example.com"))
+    assert admin is not None
+    set_override(db_session, key="graph_delivery_enabled", value="false", updated_by_id=admin.id)
+    set_override(db_session, key="graph_lookup_enabled", value="false", updated_by_id=admin.id)
+    db_session.commit()
+    now = utcnow()
+    bot_route = add_route(
+        db_session,
+        name="Bot route",
+        token="bot-route-token",
+        last_status="delivered",
+        last_at=now - timedelta(minutes=1),
+    )
+    graph_route = add_route(
+        db_session,
+        name="Graph route",
+        token="graph-route-token",
+        last_status="failed",
+        last_at=now - timedelta(minutes=1),
+    )
+    graph_route.delivery_backend = "graph"
+    db_session.add(graph_route)
+    db_session.commit()
+    add_delivery(db_session, bot_route, status="delivered", created_at=now - timedelta(minutes=1))
+    add_delivery(db_session, graph_route, status="failed", created_at=now - timedelta(minutes=1))
+
+    response = client.get("/api/v1/monitoring/status", headers=auth_header())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["readiness"]["graph_lookup"]["enabled"] is False
+    assert body["readiness"]["graph_delivery"]["enabled"] is False
+    assert body["routes"]["with_last_failure"] == 1
+    assert body["rolling_windows"]["5m"]["delivery_failure_count"] == 1

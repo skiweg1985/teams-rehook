@@ -1541,6 +1541,18 @@ button:disabled {
   width: 100%;
 }
 
+.settings-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.settings-toggle input {
+  width: auto;
+}
+
 .settings-input--mono,
 .settings-mono {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;

@@ -69,6 +69,7 @@ def create_webhook_route(
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
+    settings = get_effective_settings()
     route_token = issue_plain_secret(24)
     route = WebhookRoute(
         organization_id=admin.organization_id,
@@ -92,8 +93,10 @@ def create_webhook_route(
         graph_user_principal_name=payload.graph_user_principal_name.strip(),
         bot_target_source=payload.bot_target_source.strip(),
     )
+    _ensure_route_feature_enabled(route, settings)
     _materialize_graph_user_target(db, admin.organization_id, route)
-    try_resolve_route_graph_names(route)
+    if settings.graph_lookup_enabled:
+        try_resolve_route_graph_names(route)
     _validate_target(route)
     _ensure_route_name_available(db, admin.organization_id, route.name, _route_delivery_backend(route))
     db.add(route)
@@ -122,7 +125,9 @@ def update_webhook_route(
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
+    settings = get_effective_settings()
     route = _get_org_route(db, admin.organization_id, route_id)
+    _ensure_delivery_backend_feature_enabled(payload.delivery_backend or _route_delivery_backend(route), settings)
     if payload.name is not None:
         route.name = payload.name.strip()
     if payload.is_active is not None:
@@ -155,8 +160,10 @@ def update_webhook_route(
         route.graph_user_principal_name = payload.graph_user_principal_name.strip()
     if payload.bot_target_source is not None:
         route.bot_target_source = payload.bot_target_source.strip()
+    _ensure_route_feature_enabled(route, settings)
     _materialize_graph_user_target(db, admin.organization_id, route)
-    try_resolve_route_graph_names(route)
+    if settings.graph_lookup_enabled:
+        try_resolve_route_graph_names(route)
     _validate_target(route)
     _ensure_route_name_available(db, admin.organization_id, route.name, _route_delivery_backend(route), route_id=route.id)
     record_audit(
@@ -178,6 +185,7 @@ def update_webhook_route(
 
 @router.post("/webhook-routes/refresh-graph-names", response_model=WebhookRouteNameRefreshOut, dependencies=[Depends(require_csrf)])
 def refresh_webhook_route_graph_names(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    _ensure_graph_lookup_enabled()
     result = refresh_graph_names(db, organization_id=admin.organization_id)
     if result.error:
         db.rollback()
@@ -218,6 +226,7 @@ def refresh_single_webhook_route_graph_names(
     db: Session = Depends(get_db),
 ):
     route = _get_org_route(db, admin.organization_id, route_id)
+    _ensure_graph_lookup_enabled()
     try:
         updated = resolve_route_graph_names(route, force=True)
     except (GraphConfigError, GraphRequestError) as exc:
@@ -404,6 +413,7 @@ def test_webhook_route(
     db: Session = Depends(get_db),
 ):
     route = _get_org_route(db, admin.organization_id, route_id)
+    _ensure_route_feature_enabled(route, get_effective_settings())
     message = NormalizedMessage(
         title=payload.title.strip(),
         text=payload.text.strip(),
@@ -468,6 +478,20 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
             status_value="rejected",
             request_metadata=_request_metadata(request, body),
             error="Webhook route is disabled",
+        )
+        route.last_delivery_status = "rejected"
+        route.last_delivery_at = utcnow()
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=event.error)
+    disabled_message = _route_feature_disabled_message(route, settings)
+    if disabled_message:
+        event = _record_event(
+            db,
+            route=route,
+            route_token_hash=token_hash,
+            status_value="rejected",
+            request_metadata=_request_metadata(request, body),
+            error=disabled_message,
         )
         route.last_delivery_status = "rejected"
         route.last_delivery_at = utcnow()
@@ -538,6 +562,38 @@ def _materialize_graph_user_target(db: Session, organization_id: str, route: Web
     route.bot_conversation_id = ""
     if not route.bot_target_source.strip():
         route.bot_target_source = "graph_user_lookup"
+
+
+def _ensure_graph_lookup_enabled() -> None:
+    if not get_effective_settings().graph_lookup_enabled:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Microsoft Graph lookup is disabled")
+
+
+def _ensure_route_feature_enabled(route: WebhookRoute, settings) -> None:
+    message = _delivery_backend_disabled_message(_route_delivery_backend(route), settings)
+    if message:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=message)
+
+
+def _route_feature_disabled_message(route: WebhookRoute, settings) -> str:
+    return _delivery_backend_disabled_message(_route_delivery_backend(route), settings)
+
+
+def _ensure_delivery_backend_feature_enabled(backend: str, settings) -> None:
+    message = _delivery_backend_disabled_message(backend, settings)
+    if message:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=message)
+
+
+def _delivery_backend_disabled_message(backend: str, settings) -> str:
+    if backend == DELIVERY_BACKEND_BOT and not settings.bot_framework_enabled:
+        return "Bot Framework delivery is disabled"
+    if backend == DELIVERY_BACKEND_GRAPH:
+        if not settings.graph_lookup_enabled:
+            return "Microsoft Graph delivery requires Graph lookup to be enabled"
+        if not settings.graph_delivery_enabled:
+            return "Microsoft Graph delivery is disabled"
+    return ""
 
 
 def _validate_target(route: WebhookRoute) -> None:

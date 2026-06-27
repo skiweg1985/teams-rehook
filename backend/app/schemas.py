@@ -247,6 +247,7 @@ class LogCleanupOut(BaseModel):
 
 
 class ReadinessComponentOut(BaseModel):
+    enabled: bool = True
     ready: bool
     auth_status: str
     message: str
@@ -346,7 +347,7 @@ class AdminReadinessOut(BaseModel):
 class SettingItemOut(BaseModel):
     key: str
     label: str
-    type: Literal["string", "int", "url", "enum", "secret"]
+    type: Literal["string", "int", "url", "enum", "secret", "bool"]
     enum_values: list[str] = Field(default_factory=list)
     env_default: str
     effective_value: str
@@ -363,6 +364,7 @@ class MonitoringDatabaseOut(BaseModel):
 
 
 class MonitoringReadinessComponentOut(BaseModel):
+    enabled: bool = True
     ready: bool
     auth_status: str
 

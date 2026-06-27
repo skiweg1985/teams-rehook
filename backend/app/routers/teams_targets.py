@@ -5,6 +5,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.core.settings_overrides import get_effective_settings
 from app.database import get_db
 from app.deps import require_admin
 from app.models import User
@@ -22,6 +23,7 @@ def search_teams_targets(
     admin: User = Depends(require_admin),
 ):
     _ = admin
+    _ensure_graph_lookup_enabled()
     return [_target_out(target) for target in _run_graph_search(lambda: search_targets(kind, q))]
 
 
@@ -32,6 +34,7 @@ def search_team_channels(
     admin: User = Depends(require_admin),
 ):
     _ = admin
+    _ensure_graph_lookup_enabled()
     return [_target_out(target) for target in _run_graph_search(lambda: list_team_channels(team_id, q))]
 
 
@@ -41,6 +44,7 @@ def search_service_user_chats(
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
+    _ensure_graph_lookup_enabled()
     try:
         chats = list_service_user_chats(db, organization_id=admin.organization_id, query=q)
     except GraphDelegatedLookupError as exc:
@@ -54,6 +58,11 @@ def search_service_user_chats(
         )
         for chat in chats
     ]
+
+
+def _ensure_graph_lookup_enabled() -> None:
+    if not get_effective_settings().graph_lookup_enabled:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Microsoft Graph lookup is disabled")
 
 
 def _run_graph_search(search):

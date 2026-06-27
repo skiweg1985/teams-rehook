@@ -1289,6 +1289,32 @@ function PayloadPreview({
   );
 }
 
+type DeliveryFeaturePolicy = {
+  botFrameworkEnabled: boolean;
+  graphLookupEnabled: boolean;
+  graphDeliveryEnabled: boolean;
+};
+
+const DEFAULT_DELIVERY_FEATURE_POLICY: DeliveryFeaturePolicy = {
+  botFrameworkEnabled: true,
+  graphLookupEnabled: true,
+  graphDeliveryEnabled: true,
+};
+
+function featurePolicyFromReadiness(readiness: AdminReadinessOut): DeliveryFeaturePolicy {
+  return {
+    botFrameworkEnabled: readiness.bot.enabled,
+    graphLookupEnabled: readiness.graph_lookup.enabled,
+    graphDeliveryEnabled: readiness.graph_delivery.enabled,
+  };
+}
+
+function routeDeliveryFeatureEnabled(route: WebhookRouteOut, policy: DeliveryFeaturePolicy): boolean {
+  if (route.delivery_backend === "bot_framework") return policy.botFrameworkEnabled;
+  if (route.delivery_backend === "graph") return policy.graphDeliveryEnabled && policy.graphLookupEnabled;
+  return false;
+}
+
 function WebhooksPage() {
   const { session, notify } = useAppContext();
   const [routes, setRoutes] = useState<WebhookRouteOut[]>([]);
@@ -1299,6 +1325,7 @@ function WebhooksPage() {
   const [regeneratedUrl, setRegeneratedUrl] = useState<{ routeName: string; url: string } | null>(null);
   const [viewingBotReferences, setViewingBotReferences] = useState(false);
   const [botDefaultServiceUrl, setBotDefaultServiceUrl] = useState("");
+  const [featurePolicy, setFeaturePolicy] = useState<DeliveryFeaturePolicy>(DEFAULT_DELIVERY_FEATURE_POLICY);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [testingId, setTestingId] = useState("");
@@ -1313,13 +1340,15 @@ function WebhooksPage() {
     setLoading(true);
     setError("");
     try {
-      setRoutes(await api.webhookRoutes());
+      const [routeRows, readiness] = await Promise.all([api.webhookRoutes(), api.adminReadiness(csrfToken)]);
+      setRoutes(routeRows);
+      setFeaturePolicy(featurePolicyFromReadiness(readiness));
     } catch (err) {
       setError(isApiError(err) ? err.message : "Webhook routes could not be loaded.");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [csrfToken]);
 
   useEffect(() => {
     void refresh();
@@ -1484,8 +1513,9 @@ function WebhooksPage() {
             <button
               className="secondary-button button-with-icon"
               type="button"
-              disabled={refreshingNames}
+              disabled={refreshingNames || !featurePolicy.graphLookupEnabled}
               onClick={() => void refreshGraphNames()}
+              title={featurePolicy.graphLookupEnabled ? "Refresh Graph names" : "Graph lookup is disabled"}
             >
               <RefreshCw
                 aria-hidden="true"
@@ -1538,6 +1568,7 @@ function WebhooksPage() {
             </div>,
             <div className="stacked-cell">
               {route.is_active ? <StatusBadge label="Active" tone="success" /> : <StatusBadge label="Disabled" tone="warn" />}
+              {!routeDeliveryFeatureEnabled(route, featurePolicy) ? <StatusBadge label="Feature disabled" tone="warn" /> : null}
               <DeliveryStatusBadge route={route} />
             </div>,
             route.webhook_url ? (
@@ -1556,7 +1587,7 @@ function WebhooksPage() {
               <IconButton
                 label={testingId === route.id ? "Sending test" : "Send test"}
                 icon={Send}
-                disabled={testingId === route.id}
+                disabled={testingId === route.id || !routeDeliveryFeatureEnabled(route, featurePolicy)}
                 onClick={() => void testRoute(route)}
               />
               <IconButton label="Edit route" icon={Pencil} onClick={() => setEditing(route)} />
@@ -1578,7 +1609,7 @@ function WebhooksPage() {
                   {
                     label: refreshingRouteNameId === route.id ? "Refreshing Graph names" : "Refresh Graph names",
                     icon: RefreshCw,
-                    disabled: refreshingRouteNameId === route.id,
+                    disabled: refreshingRouteNameId === route.id || !featurePolicy.graphLookupEnabled,
                     spinning: refreshingRouteNameId === route.id,
                     onClick: () => void refreshRouteGraphNames(route),
                   },
@@ -1613,6 +1644,7 @@ function WebhooksPage() {
         <WebhookRouteModal
           route={editing.id ? editing : null}
           initial={editing}
+          featurePolicy={featurePolicy}
           onClose={() => setEditing(null)}
           onChanged={refresh}
         />
@@ -1965,11 +1997,13 @@ function webhookRouteFromReference(reference: BotConversationReferenceOut): Webh
 }
 
 function WebhookRouteModal({
+  featurePolicy,
   route,
   initial,
   onClose,
   onChanged,
 }: {
+  featurePolicy: DeliveryFeaturePolicy;
   route: WebhookRouteOut | null;
   initial: WebhookRouteOut;
   onClose: () => void;
@@ -2051,9 +2085,26 @@ function WebhookRouteModal({
     void loadReferences();
   }, [loadReferences]);
 
+  const botBackendEnabled = featurePolicy.botFrameworkEnabled;
+  const graphBackendEnabled = featurePolicy.graphLookupEnabled && featurePolicy.graphDeliveryEnabled;
+  const selectedBackendEnabled = deliveryBackend === "bot_framework" ? botBackendEnabled : graphBackendEnabled;
+
+  useEffect(() => {
+    if (route) return;
+    if (deliveryBackend === "bot_framework" && !botBackendEnabled && graphBackendEnabled) {
+      setDeliveryBackend("graph");
+      if (!graphTargetKind || graphTargetKind === "team") selectGraphTargetKind("channel");
+    }
+    if (deliveryBackend === "graph" && !graphBackendEnabled && botBackendEnabled) {
+      setDeliveryBackend("bot_framework");
+    }
+  }, [botBackendEnabled, deliveryBackend, graphBackendEnabled, graphTargetKind, route]);
+
   const visibleGraphUserTargetId = graphUserId.trim() || (showAdvancedTarget ? graphTargetId.trim() : "");
   const routeTargetReady =
-    deliveryBackend === "bot_framework"
+    !selectedBackendEnabled
+      ? false
+      : deliveryBackend === "bot_framework"
       ? Boolean(targetName.trim() && botServiceUrl.trim() && botConversationId.trim())
       : graphTargetKind === "channel"
         ? Boolean(targetName.trim() && graphTeamId.trim() && graphChannelId.trim())
@@ -2284,31 +2335,38 @@ function WebhookRouteModal({
           <div className="field">
             <span>Delivery backend</span>
             <div className="segmented-control" aria-label="Delivery backend">
-              <button
-                type="button"
-                className={classNames("segmented-control-button", deliveryBackend === "bot_framework" && "is-active")}
-                aria-pressed={deliveryBackend === "bot_framework"}
-                onClick={() => setDeliveryBackend("bot_framework")}
-              >
-                Bot Framework
-              </button>
-              <button
-                type="button"
-                className={classNames("segmented-control-button", deliveryBackend === "graph" && "is-active")}
-                aria-pressed={deliveryBackend === "graph"}
-                onClick={() => {
-                  setDeliveryBackend("graph");
-                  setBotServiceUrl("");
-                  setBotConversationId("");
-                  if (!graphTargetKind || graphTargetKind === "team") selectGraphTargetKind("channel");
-                }}
-              >
-                Microsoft Graph
-              </button>
+              {botBackendEnabled || deliveryBackend === "bot_framework" ? (
+                <button
+                  type="button"
+                  className={classNames("segmented-control-button", deliveryBackend === "bot_framework" && "is-active")}
+                  aria-pressed={deliveryBackend === "bot_framework"}
+                  disabled={!botBackendEnabled}
+                  onClick={() => setDeliveryBackend("bot_framework")}
+                >
+                  Bot Framework
+                </button>
+              ) : null}
+              {graphBackendEnabled || deliveryBackend === "graph" ? (
+                <button
+                  type="button"
+                  className={classNames("segmented-control-button", deliveryBackend === "graph" && "is-active")}
+                  aria-pressed={deliveryBackend === "graph"}
+                  disabled={!graphBackendEnabled}
+                  onClick={() => {
+                    setDeliveryBackend("graph");
+                    setBotServiceUrl("");
+                    setBotConversationId("");
+                    if (!graphTargetKind || graphTargetKind === "team") selectGraphTargetKind("channel");
+                  }}
+                >
+                  Microsoft Graph
+                </button>
+              ) : null}
             </div>
+            {!selectedBackendEnabled ? <p className="form-error">{deliveryBackend === "graph" ? "Microsoft Graph delivery is disabled." : "Bot Framework delivery is disabled."}</p> : null}
           </div>
         </div>
-        {deliveryBackend === "bot_framework" ? (
+        {deliveryBackend === "bot_framework" && botBackendEnabled ? (
         <div className="graph-target-picker">
           <div className="graph-target-picker-header">
             <div>
@@ -2379,7 +2437,7 @@ function WebhookRouteModal({
           ) : null}
         </div>
         ) : null}
-        {deliveryBackend === "graph" ? (
+        {deliveryBackend === "graph" && graphBackendEnabled ? (
           <div className="graph-target-picker">
             <div className="graph-target-picker-header">
               <div>
@@ -2436,7 +2494,7 @@ function WebhookRouteModal({
                 <Field label="Find team" hint="App-only Graph lookup is used for team and channel search.">
                   <div className="settings-int-field">
                     <input value={graphTeamSearch} placeholder="Search Teams" onChange={(event) => setGraphTeamSearch(event.target.value)} />
-                    <button className="secondary-button secondary-button--small" type="button" onClick={() => void searchGraphTeams()} disabled={graphTeamsLoading || graphTeamSearch.trim().length < 2}>
+                    <button className="secondary-button secondary-button--small" type="button" onClick={() => void searchGraphTeams()} disabled={graphTeamsLoading || graphTeamSearch.trim().length < 2 || !featurePolicy.graphLookupEnabled}>
                       {graphTeamsLoading ? "Searching..." : "Search"}
                     </button>
                   </div>
@@ -2457,7 +2515,7 @@ function WebhookRouteModal({
                 <Field label="Find channel" hint="Select a team first, then search its channels.">
                   <div className="settings-int-field">
                     <input value={graphChannelSearch} placeholder="Search channels" onChange={(event) => setGraphChannelSearch(event.target.value)} disabled={!graphTeamId.trim()} />
-                    <button className="secondary-button secondary-button--small" type="button" onClick={() => void searchGraphChannels()} disabled={graphChannelsLoading || !graphTeamId.trim()}>
+                    <button className="secondary-button secondary-button--small" type="button" onClick={() => void searchGraphChannels()} disabled={graphChannelsLoading || !graphTeamId.trim() || !featurePolicy.graphLookupEnabled}>
                       {graphChannelsLoading ? "Loading..." : "Load channels"}
                     </button>
                   </div>
@@ -2485,7 +2543,7 @@ function WebhookRouteModal({
                 <Field label="Find service-user chat" hint="Lists existing chats the connected service user belongs to.">
                   <div className="settings-int-field">
                     <input value={graphChatSearch} placeholder="Search chat topic, type or ID" onChange={(event) => setGraphChatSearch(event.target.value)} />
-                    <button className="secondary-button secondary-button--small" type="button" onClick={() => void searchGraphChats()} disabled={graphChatsLoading}>
+                    <button className="secondary-button secondary-button--small" type="button" onClick={() => void searchGraphChats()} disabled={graphChatsLoading || !featurePolicy.graphLookupEnabled}>
                       {graphChatsLoading ? "Searching..." : "Search chats"}
                     </button>
                   </div>
@@ -2518,7 +2576,7 @@ function WebhookRouteModal({
                       className="secondary-button secondary-button--small"
                       type="button"
                       onClick={() => void searchGraphUsers()}
-                      disabled={graphUsersLoading || graphUserSearch.trim().length < 2}
+                      disabled={graphUsersLoading || graphUserSearch.trim().length < 2 || !featurePolicy.graphLookupEnabled}
                     >
                       {graphUsersLoading ? "Searching..." : "Search users"}
                     </button>
@@ -2928,6 +2986,18 @@ function UsersPage() {
 }
 
 const SETTING_META: Record<string, { group: string; description: string; unit?: string }> = {
+  bot_framework_enabled: {
+    group: "Delivery Features",
+    description: "Allow Bot Framework route delivery and Bot readiness checks.",
+  },
+  graph_lookup_enabled: {
+    group: "Delivery Features",
+    description: "Allow Microsoft Graph target discovery and display-name resolution.",
+  },
+  graph_delivery_enabled: {
+    group: "Delivery Features",
+    description: "Allow delegated Microsoft Graph message delivery.",
+  },
   bot_delivery_mode: {
     group: "Delivery",
     description: "Real sends to Teams via Bot Framework. Mock simulates delivery for local checks.",
@@ -2981,7 +3051,7 @@ const SETTING_META: Record<string, { group: string; description: string; unit?: 
   },
 };
 
-const SETTING_GROUP_ORDER = ["Delivery", "Limits & retention", "URLs", "Microsoft Entra"];
+const SETTING_GROUP_ORDER = ["Delivery Features", "Delivery", "Limits & retention", "URLs", "Microsoft Entra"];
 
 const TECHNICAL_SETTING_KEYS = new Set([
   "bot_default_service_url",
@@ -3086,6 +3156,7 @@ function StatusPage() {
                 description="Teams delivery mode and Bot Framework readiness."
                 authStatus={readiness.bot.auth_status}
                 badges={[
+                  { label: readiness.bot.enabled ? "Enabled" : "Disabled", tone: readiness.bot.enabled ? "success" : "neutral" },
                   { label: readiness.delivery_mode, tone: readiness.delivery_mode === "real" ? "success" : "neutral" },
                   {
                     label: readiness.bot.default_service_url_configured ? "Service URL set" : "No default service URL",
@@ -3107,6 +3178,7 @@ function StatusPage() {
                 description="Target search and display-name resolution readiness."
                 authStatus={readiness.graph_lookup.auth_status}
                 badges={[
+                  { label: readiness.graph_lookup.enabled ? "Enabled" : "Disabled", tone: readiness.graph_lookup.enabled ? "success" : "neutral" },
                   {
                     label: graphCredentialLabel(readiness.graph_lookup.credential_source),
                     tone: readiness.graph_lookup.credential_source === "missing" ? "warn" : "neutral",
@@ -3345,7 +3417,17 @@ function RuntimeSettingRow({
         {meta?.description ? <p className="settings-override-hint">{meta.description}</p> : null}
       </div>
       <div className="settings-override-editor">
-        {item.type === "enum" ? (
+        {item.type === "bool" ? (
+          <label className="settings-toggle">
+            <input
+              type="checkbox"
+              checked={draft === "true"}
+              disabled={busy}
+              onChange={(event) => setDraft(event.target.checked ? "true" : "false")}
+            />
+            <span>{draft === "true" ? "Enabled" : "Disabled"}</span>
+          </label>
+        ) : item.type === "enum" ? (
           <select className={inputClassName} value={draft} onChange={(event) => setDraft(event.target.value)} disabled={busy}>
             {item.enum_values.map((value) => (
               <option key={value} value={value}>
@@ -3449,13 +3531,14 @@ function GraphDeliveryReadinessCard({
           </div>
           <div className="integration-status-badges">
             <StatusBadge label={authStatusLabel(readiness.auth_status)} tone={authStatusTone(readiness.auth_status)} />
+            <StatusBadge label={readiness.enabled ? "Enabled" : "Disabled"} tone={readiness.enabled ? "success" : "neutral"} />
             <StatusBadge
               label={readiness.credential_source === "delegated_service_user" ? "Delegated service user" : "Not connected"}
-              tone={readiness.credential_source === "delegated_service_user" ? "success" : "warn"}
+              tone={readiness.credential_source === "delegated_service_user" ? "success" : readiness.enabled ? "warn" : "neutral"}
             />
           </div>
           <div className="integration-card-actions">
-            <button className="secondary-button secondary-button--small" type="button" onClick={onConnect} disabled={busy}>
+            <button className="secondary-button secondary-button--small" type="button" onClick={onConnect} disabled={busy || !readiness.enabled}>
               {readiness.configured ? "Reconnect service user" : "Connect service user"}
             </button>
             {readiness.configured ? (
@@ -3756,6 +3839,7 @@ function tokenExpirationLabel(oauth: OAuthDiagnosticsOut): string {
 }
 
 function readinessSummary(authStatus: string, message: string, oauth: OAuthDiagnosticsOut): string {
+  if (authStatus === "disabled") return message || "This integration is disabled by feature policy.";
   if (authStatus === "ready") return "Token checks passed, required credentials are present and the integration is ready for production traffic.";
   if (authStatus === "permission_warning") return "Core token checks passed, but optional directory metadata is limited by Microsoft Graph permissions.";
   if (authStatus === "mock") return "Delivery is running in mock mode, so Teams messages are validated without being sent.";
@@ -3766,6 +3850,7 @@ function readinessSummary(authStatus: string, message: string, oauth: OAuthDiagn
 }
 
 function graphDeliverySummary(readiness: AdminReadinessOut["graph_delivery"]): string {
+  if (readiness.auth_status === "disabled") return readiness.message || "Delegated Microsoft Graph delivery is disabled by feature policy.";
   if (readiness.auth_status === "ready") return "Delegated token checks passed, required scopes are present and Graph delivery can be used.";
   if (readiness.auth_status === "missing") return readiness.message || "Connect a delegated service user before Microsoft Graph delivery can send messages.";
   if (readiness.auth_status === "expired") return readiness.message || "The delegated service-user connection has expired or was revoked.";
@@ -3804,11 +3889,13 @@ function yesNo(value: boolean): string {
 }
 
 function graphCredentialLabel(source: string): string {
+  if (source === "disabled") return "Disabled";
   if (source === "ms_app") return "Entra app credentials";
   return "Missing";
 }
 
 function oauthCredentialSourceLabel(source: string): string {
+  if (source === "disabled") return "Disabled";
   if (source === "ms_app") return "Entra app credentials";
   return "Missing";
 }
@@ -3819,6 +3906,7 @@ function credentialStatusLabel(status?: string): string {
 }
 
 function authStatusLabel(status: string): string {
+  if (status === "disabled") return "Disabled";
   if (status === "mock") return "Mock mode";
   if (status === "ready") return "Ready";
   if (status === "missing") return "Not connected";
@@ -3840,12 +3928,14 @@ function authStatusTone(status: string): "neutral" | "success" | "warn" | "dange
 }
 
 function healthStateLabel(status: string): string {
+  if (status === "disabled") return "Disabled";
   if (status === "ready" || status === "mock") return "Ready";
   if (status === "token_error" || status === "expired") return "Error";
   return "Warning";
 }
 
 function permissionSummary(oauth: OAuthDiagnosticsOut): string {
+  if (oauth.credential_source === "disabled") return "Permission checks are skipped while this integration is disabled.";
   if (!oauth.token.checked) return "Permissions have not been checked yet.";
   if (!oauth.token.succeeded) return "Permissions cannot be verified until token acquisition succeeds.";
   if (oauth.token.roles.length) return `${oauth.token.roles.length} application permission${oauth.token.roles.length === 1 ? "" : "s"} returned in the token.`;
@@ -3854,6 +3944,7 @@ function permissionSummary(oauth: OAuthDiagnosticsOut): string {
 
 function readinessAttentionItems(authStatus: string, message: string, oauth: OAuthDiagnosticsOut): Array<{ title: string; description: string; tone: "warn" | "danger" }> {
   const items: Array<{ title: string; description: string; tone: "warn" | "danger" }> = [];
+  if (authStatus === "disabled") return items;
 
   if (authStatus === "token_error") {
     items.push({
@@ -3892,6 +3983,7 @@ function readinessAttentionItems(authStatus: string, message: string, oauth: OAu
 
 function graphDeliveryAttentionItems(readiness: AdminReadinessOut["graph_delivery"]): Array<{ title: string; description: string; tone: "warn" | "danger" }> {
   const items: Array<{ title: string; description: string; tone: "warn" | "danger" }> = [];
+  if (readiness.auth_status === "disabled") return items;
 
   if (readiness.auth_status === "missing") {
     items.push({

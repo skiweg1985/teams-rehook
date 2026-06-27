@@ -197,7 +197,7 @@ export type LogCleanupOut = {
 export type SettingItemOut = {
   key: string;
   label: string;
-  type: "string" | "int" | "url" | "enum" | "secret";
+  type: "string" | "int" | "url" | "enum" | "secret" | "bool";
   enum_values: string[];
   env_default: string;
   effective_value: string;
@@ -213,6 +213,7 @@ export type AdminReadinessOut = {
   app_version: string;
   delivery_mode: "mock" | "real" | string;
   bot: {
+    enabled: boolean;
     ready: boolean;
     auth_status: string;
     message: string;
@@ -225,6 +226,7 @@ export type AdminReadinessOut = {
     oauth: OAuthDiagnosticsOut;
   };
   graph_lookup: {
+    enabled: boolean;
     ready: boolean;
     auth_status: string;
     message: string;
@@ -236,6 +238,7 @@ export type AdminReadinessOut = {
     oauth: OAuthDiagnosticsOut;
   };
   graph_delivery: {
+    enabled: boolean;
     ready: boolean;
     auth_status: string;
     message: string;

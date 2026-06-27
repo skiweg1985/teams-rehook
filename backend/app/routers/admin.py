@@ -207,9 +207,14 @@ def list_users(admin: User = Depends(require_admin), db: Session = Depends(get_d
 def readiness(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     settings = get_effective_settings()
     delivery_mode = settings.bot_delivery_mode_normalized
-    bot = _bot_readiness(settings, delivery_mode)
-    graph_lookup = _graph_lookup_readiness(settings)
-    graph_delivery = _graph_delivery_readiness(db, admin.organization_id, settings)
+    bot = _bot_readiness(settings, delivery_mode) if settings.bot_framework_enabled else _disabled_bot_readiness(settings, delivery_mode)
+    graph_lookup = _graph_lookup_readiness(settings) if settings.graph_lookup_enabled else _disabled_graph_lookup_readiness(settings)
+    graph_delivery_enabled = settings.graph_delivery_enabled and settings.graph_lookup_enabled
+    graph_delivery = (
+        _graph_delivery_readiness(db, admin.organization_id, settings)
+        if graph_delivery_enabled
+        else _disabled_graph_delivery_readiness(settings, graph_lookup_enabled=settings.graph_lookup_enabled)
+    )
     if graph_delivery.token_checked:
         db.commit()
 
@@ -379,6 +384,36 @@ def _bot_readiness(settings, delivery_mode: str) -> BotReadinessOut:
     )
 
 
+def _disabled_bot_readiness(settings, delivery_mode: str) -> BotReadinessOut:
+    credential_fields = {
+        "tenant_id": _configured_status(settings.ms_app_tenant_id),
+        "client_id": _configured_status(settings.ms_app_client_id),
+        "client_secret": _configured_status(settings.ms_app_client_secret),
+        "default_service_url": _configured_status(settings.bot_default_service_url),
+    }
+    return BotReadinessOut(
+        enabled=False,
+        ready=True,
+        auth_status="disabled",
+        token_checked=False,
+        token_request_succeeded=False,
+        mode=delivery_mode,
+        credentials_configured=all(
+            credential_fields[field] == "configured"
+            for field in ["tenant_id", "client_id", "client_secret"]
+        ),
+        default_service_url_configured=credential_fields["default_service_url"] == "configured",
+        credential_fields=credential_fields,
+        oauth=_oauth_diagnostics(
+            credential_source="disabled",
+            tenant_id=settings.ms_app_tenant_id,
+            client_id=settings.ms_app_client_id,
+            scope=settings.botframework_scope,
+        ),
+        message="Bot Framework delivery is disabled by feature policy.",
+    )
+
+
 def _graph_lookup_readiness(settings) -> GraphReadinessOut:
     credential_fields = {
         "tenant_id": _configured_status(settings.ms_app_tenant_id),
@@ -476,6 +511,31 @@ def _graph_lookup_readiness(settings) -> GraphReadinessOut:
     )
 
 
+def _disabled_graph_lookup_readiness(settings) -> GraphReadinessOut:
+    credential_fields = {
+        "tenant_id": _configured_status(settings.ms_app_tenant_id),
+        "client_id": _configured_status(settings.ms_app_client_id),
+        "client_secret": _configured_status(settings.ms_app_client_secret),
+    }
+    return GraphReadinessOut(
+        enabled=False,
+        ready=True,
+        auth_status="disabled",
+        token_checked=False,
+        token_request_succeeded=False,
+        configured=all(status == "configured" for status in credential_fields.values()),
+        credential_source="disabled",
+        credential_fields=credential_fields,
+        oauth=_oauth_diagnostics(
+            credential_source="disabled",
+            tenant_id=settings.ms_app_tenant_id,
+            client_id=settings.ms_app_client_id,
+            scope=settings.graph_scope,
+        ),
+        message="Microsoft Graph lookup is disabled by feature policy.",
+    )
+
+
 def _graph_delivery_readiness(db: Session, organization_id: str, settings) -> GraphDeliveryReadinessOut:
     diagnostics = diagnostics_for_organization(db, organization_id)
     required_scopes = list(DEFAULT_DELEGATED_GRAPH_SCOPES)
@@ -560,6 +620,34 @@ def _graph_delivery_readiness(db: Session, organization_id: str, settings) -> Gr
         token_checked=True,
         token_request_succeeded=True,
         message="Delegated Graph token refresh succeeded. Graph delivery prerequisites are usable.",
+    )
+
+
+def _disabled_graph_delivery_readiness(settings, *, graph_lookup_enabled: bool) -> GraphDeliveryReadinessOut:
+    message = (
+        "Delegated Graph delivery is disabled because Graph lookup is disabled."
+        if not graph_lookup_enabled
+        else "Delegated Graph delivery is disabled by feature policy."
+    )
+    return GraphDeliveryReadinessOut(
+        enabled=False,
+        ready=True,
+        auth_status="disabled",
+        token_checked=False,
+        token_request_succeeded=False,
+        configured=False,
+        credential_source="disabled",
+        tenant_id=settings.ms_app_tenant_id,
+        client_id=settings.ms_app_client_id,
+        scopes=[],
+        required_scopes=list(DEFAULT_DELEGATED_GRAPH_SCOPES),
+        missing_scopes=[],
+        service_user_id="",
+        service_user_display_name="",
+        service_user_principal_name="",
+        access_token_expires_at=None,
+        refresh_checked_at=None,
+        message=message,
     )
 
 

@@ -1,13 +1,13 @@
-# Graph Delivery Variante A
+# Graph Delivery Variant A
 
 ## Purpose
 
-This note defines the Variante A delivery model for Microsoft Graph delivery in
+This note defines the Variant A delivery model for Microsoft Graph delivery in
 Teams Rehook. It is the architecture output for GitHub issue #4 and is intended
 to unblock the backend auth, delivery, readiness and frontend work in issues #7,
 #8, #9 and #10.
 
-Variante A means normal operational sending through Microsoft Graph as a
+Variant A means normal operational sending through Microsoft Graph as a
 parallel route backend. It does not replace Bot Framework delivery, and it does
 not use Microsoft Graph migration/import APIs as the product's normal send path.
 
@@ -48,7 +48,7 @@ Important constraints for this product:
 - The application permission shown on the send API is `Teamwork.Migrate.All`,
   and Microsoft marks application permissions there as migration-only. This is
   not a normal operational sending model for Teams Rehook.
-- The response sender identity is a Teams user identity. For Variante A, the
+- The response sender identity is a Teams user identity. For Variant A, the
   visible sender is therefore the delegated service user, not the Teams Rehook
   bot.
 - Microsoft Graph supports chat creation with `POST /chats`; creating a 1:1 chat
@@ -157,7 +157,7 @@ prerequisites instead of Bot Framework prerequisites.
 
 ## Deferred Follow-Ups
 
-These are explicitly out of scope for Variante A V1:
+These are explicitly out of scope for Variant A V1:
 
 - Using Microsoft Graph migration/import APIs for normal delivery.
 - Treating `Teamwork.Migrate.All` as a production delivery permission.

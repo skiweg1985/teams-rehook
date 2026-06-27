@@ -1,57 +1,57 @@
 # Feature Ideas Backlog
 
-Kurzliste fuer moegliche Weiterentwicklungen von Teams Rehook.
+This is a lightweight backlog for possible Teams Rehook improvements. Items here are ideas, not committed roadmap items.
 
-## High-interest ideas
+## High-Interest Ideas
 
 1. **Observability Dashboard**
-   Live-Status fuer Deliveries, OAuth health, retries, latency, failed targets und readiness trends.
+   Live status for deliveries, OAuth health, retries, latency, failed targets, and readiness trends.
 
 2. **AI Message Rewriter**
-   Webhook-Payloads automatisch in kurze, lesbare Teams-Nachrichten fuer Ops, Management oder Customer-safe Updates umformulieren.
+   Transform webhook payloads into short, readable Teams messages for operations, management, or customer-safe updates.
 
 3. **Inbound-to-Workflow Loop**
-   Replies und Aktionen aus Teams zurueck ins System holen, z. B. Ack, Retry, Escalate oder Close.
+   Bring replies or actions from Teams back into source workflows, for example acknowledge, retry, escalate, or close.
 
-## Additional product ideas
+## Additional Product Ideas
 
-4. **Action Buttons with real workflow effects**
-   Direkt in Teams: Acknowledge, Assign, Retry, Escalate, Open ticket.
+4. **Action Buttons With Workflow Effects**
+   Direct Teams actions such as acknowledge, assign, retry, escalate, or open ticket.
 
 5. **Message Enrichment**
-   Alerts automatisch mit Runbook, Dashboard-Link, Owner, Service-Status oder Logs anreichern.
+   Add runbook links, dashboard links, owner information, service status, or logs to incoming alerts.
 
 6. **Noise Collapse / Alert Grouping**
-   Mehrere aehnliche Events zu einer intelligenten Sammelmeldung verdichten.
+   Collapse similar events into one grouped notification.
 
 7. **Digest Mode**
-   Low-priority Signale in 5-min oder 15-min Batches senden statt sofort.
+   Send low-priority signals in 5-minute or 15-minute batches instead of immediately.
 
-8. **Audience-aware formatting**
-   Dieselbe Nachricht automatisch unterschiedlich fuer Ops, Mgmt oder Customer-Success darstellen.
+8. **Audience-Aware Formatting**
+   Render the same event differently for operations, management, or customer success audiences.
 
 9. **Incident Timeline / Causality View**
-   Einzelne Events zu einer Incident-Story oder Timeline zusammenbauen.
+   Combine related events into an incident story or timeline.
 
 10. **Delivery Simulation Mode**
-    Vor Go-live testen, wo eine Nachricht landen wuerde und wie sie aussehen wuerde.
+    Preview where a message would land and how it would look before go-live.
 
-11. **Two-way Sync with ticketing systems**
-    Teams-Aktionen aktualisieren Jira, Linear oder andere Ticketsysteme und umgekehrt.
+11. **Two-Way Sync With Ticketing Systems**
+    Sync Teams actions with Jira, Linear, or similar ticketing tools.
 
-12. **Escalation by Silence**
-    Wenn niemand reagiert, nach X Minuten automatisch DM, anderer Channel oder weiterer Empfaenger.
+12. **Escalation By Silence**
+    Escalate to another user, chat, or channel when nobody reacts within a configured time window.
 
 13. **Operator Inbox**
-    Zentrale Queue fuer fehlgeschlagene, unsichere oder freizugebende Deliveries.
+    Central queue for failed, uncertain, or approval-gated deliveries.
 
-14. **Semantic Dedup**
-    Inhaltlich aehnliche Meldungen erkennen, nicht nur identische IDs oder Payloads.
+14. **Semantic Deduplication**
+    Detect semantically similar messages, not only identical payloads or IDs.
 
-15. **LLM-powered Intent Routing**
-    Unstrukturierte Webhooks automatisch dem richtigen Ziel, Template oder Workflow zuordnen.
+15. **LLM-Powered Intent Routing**
+    Route unstructured webhooks to the right Teams target, template, or workflow.
 
 ## Notes
 
-- Dieses Dokument ist bewusst leichtgewichtig und fuer fruehe Produktideen gedacht.
-- Reife Kandidaten sollten spaeter als eigene GitHub Issues mit Scope, Nutzen und offenen Fragen uebernommen werden.
+- Mature candidates should become scoped issues with value, constraints, risks, and acceptance criteria.
+- Do not document ideas from this file as available features until code or tests support them.

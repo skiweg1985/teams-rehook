@@ -4,7 +4,7 @@ import secrets
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -53,9 +53,24 @@ def monitoring_status(db: Session = Depends(get_db)):
     settings = get_effective_settings()
     generated_at = utcnow()
     delivery_mode = settings.bot_delivery_mode_normalized
-    bot_readiness = _bot_readiness(settings, delivery_mode)
-    graph_lookup_readiness = _graph_lookup_readiness(settings)
+    enabled_backends = _enabled_delivery_backends(settings)
+    bot_readiness = (
+        _bot_readiness(settings, delivery_mode)
+        if settings.bot_framework_enabled
+        else MonitoringReadinessComponentOut(enabled=False, ready=True, auth_status="disabled")
+    )
+    graph_lookup_readiness = (
+        _graph_lookup_readiness(settings)
+        if settings.graph_lookup_enabled
+        else MonitoringGraphReadinessOut(
+            enabled=False,
+            ready=True,
+            auth_status="disabled",
+            credential_source="disabled",
+        )
+    )
     graph_delivery_readiness = MonitoringGraphReadinessOut(
+        enabled=settings.graph_delivery_enabled and settings.graph_lookup_enabled,
         ready=False,
         auth_status="unknown",
         credential_source="missing",
@@ -64,26 +79,41 @@ def monitoring_status(db: Session = Depends(get_db)):
     try:
         db.execute(text("SELECT 1"))
         database = MonitoringDatabaseOut(ok=True)
-        graph_delivery_readiness = _graph_delivery_readiness(db)
+        if settings.graph_delivery_enabled and settings.graph_lookup_enabled:
+            graph_delivery_readiness = _graph_delivery_readiness(db)
+        else:
+            graph_delivery_readiness = MonitoringGraphReadinessOut(
+                enabled=False,
+                ready=True,
+                auth_status="disabled",
+                credential_source="disabled",
+            )
         routes = _route_counts(db)
+        rollup_routes = _route_counts(db, delivery_backends=enabled_backends)
         deliveries = _delivery_summary(db)
         rolling_windows = {label: _rolling_window(db, generated_at - window) for label, window in WINDOWS.items()}
+        rollup_short_window = _rolling_window(db, generated_at - WINDOWS["5m"], delivery_backends=enabled_backends)
         problem_routes = _problem_routes(db)
     except Exception:
         database = MonitoringDatabaseOut(ok=False, message="Database check failed")
         routes = MonitoringRoutesOut()
+        rollup_routes = MonitoringRoutesOut()
         deliveries = MonitoringDeliveriesOut()
         rolling_windows = {label: MonitoringRollingWindowOut() for label in WINDOWS}
+        rollup_short_window = MonitoringRollingWindowOut()
         problem_routes = []
 
     status_value = _rollup_status(
         database_ok=database.ok,
         delivery_mode=delivery_mode,
+        bot_enabled=settings.bot_framework_enabled,
         bot_ready=bot_readiness.ready,
+        graph_lookup_enabled=settings.graph_lookup_enabled,
         graph_lookup_ready=graph_lookup_readiness.ready,
+        graph_delivery_enabled=settings.graph_delivery_enabled and settings.graph_lookup_enabled,
         graph_delivery_ready=graph_delivery_readiness.ready,
-        routes=routes,
-        short_window=rolling_windows["5m"],
+        routes=rollup_routes,
+        short_window=rollup_short_window,
     )
     return MonitoringStatusOut(
         ok=status_value == "ok",
@@ -95,10 +125,12 @@ def monitoring_status(db: Session = Depends(get_db)):
         delivery_mode=delivery_mode,
         readiness=MonitoringReadinessOut(
             bot=MonitoringReadinessComponentOut(
+                enabled=settings.bot_framework_enabled,
                 ready=bot_readiness.ready,
                 auth_status=bot_readiness.auth_status,
             ),
             graph_lookup=MonitoringGraphReadinessOut(
+                enabled=settings.graph_lookup_enabled,
                 ready=graph_lookup_readiness.ready,
                 auth_status=graph_lookup_readiness.auth_status,
                 credential_source=graph_lookup_readiness.credential_source,
@@ -112,21 +144,24 @@ def monitoring_status(db: Session = Depends(get_db)):
     )
 
 
-def _route_counts(db: Session) -> MonitoringRoutesOut:
-    total = db.scalar(select(func.count()).select_from(WebhookRoute)) or 0
-    active = db.scalar(select(func.count()).select_from(WebhookRoute).where(WebhookRoute.is_active.is_(True))) or 0
-    inactive = db.scalar(select(func.count()).select_from(WebhookRoute).where(WebhookRoute.is_active.is_(False))) or 0
+def _route_counts(db: Session, *, delivery_backends: set[str] | None = None) -> MonitoringRoutesOut:
+    filters = []
+    if delivery_backends is not None:
+        filters.append(WebhookRoute.delivery_backend.in_(delivery_backends))
+    total = db.scalar(select(func.count()).select_from(WebhookRoute).where(*filters)) or 0
+    active = db.scalar(select(func.count()).select_from(WebhookRoute).where(*filters, WebhookRoute.is_active.is_(True))) or 0
+    inactive = db.scalar(select(func.count()).select_from(WebhookRoute).where(*filters, WebhookRoute.is_active.is_(False))) or 0
     with_last_failure = (
-        db.scalar(select(func.count()).select_from(WebhookRoute).where(WebhookRoute.last_delivery_status == "failed")) or 0
+        db.scalar(select(func.count()).select_from(WebhookRoute).where(*filters, WebhookRoute.last_delivery_status == "failed")) or 0
     )
     with_last_rejection = (
-        db.scalar(select(func.count()).select_from(WebhookRoute).where(WebhookRoute.last_delivery_status == "rejected")) or 0
+        db.scalar(select(func.count()).select_from(WebhookRoute).where(*filters, WebhookRoute.last_delivery_status == "rejected")) or 0
     )
     untested_active = (
         db.scalar(
             select(func.count())
             .select_from(WebhookRoute)
-            .where(WebhookRoute.is_active.is_(True), WebhookRoute.last_delivery_status.is_(None))
+            .where(*filters, WebhookRoute.is_active.is_(True), WebhookRoute.last_delivery_status.is_(None))
         )
         or 0
     )
@@ -180,12 +215,17 @@ def _last_delivery_at(db: Session, status_value: str):
     )
 
 
-def _rolling_window(db: Session, since) -> MonitoringRollingWindowOut:
-    rows = db.execute(
+def _rolling_window(db: Session, since, *, delivery_backends: set[str] | None = None) -> MonitoringRollingWindowOut:
+    statement = (
         select(WebhookDeliveryEvent.status, func.count())
+        .select_from(WebhookDeliveryEvent)
         .where(WebhookDeliveryEvent.created_at >= since)
-        .group_by(WebhookDeliveryEvent.status)
-    ).all()
+    )
+    if delivery_backends is not None:
+        statement = statement.outerjoin(WebhookRoute, WebhookDeliveryEvent.route_id == WebhookRoute.id).where(
+            or_(WebhookDeliveryEvent.route_id.is_(None), WebhookRoute.delivery_backend.in_(delivery_backends))
+        )
+    rows = db.execute(statement.group_by(WebhookDeliveryEvent.status)).all()
     counts = {str(status_value): int(count) for status_value, count in rows}
     delivered = counts.get("delivered", 0)
     failed = counts.get("failed", 0)
@@ -227,17 +267,20 @@ def _rollup_status(
     *,
     database_ok: bool,
     delivery_mode: str,
+    bot_enabled: bool,
     bot_ready: bool,
+    graph_lookup_enabled: bool,
     graph_lookup_ready: bool,
+    graph_delivery_enabled: bool,
     graph_delivery_ready: bool,
     routes: MonitoringRoutesOut,
     short_window: MonitoringRollingWindowOut,
 ) -> str:
-    if not database_ok or (delivery_mode == "real" and not bot_ready):
+    if not database_ok or (bot_enabled and delivery_mode == "real" and not bot_ready):
         return "crit"
     if (
-        not graph_lookup_ready
-        or not graph_delivery_ready
+        (graph_lookup_enabled and not graph_lookup_ready)
+        or (graph_delivery_enabled and not graph_delivery_ready)
         or routes.inactive
         or routes.with_last_failure
         or routes.with_last_rejection
@@ -247,3 +290,12 @@ def _rollup_status(
     ):
         return "warn"
     return "ok"
+
+
+def _enabled_delivery_backends(settings) -> set[str]:
+    backends: set[str] = set()
+    if settings.bot_framework_enabled:
+        backends.add("bot_framework")
+    if settings.graph_delivery_enabled and settings.graph_lookup_enabled:
+        backends.add("graph")
+    return backends
