@@ -22,10 +22,21 @@ GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"
 
 
 class GraphDeliveryError(RuntimeError):
-    def __init__(self, message: str, *, error_type: str = "graph_error", status_code: int | None = None, result: dict[str, Any] | None = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_type: str = "graph_error",
+        status_code: int | None = None,
+        graph_error_code: str = "",
+        graph_error_message: str = "",
+        result: dict[str, Any] | None = None,
+    ):
         super().__init__(message)
         self.error_type = error_type
         self.status_code = status_code
+        self.graph_error_code = graph_error_code
+        self.graph_error_message = graph_error_message
         self.result = result or {}
 
 
@@ -66,12 +77,14 @@ def send_graph_message(
         response = _graph_post_json(endpoint, token.access_token, payload)
     except GraphDeliveryError as exc:
         if not _should_retry_without_attachments(exc, payload):
+            _apply_operator_guidance(exc, target, token.diagnostics)
             exc.result = _error_result(exc, target)
             raise
         fallback_payload = build_chat_message_payload(message, include_attachments=False)
         try:
             response = _graph_post_json(endpoint, token.access_token, fallback_payload)
         except GraphDeliveryError as retry_exc:
+            _apply_operator_guidance(retry_exc, target, token.diagnostics)
             retry_exc.result = _error_result(retry_exc, target)
             raise
         payload = fallback_payload
@@ -174,11 +187,13 @@ def _graph_post_json(path: str, access_token: str, payload: dict[str, Any]) -> d
             body = json.loads(response_body) if response_body else {}
             return {"status_code": response.status, "body": body if isinstance(body, dict) else {}}
     except urllib.error.HTTPError as exc:
-        safe_message = _safe_graph_error_message(exc)
+        graph_error_code, safe_message = _safe_graph_error_details(exc)
         raise GraphDeliveryError(
             f"Microsoft Graph delivery failed with HTTP {exc.code}: {safe_message}",
             error_type="graph_http_error",
             status_code=exc.code,
+            graph_error_code=graph_error_code,
+            graph_error_message=safe_message,
         ) from exc
     except (urllib.error.URLError, json.JSONDecodeError) as exc:
         raise GraphDeliveryError("Microsoft Graph delivery failed.", error_type="graph_request_error") from exc
@@ -229,19 +244,61 @@ def _should_retry_without_attachments(exc: GraphDeliveryError, payload: dict[str
     return exc.status_code == 400 and bool(payload.get("attachments"))
 
 
-def _safe_graph_error_message(exc: urllib.error.HTTPError) -> str:
+def _safe_graph_error_details(exc: urllib.error.HTTPError) -> tuple[str, str]:
     try:
         body = json.loads(exc.read().decode("utf-8", errors="replace"))
     except (json.JSONDecodeError, UnicodeDecodeError):
-        return "The Graph response could not be parsed."
+        return "", "The Graph response could not be parsed."
     if not isinstance(body, dict):
-        return "Microsoft Graph returned an error."
+        return "", "Microsoft Graph returned an error."
     error = body.get("error")
     if isinstance(error, dict):
         message = str(error.get("message") or "Microsoft Graph returned an error.").strip()
         code = str(error.get("code") or "").strip()
-        return f"{code}: {message}" if code else message
-    return "Microsoft Graph returned an error."
+        return code, f"{code}: {message}" if code else message
+    return "", "Microsoft Graph returned an error."
+
+
+def _apply_operator_guidance(exc: GraphDeliveryError, target: dict[str, str], diagnostics: Any) -> None:
+    operator_message = _operator_message_for_error(exc, target, diagnostics)
+    if not operator_message:
+        return
+    exc.error_type = "graph_channel_access_denied"
+    exc.args = (operator_message,)
+
+
+def _operator_message_for_error(exc: GraphDeliveryError, target: dict[str, str], diagnostics: Any) -> str:
+    if exc.status_code != 403 or target.get("kind") != "channel":
+        return ""
+    service_user = _service_user_label(diagnostics)
+    target_label = _target_label(target)
+    return (
+        f"Microsoft Graph denied channel delivery to {target_label} with HTTP 403. "
+        f"Add the connected Graph service user {service_user} to the target Team/channel and verify delegated "
+        "ChannelMessage.Send consent, then run Send test again."
+    )
+
+
+def _service_user_label(diagnostics: Any) -> str:
+    principal = str(getattr(diagnostics, "service_user_principal_name", "") or "").strip()
+    display_name = str(getattr(diagnostics, "service_user_display_name", "") or "").strip()
+    if principal and display_name:
+        return f"{display_name} ({principal})"
+    if principal:
+        return principal
+    if display_name:
+        return display_name
+    return "configured in Settings"
+
+
+def _target_label(target: dict[str, str]) -> str:
+    team_name = target.get("team_name", "").strip()
+    channel_name = target.get("target_name", "").strip()
+    if team_name and channel_name.lower().startswith(f"{team_name.lower()} /"):
+        return channel_name
+    if team_name and channel_name:
+        return f"{team_name} / {channel_name}"
+    return channel_name or team_name or "the selected channel"
 
 
 def _error_result(exc: GraphDeliveryError, target: dict[str, str]) -> dict[str, Any]:
@@ -252,6 +309,12 @@ def _error_result(exc: GraphDeliveryError, target: dict[str, str]) -> dict[str, 
     }
     if exc.status_code is not None:
         result["status_code"] = exc.status_code
+    if exc.graph_error_code:
+        result["graph_error_code"] = exc.graph_error_code
+    if exc.graph_error_message:
+        result["graph_error_message"] = exc.graph_error_message
+    if str(exc):
+        result["operator_message"] = str(exc)
     return result
 
 

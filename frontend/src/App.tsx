@@ -2709,7 +2709,7 @@ function WebhookDeliveryLogsModal({ route, onClose }: { route: WebhookRouteOut; 
             <span className="muted">{eventPayloadType(event)}</span>,
             <span className="muted">{eventDeliveryBackend(event)}</span>,
             <span className="muted">{eventDeliveryMode(event)}</span>,
-            event.error ? <span className="form-error">{event.error}</span> : <span className="muted">-</span>,
+            eventErrorMessage(event) ? <span className="form-error">{eventErrorMessage(event)}</span> : <span className="muted">-</span>,
           ])}
           emptyTitle="No delivery logs"
           emptyBody="Test sends and incoming webhooks will appear here."
@@ -2736,6 +2736,8 @@ function DeliveryEventStatusBadge({ status }: { status: WebhookDeliveryEventOut[
 function DeliveryEventDetails({ event }: { event: WebhookDeliveryEventOut & Partial<WebhookDeliveryEventDetailOut> }) {
   const requestMetadata = event.request_metadata;
   const deliveryResult = event.delivery_result;
+  const errorMessage = eventErrorMessage(event);
+  const graphResponseMessage = stringField(deliveryResult, "graph_error_message");
   return (
     <aside className="delivery-event-detail" aria-label="Delivery event details">
       <div className="delivery-event-detail-header">
@@ -2761,10 +2763,13 @@ function DeliveryEventDetails({ event }: { event: WebhookDeliveryEventOut & Part
         <dd>{stringField(deliveryResult, "activity_id")}</dd>
       </dl>
 
-      {event.error ? (
+      {errorMessage ? (
         <section className="detail-section">
           <h4>Error</h4>
-          <p className="form-error">{event.error}</p>
+          <p className="form-error">{errorMessage}</p>
+          {graphResponseMessage !== "-" && graphResponseMessage !== errorMessage ? (
+            <p className="muted">Graph response: {graphResponseMessage}</p>
+          ) : null}
         </section>
       ) : null}
 
@@ -2822,6 +2827,12 @@ function primitiveField(record: Record<string, unknown>, key: string): string {
   return "-";
 }
 
+function eventErrorMessage(event: WebhookDeliveryEventOut): string {
+  const operatorMessage = event.delivery_result.operator_message;
+  if (typeof operatorMessage === "string" && operatorMessage.trim()) return operatorMessage;
+  return event.error;
+}
+
 function eventTitle(event: WebhookDeliveryEventOut): string {
   const title = event.normalized_message.title;
   return typeof title === "string" && title.trim() ? title : "-";
@@ -2851,6 +2862,10 @@ function deliverySummaryMode(event: WebhookDeliveryEventSummaryOut): string {
 
 function deliverySummaryBackend(event: WebhookDeliveryEventSummaryOut): string {
   return event.delivery_backend ? deliveryBackendLabel(event.delivery_backend) : "-";
+}
+
+function deliverySummaryErrorMessage(event: WebhookDeliveryEventSummaryOut): string {
+  return event.error;
 }
 
 function deliveryBackendLabel(backend: string): string {
@@ -4074,7 +4089,11 @@ function MessageLogsPage() {
               </div>,
               <span className="muted">{deliverySummaryBackend(event)}</span>,
               <span className="muted">{deliverySummaryMode(event)}</span>,
-              event.error ? <span className="form-error">{event.error}</span> : <span className="muted">-</span>,
+              deliverySummaryErrorMessage(event) ? (
+                <span className="form-error">{deliverySummaryErrorMessage(event)}</span>
+              ) : (
+                <span className="muted">-</span>
+              ),
             ])}
             emptyTitle="No webhook message logs"
             emptyBody="Send a route test or post to a relay URL. Delivered, failed and rejected attempts will appear here with payload and delivery details."

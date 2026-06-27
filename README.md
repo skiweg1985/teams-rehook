@@ -136,6 +136,8 @@ http://localhost:8080/api/v1/admin/graph-delivery/oauth/callback
 
 Graph delivery messages appear in Teams as the connected delegated service user. The service user must be licensed and must already be a member of the selected Teams channels or chats. Teams Rehook does not create 1:1 chats in V1.
 
+If a Graph channel test fails with HTTP 403, `Forbidden`, `InsufficientPrivileges`, or a similar access-denied response, first verify the connected service user shown under **Settings > Status > Graph delivery**. Add that exact user to the target Team/channel, confirm the delegated `ChannelMessage.Send` permission has tenant consent, then run **Send test** again. A channel found by Graph lookup is only selectable metadata; it does not prove the delegated service user can post there.
+
 Use **Settings > Readiness** to verify delivery mode, credential completeness, Bot and Graph token request status, public URLs, payload limits, log retention, and cookie configuration.
 
 ## Prepare A Teams Target
