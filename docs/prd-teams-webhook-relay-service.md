@@ -15,7 +15,7 @@ Aktuell relevante Quellsysteme sind unter anderem:
 
 ## 2. Produktziel
 
-Teams Rehook soll ein zentraler, intern betriebener Teams Webhook Relay Service werden. Der Dienst nimmt Webhook-Requests entgegen, normalisiert Payloads und sendet daraus Teams-Nachrichten ueber eine Teams-Bot-Integration.
+Teams Rehook soll ein zentraler, intern betriebener Teams Webhook Relay Service werden. Der Dienst nimmt Webhook-Requests entgegen, normalisiert Payloads und sendet daraus Teams-Nachrichten ueber Bot Framework oder eine konfigurierte Microsoft-Graph-Delivery.
 
 Das Produktziel ist:
 
@@ -31,7 +31,7 @@ Das Produktziel ist:
 
 Teams Rehook ist ein implementierter MVP im Evaluation-Status. Der Kernflow ist vorhanden:
 
-`source webhook -> relay URL -> route -> captured Teams bot conversation -> delivery test/logs`
+`source webhook -> relay URL -> route -> configured Teams target -> delivery test/logs`
 
 Bereits umgesetzt:
 
@@ -47,8 +47,9 @@ Bereits umgesetzt:
 - Auswahl bekannter Teams-Bot-Unterhaltungen beim Anlegen einer Route
 - manuelle Fallback-Felder fuer Bot service URL und conversation ID
 - Microsoft-Graph-Suche und Namensauflösung fuer Teams-Ziele, sofern konfiguriert
+- Graph-Delivery ueber eine delegierte Service-User-Verbindung fuer geeignete Graph-Ziele
 - Mock-Delivery-Modus fuer lokale Validierung
-- Real-Delivery-Modus ueber Bot Framework Credentials
+- Real-Delivery-Modus ueber Bot Framework Credentials oder Graph-Delivery-Konfiguration je Route
 - Delivery Logs mit normalisiertem Payload, Request-Metadaten, Zustellantwort und Fehlern
 - Log-Retention und manuelle Cleanup-Funktion
 - Settings-/Readiness-Ansicht fuer nicht geheime Betriebs-, Credential-, Token- und Integrationszustaende
@@ -67,24 +68,27 @@ Teams Rehook muss folgende Funktionen bereitstellen:
 - unbekannte, deaktivierte, leere, ungueltige oder zu grosse Requests kontrolliert ablehnen
 - Payloads aus Text, JSON-Objekten, JSON-Arrays und Adaptive-Card-Aktivitaeten annehmen
 - Payloads auf ein internes Nachrichtenformat normalisieren
-- Webhook-Routen mit Name, Quellsystem, Aktivstatus, Teams-Ziel und Relay-URL verwalten
+- Webhook-Routen mit Name, Delivery Backend, Aktivstatus, Teams-Ziel und Relay-URL verwalten
 - Relay-URLs generieren, kopieren und rotieren
 - Teams Bot Conversations aus eingehenden Bot Activities erfassen
 - bekannte Conversations als Route-Ziel auswählbar machen
 - manuelle Zielkonfiguration erlauben, wenn eine gueltige Bot Framework Conversation Reference bereits bekannt ist
 - Graph-Zielsuche und Graph-Namensauflösung verwenden, wenn Graph-Credentials verfuegbar sind
-- klar vermitteln, dass ein Graph-Ziel nicht automatisch ein sendbares Bot-Ziel ist
+- klar vermitteln, dass ein Graph-Ziel nur sendbar ist, wenn der passende Bot- oder Graph-Delivery-Kontext bereit ist
 - Payload-Beispiele fuer einfache Textnachrichten und Adaptive-Card-Aktivitaeten erzeugen
 - Teams-Bot-Commands fuer route-nahe Administration aus einem installierten Teams-Kontext bereitstellen
 - Testnachrichten pro Route senden
 - Zustellungen, Fehler und abgelehnte Requests nachvollziehbar loggen
 - Dashboard-Signale fuer fehlgeschlagene, abgelehnte, inaktive und ungetestete Routen anzeigen
-- Readiness fuer Bot, Graph, OAuth-Tokenabruf, Delivery Mode, Runtime-URLs, Payload-Limit und Log-Retention anzeigen
+- Readiness fuer Bot, Graph Lookup, Graph Delivery, OAuth-Tokenabruf, Delivery Mode, Runtime-URLs, Payload-Limit und Log-Retention anzeigen
+- API-Key-geschuetzten JSON-Monitoring-Status fuer externe Polling-Systeme bereitstellen
+- Rolling Delivery Windows fuer `5m`, `15m` und `1h` bereitstellen
 
 ## 6. Nicht-funktionale Anforderungen
 
 - Bot-Credentials, Client Secrets, Route Tokens und Conversation IDs duerfen nicht unnoetig im UI oder in Logs offengelegt werden.
 - Readiness-Ausgaben duerfen nur Konfigurations- und Health-Zustaende, keine Secret-Werte, Tokens, Header oder rohen Auth-Antworten enthalten.
+- Monitoring-Ausgaben duerfen keine Relay-URLs, Route Tokens, Bot Service URLs, Conversation IDs, OAuth-Tokens, Secrets oder rohen Auth-Antworten enthalten.
 - Session-aendernde und administrative Requests muessen gegen CSRF geschuetzt bleiben.
 - Der Mock-Modus muss lokale Tests ohne echte Teams-Zustellung erlauben.
 - Der Real-Modus muss fehlende Bot-Credentials eindeutig als nicht bereit anzeigen.
@@ -101,10 +105,12 @@ Teams Rehook folgt einem pragmatischen Relay-Ansatz:
 3. Route, Aktivstatus und Payload werden validiert.
 4. Der Payload wird normalisiert.
 5. Im Mock-Modus wird die Zustellung simuliert.
-6. Im Real-Modus sendet der Teams-Bot-Adapter ueber Bot Framework an die gespeicherte Conversation.
+6. Im Real-Modus sendet das konfigurierte Delivery Backend ueber Bot Framework an die gespeicherte Conversation oder ueber Microsoft Graph an das gespeicherte Graph-Ziel.
 7. Das Ergebnis wird als Delivery Event gespeichert.
 
-Microsoft Graph ist eine Hilfsintegration fuer Suche und Namensauflösung. Der Versand erfolgt weiterhin ueber die Bot Conversation Reference. Deshalb muss jede Route mit **Send test** validiert werden.
+Microsoft Graph ist fuer Suche und Namensauflösung sowie fuer Graph-Delivery-Routen relevant. Graph-Suchergebnisse beweisen noch keine Sendeberechtigung; deshalb muss jede Route mit **Send test** validiert werden.
+
+Der V1-Monitoring-Endpunkt ist JSON/status-orientiert und fuer externe Polling-Systeme per API Key geschuetzt. Prometheus/OpenMetrics-Ausgabe bleibt ein spaeterer Follow-up.
 
 ## 8. Akzeptanzkriterien fuer den aktuellen MVP
 
@@ -119,6 +125,7 @@ Der MVP ist fuer die weitere Evaluation geeignet, wenn:
 - Relay-URLs kopiert und rotiert werden koennen,
 - Dashboard und Empty States Operatoren zum naechsten sinnvollen Schritt fuehren,
 - Settings die Readiness fuer Bot, Graph, Tokenabruf und Runtime-Konfiguration ohne Secrets anzeigt,
+- ein Monitoring-System Delivery-Degradation ueber einen stabilen JSON-Endpunkt ohne UI-Scraping erkennen kann,
 - README und PRD den aktuellen Produktstand konsistent beschreiben.
 
 ## 9. Bekannte Limitierungen

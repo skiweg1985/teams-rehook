@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     log_retention_days: int = 7
     log_cleanup_interval_minutes: int = 60
     settings_enc_key: str = ""
+    monitoring_api_key: str = ""
 
     @property
     def cors_origin_list(self) -> list[str]:

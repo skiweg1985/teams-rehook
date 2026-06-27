@@ -225,6 +225,21 @@ Use **Copy JSON**, then paste the generated body into the external system or a `
 
 Logs are retained for `LOG_RETENTION_DAYS` days, defaulting to 7.
 
+## Machine Monitoring
+
+External monitoring systems can poll a machine-readable JSON endpoint:
+
+```text
+GET /api/v1/monitoring/status
+Authorization: Bearer <MONITORING_API_KEY>
+```
+
+Configure `MONITORING_API_KEY` in `.env`. If the key is empty, the endpoint returns `503` and does not expose status data.
+
+The response includes service status, database reachability, sanitized Bot, Graph lookup and Graph delivery readiness, route counts, last delivery timestamps, rolling delivery windows for `5m`, `15m` and `1h`, and a capped list of problem routes including each route's delivery backend. It does not include relay URLs, route tokens, Bot service URLs, conversation IDs, OAuth tokens, secrets or raw auth responses.
+
+The endpoint is JSON/status-oriented. Prometheus/OpenMetrics output is a follow-up, not part of this V1 endpoint.
+
 ## Rotate Or Disable A Relay URL
 
 - **Copy URL** copies the current relay URL.

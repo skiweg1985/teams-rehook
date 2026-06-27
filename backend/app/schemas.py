@@ -357,6 +357,72 @@ class SettingUpdateIn(BaseModel):
     value: str = Field(max_length=4000)
 
 
+class MonitoringDatabaseOut(BaseModel):
+    ok: bool
+    message: str = ""
+
+
+class MonitoringReadinessComponentOut(BaseModel):
+    ready: bool
+    auth_status: str
+
+
+class MonitoringGraphReadinessOut(MonitoringReadinessComponentOut):
+    credential_source: str
+
+
+class MonitoringReadinessOut(BaseModel):
+    bot: MonitoringReadinessComponentOut
+    graph_lookup: MonitoringGraphReadinessOut
+    graph_delivery: MonitoringGraphReadinessOut
+
+
+class MonitoringRoutesOut(BaseModel):
+    total: int = 0
+    active: int = 0
+    inactive: int = 0
+    with_last_failure: int = 0
+    with_last_rejection: int = 0
+    untested_active: int = 0
+
+
+class MonitoringDeliveriesOut(BaseModel):
+    last_success_at: datetime | None = None
+    last_failure_at: datetime | None = None
+    last_rejection_at: datetime | None = None
+
+
+class MonitoringRollingWindowOut(BaseModel):
+    delivery_success_count: int = 0
+    delivery_failure_count: int = 0
+    delivery_rejection_count: int = 0
+    success_rate: float | None = None
+
+
+class MonitoringProblemRouteOut(BaseModel):
+    id: str
+    name: str
+    delivery_backend: str
+    is_active: bool
+    last_delivery_status: str | None = None
+    last_delivery_at: datetime | None = None
+
+
+class MonitoringStatusOut(BaseModel):
+    ok: bool
+    status: str
+    service: str
+    version: str
+    generated_at: datetime
+    database: MonitoringDatabaseOut
+    delivery_mode: str
+    readiness: MonitoringReadinessOut
+    routes: MonitoringRoutesOut
+    deliveries: MonitoringDeliveriesOut
+    rolling_windows: dict[str, MonitoringRollingWindowOut]
+    problem_routes: list[MonitoringProblemRouteOut]
+
+
 class GraphDeliveryOAuthStartOut(BaseModel):
     authorization_url: str
 
