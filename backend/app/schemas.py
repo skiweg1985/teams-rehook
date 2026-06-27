@@ -62,7 +62,7 @@ class SystemLogEventOut(BaseModel):
     created_at: datetime
 
 
-GraphTargetKind = Literal["user", "team", "channel"]
+GraphTargetKind = Literal["user", "team", "channel", "chat"]
 DeliveryBackend = Literal["bot_framework", "graph"]
 WebhookTargetType = Literal["bot_conversation"]
 WebhookRouteStatus = Literal["delivered", "failed", "rejected"]

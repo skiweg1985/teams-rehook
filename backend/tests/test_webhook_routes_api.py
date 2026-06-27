@@ -238,7 +238,15 @@ def test_update_route_delivery_backend(client: TestClient, db_session: Session):
     response = client.patch(
         f"/api/v1/webhook-routes/{route.id}",
         headers={"X-CSRF-Token": csrf_token},
-        json={"delivery_backend": "graph", "bot_service_url": "", "bot_conversation_id": ""},
+        json={
+            "delivery_backend": "graph",
+            "bot_service_url": "",
+            "bot_conversation_id": "",
+            "graph_target_kind": "channel",
+            "graph_target_id": "channel-id",
+            "graph_team_id": "team-id",
+            "graph_channel_id": "channel-id",
+        },
     )
 
     assert response.status_code == 200
@@ -246,6 +254,51 @@ def test_update_route_delivery_backend(client: TestClient, db_session: Session):
     assert body["delivery_backend"] == "graph"
     db_session.refresh(route)
     assert route.delivery_backend == "graph"
+
+
+def test_create_graph_chat_route_uses_graph_target_id_as_chat_id(client: TestClient):
+    csrf_token = login_admin(client)
+
+    response = client.post(
+        "/api/v1/webhook-routes",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "name": "Graph chat route",
+            "is_active": True,
+            "delivery_backend": "graph",
+            "target_type": "bot_conversation",
+            "target_name": "Ops chat",
+            "graph_target_kind": "chat",
+            "graph_target_id": "chat-id",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["delivery_backend"] == "graph"
+    assert body["graph_target_kind"] == "chat"
+    assert body["graph_target_id"] == "chat-id"
+
+
+def test_create_graph_user_route_is_deferred(client: TestClient):
+    csrf_token = login_admin(client)
+
+    response = client.post(
+        "/api/v1/webhook-routes",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "name": "Graph user route",
+            "is_active": True,
+            "delivery_backend": "graph",
+            "target_type": "bot_conversation",
+            "target_name": "Ada Admin",
+            "graph_target_kind": "user",
+            "graph_target_id": "user-id",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Graph delivery supports channel and existing chat targets in V1"
 
 
 def test_create_route_rejects_invalid_delivery_backend(client: TestClient):
@@ -377,7 +430,7 @@ def test_manual_test_logs_graph_target_metadata(client: TestClient, db_session: 
     assert graph_target["channel_id"] == "channel-id"
 
 
-def test_graph_delivery_backend_records_clear_not_implemented_failure(client: TestClient, db_session: Session):
+def test_graph_delivery_backend_calls_graph_service(client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch):
     route = add_route(db_session)
     route.delivery_backend = "graph"
     route.bot_service_url = ""
@@ -388,6 +441,63 @@ def test_graph_delivery_backend_records_clear_not_implemented_failure(client: Te
     route.graph_channel_id = "channel-id"
     db_session.commit()
     csrf_token = login_admin(client)
+    calls = []
+
+    class FakeGraphResult:
+        def to_dict(self):
+            return {
+                "backend": "graph",
+                "mode": "real",
+                "status_code": 201,
+                "message_id": "graph-message-id",
+                "target": {"kind": "channel", "team_id": "team-id", "channel_id": "channel-id"},
+            }
+
+    def fake_send_graph_message(*args, **kwargs):
+        calls.append({"args": args, **kwargs})
+        return FakeGraphResult()
+
+    monkeypatch.setattr("app.routers.webhook_routes.send_graph_message", fake_send_graph_message)
+
+    response = client.post(
+        f"/api/v1/webhook-routes/{route.id}/test",
+        headers={"X-CSRF-Token": csrf_token},
+        json={"title": "Test", "text": "Hello", "severity": "info"},
+    )
+
+    assert response.status_code == 200
+    assert calls
+    assert calls[0]["route"].id == route.id
+    db_session.refresh(route)
+    assert route.last_delivery_status == "delivered"
+    event = db_session.scalar(select(WebhookDeliveryEvent).where(WebhookDeliveryEvent.route_id == route.id))
+    assert event is not None
+    assert event.status == "delivered"
+    result = json.loads(event.delivery_result_json)
+    assert result["backend"] == "graph"
+    assert result["message_id"] == "graph-message-id"
+
+
+def test_graph_delivery_backend_records_safe_service_failure(client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch):
+    from app.services.teams_graph_delivery import GraphDeliveryError
+
+    route = add_route(db_session)
+    route.delivery_backend = "graph"
+    route.bot_service_url = ""
+    route.bot_conversation_id = ""
+    route.graph_target_kind = "chat"
+    route.graph_target_id = "chat-id"
+    db_session.commit()
+    csrf_token = login_admin(client)
+
+    def fail_graph_delivery(*args, **kwargs):
+        raise GraphDeliveryError(
+            "Delegated Graph delivery is not ready. Reconnect the service user in Settings.",
+            error_type="auth_error",
+            result={"backend": "graph", "error_type": "auth_error"},
+        )
+
+    monkeypatch.setattr("app.routers.webhook_routes.send_graph_message", fail_graph_delivery)
 
     response = client.post(
         f"/api/v1/webhook-routes/{route.id}/test",
@@ -396,14 +506,11 @@ def test_graph_delivery_backend_records_clear_not_implemented_failure(client: Te
     )
 
     assert response.status_code == 502
-    assert response.json()["detail"] == "Graph delivery is not implemented yet"
-    db_session.refresh(route)
-    assert route.last_delivery_status == "failed"
+    assert response.json()["detail"] == "Delegated Graph delivery is not ready. Reconnect the service user in Settings."
     event = db_session.scalar(select(WebhookDeliveryEvent).where(WebhookDeliveryEvent.route_id == route.id))
     assert event is not None
     assert event.status == "failed"
-    assert event.error == "Graph delivery is not implemented yet"
-    assert json.loads(event.delivery_result_json)["backend"] == "graph"
+    assert json.loads(event.delivery_result_json) == {"backend": "graph", "error_type": "auth_error"}
 
 
 def test_delivery_events_endpoint_filters_by_status(client: TestClient, db_session: Session):

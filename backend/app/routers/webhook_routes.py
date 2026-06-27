@@ -31,6 +31,7 @@ from app.services.graph_name_resolution import refresh_graph_names, resolve_rout
 from app.services.graph_targets import GraphConfigError, GraphRequestError
 from app.services.log_retention import cleanup_log_events
 from app.services.teams_bot import BotDeliveryError, send_bot_activity
+from app.services.teams_graph_delivery import GraphDeliveryError, send_graph_message
 from app.services.webhook_payloads import NormalizedMessage, WebhookPayloadError, normalize_webhook_payload, payload_preview
 
 router = APIRouter(tags=["webhook-routes"])
@@ -505,6 +506,14 @@ def _validate_target(route: WebhookRoute) -> None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Target name is required")
     if backend == DELIVERY_BACKEND_BOT and (not route.bot_service_url.strip() or not route.bot_conversation_id.strip()):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Bot service URL and conversation ID are required")
+    if backend == DELIVERY_BACKEND_GRAPH:
+        kind = (route.graph_target_kind or "").strip()
+        if kind == "channel" and (not route.graph_team_id.strip() or not route.graph_channel_id.strip()):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Graph channel routes require a team ID and channel ID")
+        if kind == "chat" and not route.graph_target_id.strip():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Graph chat routes require an existing chat ID")
+        if kind not in {"channel", "chat"}:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Graph delivery supports channel and existing chat targets in V1")
 
 
 def _deliver_to_route(
@@ -516,14 +525,28 @@ def _deliver_to_route(
 ) -> WebhookDeliveryEvent:
     backend = _route_delivery_backend(route)
     if backend == DELIVERY_BACKEND_GRAPH:
-        return _record_failed_delivery(
-            db,
-            route,
-            message,
-            request_metadata,
-            "Graph delivery is not implemented yet",
-            delivery_result={"backend": DELIVERY_BACKEND_GRAPH},
-        )
+        try:
+            result = send_graph_message(db, organization_id=route.organization_id, route=route, message=message)
+            route.last_delivery_status = "delivered"
+            route.last_delivery_at = utcnow()
+            return _record_event(
+                db,
+                route=route,
+                route_token_hash=route.route_token_hash,
+                status_value="delivered",
+                request_metadata=request_metadata,
+                normalized_message=message.to_dict(),
+                delivery_result=result.to_dict(),
+            )
+        except GraphDeliveryError as exc:
+            return _record_failed_delivery(
+                db,
+                route,
+                message,
+                request_metadata,
+                str(exc),
+                delivery_result=exc.result or {"backend": DELIVERY_BACKEND_GRAPH, "error_type": exc.error_type},
+            )
     if backend != DELIVERY_BACKEND_BOT:
         return _record_failed_delivery(
             db,
