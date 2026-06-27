@@ -14,7 +14,9 @@ from app.services.graph_delegated_auth import GraphDelegatedAuthError, refresh_d
 
 
 class GraphDelegatedLookupError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 @dataclass(frozen=True)
@@ -22,6 +24,9 @@ class DelegatedGraphChat:
     id: str
     display_name: str
     subtitle: str = ""
+
+
+CHAT_LIST_ORDER_BY = "lastMessagePreview/createdDateTime desc"
 
 
 def list_service_user_chats(
@@ -38,15 +43,15 @@ def list_service_user_chats(
     except GraphDelegatedAuthError as exc:
         raise GraphDelegatedLookupError("Delegated Graph delivery is not connected or the service-user token cannot be refreshed.") from exc
 
-    data = _graph_get(
-        "/me/chats",
-        token.access_token,
-        {
-            "$top": str(max(1, min(limit, 50))),
-            "$select": "id,topic,chatType,lastUpdatedDateTime",
-            "$orderby": "lastUpdatedDateTime desc",
-        },
-    )
+    normalized_limit = max(1, min(limit, 50))
+    params = _chat_list_params(normalized_limit, include_ordering=True)
+    try:
+        data = _graph_get("/me/chats", token.access_token, params)
+    except GraphDelegatedLookupError as exc:
+        if not _is_orderby_rejection(exc):
+            raise
+        data = _graph_get("/me/chats", token.access_token, _chat_list_params(normalized_limit, include_ordering=False))
+
     needle = query.strip().lower()
     chats: list[DelegatedGraphChat] = []
     for chat in data.get("value", []):
@@ -63,9 +68,19 @@ def list_service_user_chats(
         if needle and needle not in haystack:
             continue
         chats.append(DelegatedGraphChat(id=chat_id, display_name=display_name, subtitle=subtitle))
-        if len(chats) >= limit:
+        if len(chats) >= normalized_limit:
             break
     return chats
+
+
+def _chat_list_params(limit: int, *, include_ordering: bool) -> dict[str, str]:
+    params = {
+        "$top": str(limit),
+        "$select": "id,topic,chatType",
+    }
+    if include_ordering:
+        params["$orderby"] = CHAT_LIST_ORDER_BY
+    return params
 
 
 def _graph_get(path: str, access_token: str, params: dict[str, str]) -> dict:
@@ -81,9 +96,19 @@ def _graph_get(path: str, access_token: str, params: dict[str, str]) -> dict:
             return body if isinstance(body, dict) else {}
     except urllib.error.HTTPError as exc:
         safe_message = _safe_error_message(exc)
-        raise GraphDelegatedLookupError(f"Microsoft Graph chat lookup failed with HTTP {exc.code}: {safe_message}") from exc
+        raise GraphDelegatedLookupError(
+            f"Microsoft Graph chat lookup failed with HTTP {exc.code}: {safe_message}",
+            status_code=exc.code,
+        ) from exc
     except (urllib.error.URLError, json.JSONDecodeError) as exc:
         raise GraphDelegatedLookupError("Microsoft Graph chat lookup failed.") from exc
+
+
+def _is_orderby_rejection(exc: GraphDelegatedLookupError) -> bool:
+    if exc.status_code != 400:
+        return False
+    message = str(exc).lower()
+    return "order by" in message or "orderby" in message
 
 
 def _chat_type_label(chat_type: str) -> str:
