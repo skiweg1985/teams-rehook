@@ -9,7 +9,10 @@ import type {
   SettingItemOut,
   SystemLogEventOut,
   TeamsTargetSearchResult,
+  UserCreate,
   UserOut,
+  UserPasswordUpdate,
+  UserUpdate,
   WebhookDeliveryEventDetailOut,
   WebhookDeliveryEventOut,
   WebhookDeliveryEventPageOut,
@@ -87,6 +90,27 @@ export const api = {
   },
   adminUsers(csrfToken: string) {
     return request<UserOut[]>("/api/v1/admin/users", { csrfToken });
+  },
+  createAdminUser(csrfToken: string, body: UserCreate) {
+    return request<UserOut>("/api/v1/admin/users", {
+      method: "POST",
+      csrfToken,
+      body,
+    });
+  },
+  updateAdminUser(csrfToken: string, id: string, body: UserUpdate) {
+    return request<UserOut>(`/api/v1/admin/users/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      csrfToken,
+      body,
+    });
+  },
+  updateAdminUserPassword(csrfToken: string, id: string, body: UserPasswordUpdate) {
+    return request<UserOut>(`/api/v1/admin/users/${encodeURIComponent(id)}/password`, {
+      method: "PUT",
+      csrfToken,
+      body,
+    });
   },
   adminLogs(csrfToken: string) {
     return request<AuditEventOut[]>("/api/v1/admin/logs", { csrfToken });

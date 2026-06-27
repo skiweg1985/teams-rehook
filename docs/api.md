@@ -34,7 +34,7 @@ Example login:
 ```bash
 curl -i -X POST "http://localhost:8080/api/v1/auth/login" \
   -H "Content-Type: application/json" \
-  -d '{"email":"admin@example.com","password":"change-me-admin-password"}'
+  -d '{"email":"admin@example.local","password":"change-me-admin-password"}'
 ```
 
 ## Webhook Routes
@@ -90,6 +90,9 @@ The route token is secret. Do not log or publish real relay URLs.
 | `DELETE` | `/api/v1/admin/settings/{key}` | Admin session + CSRF | Remove one override and restore environment value. |
 | `GET` | `/api/v1/admin/readiness` | Admin session + CSRF | Return non-secret Bot, Graph, OAuth, runtime, payload, retention, and cookie diagnostics. |
 | `GET` | `/api/v1/admin/users` | Admin session + CSRF | List users in the current organization. |
+| `POST` | `/api/v1/admin/users` | Admin session + CSRF | Create a user. |
+| `PATCH` | `/api/v1/admin/users/{user_id}` | Admin session + CSRF | Update a user email, display name, role, or active status. |
+| `PUT` | `/api/v1/admin/users/{user_id}/password` | Admin session + CSRF | Set a user password. |
 
 Secret setting values are write-only. Responses report configured/missing state, not plaintext.
 

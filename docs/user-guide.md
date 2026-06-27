@@ -127,7 +127,7 @@ Routes created through `register` still need the same operational care as UI-cre
 ## Limits
 
 - Teams Rehook is currently an MVP/evaluation-stage tool.
-- The Users page lists known users, but user invitation, editing, role management, and password reset flows are not implemented in the current UI.
+- The Users page lets admins create users, edit administrator access and active status, and set passwords.
 - Real Teams delivery depends on tenant-specific Microsoft Teams bot installation, Entra credentials, Graph permissions, and captured or resolved delivery targets.
 - Graph lookup is target metadata. It is not a sendability guarantee.
 - No dedicated queue/retry worker is visible in the repository.

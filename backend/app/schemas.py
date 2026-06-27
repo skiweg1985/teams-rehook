@@ -29,6 +29,31 @@ class UserOut(BaseModel):
     created_at: datetime
 
 
+class UserCreateIn(BaseModel):
+    email: str = Field(min_length=3, max_length=255)
+    display_name: str = Field(min_length=1, max_length=255)
+    password: str = Field(min_length=8, max_length=200)
+    is_admin: bool = True
+    is_active: bool = True
+
+
+class UserUpdateIn(BaseModel):
+    email: str | None = Field(default=None, min_length=3, max_length=255)
+    display_name: str | None = Field(default=None, min_length=1, max_length=255)
+    is_admin: bool | None = None
+    is_active: bool | None = None
+
+    @model_validator(mode="after")
+    def require_change(self):
+        if self.email is None and self.display_name is None and self.is_admin is None and self.is_active is None:
+            raise ValueError("At least one field must be provided")
+        return self
+
+
+class UserPasswordUpdateIn(BaseModel):
+    password: str = Field(min_length=8, max_length=200)
+
+
 class SessionResponse(BaseModel):
     ok: bool = True
     user: UserOut

@@ -48,14 +48,14 @@ The API documentation is available at:
 http://localhost:8080/api/v1/docs
 ```
 
-The default bootstrap admin from `.env.example` is only for local setup:
+On first startup with an empty user table, the backend creates a local bootstrap admin:
 
 ```text
-Email: admin@example.com
+Email: admin@example.local
 Password: change-me-admin-password
 ```
 
-Change `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD`, and `SESSION_SECRET` before any production-like use.
+Sign in and change the admin user and password before any production-like use. Also change `SESSION_SECRET`.
 
 ## Minimal Webhook Example
 

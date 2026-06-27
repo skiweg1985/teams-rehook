@@ -66,7 +66,7 @@ Sensitive values include:
 - `SETTINGS_ENC_KEY`
 - `MS_APP_CLIENT_SECRET`
 - `MONITORING_API_KEY`
-- `BOOTSTRAP_ADMIN_PASSWORD`
+- The fixed first-run bootstrap password `change-me-admin-password`
 - Generated relay URLs
 - Delegated Graph refresh material stored in the database
 

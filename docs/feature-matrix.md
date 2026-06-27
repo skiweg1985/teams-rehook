@@ -24,7 +24,7 @@ Status values:
 | 🔐 Security | Secret masking | 🔐 Security relevant | Secret settings are write-only in API responses and UI diagnostics. | Administrators |
 | ⚙️ Administration | Runtime settings overrides | ⚙️ Administrative | Selected settings can be overridden in the database through the admin settings API/UI. | Administrators |
 | ⚙️ Administration | Readiness diagnostics | ⚙️ Administrative | Reports non-secret Bot, Graph, runtime, OAuth, payload, retention, and cookie state. | Administrators |
-| ⚙️ Administration | User list | ✅ Available | Lists existing users in the current organization. User invitation and editing are not implemented. | Administrators |
+| ⚙️ Administration | User management | ✅ Available | Admins can create users, edit access state and roles, and set passwords. | Administrators |
 | 📊 Monitoring | Delivery event log | ✅ Available | Records successful, failed, and rejected webhook attempts with normalized metadata. | Users, administrators |
 | 📊 Monitoring | Audit and system logs | ✅ Available | Records admin actions and captured Teams bot activity events. | Administrators |
 | 📊 Monitoring | Machine monitoring endpoint | ✅ Available | Provides API-key protected JSON status at `/api/v1/monitoring/status`. | Administrators |
