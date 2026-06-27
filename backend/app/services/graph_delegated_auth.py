@@ -19,7 +19,7 @@ from app.models import GraphDelegatedCredential
 from app.security import ensure_utc, utcnow
 
 
-DEFAULT_DELEGATED_GRAPH_SCOPES = ("offline_access", "ChannelMessage.Send", "ChatMessage.Send", "User.Read")
+DEFAULT_DELEGATED_GRAPH_SCOPES = ("offline_access", "ChannelMessage.Send", "ChatMessage.Send", "Chat.ReadBasic", "User.Read")
 GRAPH_DELEGATED_STATUS_MISSING = "missing"
 GRAPH_DELEGATED_STATUS_READY = "ready"
 GRAPH_DELEGATED_STATUS_EXPIRED = "expired"

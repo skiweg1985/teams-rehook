@@ -345,6 +345,10 @@ class SettingUpdateIn(BaseModel):
     value: str = Field(max_length=4000)
 
 
+class GraphDeliveryOAuthStartOut(BaseModel):
+    authorization_url: str
+
+
 class TeamsTargetSearchOut(BaseModel):
     kind: GraphTargetKind
     id: str

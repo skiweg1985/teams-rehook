@@ -42,10 +42,12 @@ import type {
   AdminReadinessOut,
   AuditEventOut,
   BotConversationReferenceOut,
+  DeliveryBackend,
   GraphTargetKind,
   OAuthDiagnosticsOut,
   SettingItemOut,
   SystemLogEventOut,
+  TeamsTargetSearchResult,
   UserOut,
   WebhookDeliveryEventDetailOut,
   WebhookDeliveryEventOut,
@@ -1524,6 +1526,7 @@ function WebhooksPage() {
               <GraphTargetSummary
                 kind={route.graph_target_kind}
                 targetName={route.target_name}
+                targetId={route.graph_target_id}
                 teamName={route.graph_team_name}
                 teamId={route.graph_team_id}
                 channelId={route.graph_channel_id}
@@ -1849,6 +1852,7 @@ function referenceTargetName(reference: BotConversationReferenceOut): string {
 
 function GraphTargetSummary({
   kind,
+  targetId,
   targetName,
   teamName,
   teamId,
@@ -1856,6 +1860,7 @@ function GraphTargetSummary({
   compact = false,
 }: {
   kind: GraphTargetKind | "";
+  targetId: string;
   targetName: string;
   teamName: string;
   teamId: string;
@@ -1863,16 +1868,20 @@ function GraphTargetSummary({
   compact?: boolean;
 }) {
   if (!kind) return null;
-  const technicalParts = [teamId ? `team ${shortId(teamId)}` : "", channelId ? `channel ${shortId(channelId)}` : ""].filter(Boolean);
+  const technicalParts = [
+    kind === "chat" && targetId ? `chat ${shortId(targetId)}` : "",
+    teamId ? `team ${shortId(teamId)}` : "",
+    channelId ? `channel ${shortId(channelId)}` : "",
+  ].filter(Boolean);
   if (compact) {
-    const typeLabel = kind === "channel" ? "Channel" : kind === "team" ? "Team" : "User";
+    const typeLabel = kind === "channel" ? "Channel" : kind === "team" ? "Team" : kind === "chat" ? "Chat" : "User";
     return (
       <span className="graph-target-summary">
         <span className="muted" title={technicalParts.length ? technicalParts.join(" / ") : undefined}>{typeLabel}</span>
       </span>
     );
   }
-  const label = kind === "channel" ? "Graph channel" : kind === "team" ? "Graph team" : "Graph user";
+  const label = kind === "channel" ? "Graph channel" : kind === "team" ? "Graph team" : kind === "chat" ? "Graph chat" : "Graph user";
   const title = kind === "channel" && teamName ? targetName || teamName : targetName || teamName || "Selected target";
   return (
     <span className="graph-target-summary">
@@ -1960,7 +1969,7 @@ function WebhookRouteModal({
   const { session, notify } = useAppContext();
   const [name, setName] = useState(initial.name);
   const [isActive, setIsActive] = useState(initial.is_active);
-  const [deliveryBackend] = useState(initial.delivery_backend);
+  const [deliveryBackend, setDeliveryBackend] = useState<DeliveryBackend>(initial.delivery_backend);
   const [targetName, setTargetName] = useState(initial.target_name);
   const [botServiceUrl, setBotServiceUrl] = useState(initial.bot_service_url);
   const [botConversationId, setBotConversationId] = useState(initial.bot_conversation_id);
@@ -1974,6 +1983,16 @@ function WebhookRouteModal({
   const [referencesLoading, setReferencesLoading] = useState(false);
   const [referencesError, setReferencesError] = useState("");
   const [conversationSearch, setConversationSearch] = useState("");
+  const [graphTeamSearch, setGraphTeamSearch] = useState("");
+  const [graphTeams, setGraphTeams] = useState<TeamsTargetSearchResult[]>([]);
+  const [graphTeamsLoading, setGraphTeamsLoading] = useState(false);
+  const [graphChannelSearch, setGraphChannelSearch] = useState("");
+  const [graphChannels, setGraphChannels] = useState<TeamsTargetSearchResult[]>([]);
+  const [graphChannelsLoading, setGraphChannelsLoading] = useState(false);
+  const [graphChatSearch, setGraphChatSearch] = useState("");
+  const [graphChats, setGraphChats] = useState<TeamsTargetSearchResult[]>([]);
+  const [graphChatsLoading, setGraphChatsLoading] = useState(false);
+  const [graphSearchError, setGraphSearchError] = useState("");
   const [showAdvancedTarget, setShowAdvancedTarget] = useState(false);
   const [createdWebhookUrl, setCreatedWebhookUrl] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -2017,6 +2036,15 @@ function WebhookRouteModal({
     void loadReferences();
   }, [loadReferences]);
 
+  const routeTargetReady =
+    deliveryBackend === "bot_framework"
+      ? Boolean(targetName.trim() && botServiceUrl.trim() && botConversationId.trim())
+      : graphTargetKind === "channel"
+        ? Boolean(targetName.trim() && graphTeamId.trim() && graphChannelId.trim())
+        : graphTargetKind === "chat"
+          ? Boolean(targetName.trim() && graphTargetId.trim())
+          : false;
+
   function applyReference(reference: BotConversationReferenceOut) {
     const kind = referenceGraphKind(reference);
     setTargetName(referenceTargetName(reference));
@@ -2029,6 +2057,79 @@ function WebhookRouteModal({
     setGraphChannelId(kind === "channel" ? reference.channel_id : "");
     setBotTargetSource("conversation_reference");
     setShowAdvancedTarget(false);
+  }
+
+  async function searchGraphTeams() {
+    setGraphTeamsLoading(true);
+    setGraphSearchError("");
+    try {
+      setGraphTeams(await api.searchTeamsTargets("team", graphTeamSearch));
+    } catch (err) {
+      setGraphSearchError(isApiError(err) ? err.message : "Team search failed.");
+    } finally {
+      setGraphTeamsLoading(false);
+    }
+  }
+
+  async function searchGraphChannels() {
+    if (!graphTeamId.trim()) return;
+    setGraphChannelsLoading(true);
+    setGraphSearchError("");
+    try {
+      setGraphChannels(await api.teamChannels(graphTeamId.trim(), graphChannelSearch));
+    } catch (err) {
+      setGraphSearchError(isApiError(err) ? err.message : "Channel search failed.");
+    } finally {
+      setGraphChannelsLoading(false);
+    }
+  }
+
+  async function searchGraphChats() {
+    setGraphChatsLoading(true);
+    setGraphSearchError("");
+    try {
+      setGraphChats(await api.serviceUserChats(graphChatSearch));
+    } catch (err) {
+      setGraphSearchError(isApiError(err) ? err.message : "Service-user chat search failed.");
+    } finally {
+      setGraphChatsLoading(false);
+    }
+  }
+
+  function applyGraphTeam(target: TeamsTargetSearchResult) {
+    setGraphTeamId(target.team_id || target.id);
+    setGraphTeamName(target.team_name || target.display_name);
+    setGraphChannelId("");
+    setGraphTargetId("");
+    setGraphChannels([]);
+    setTargetName(target.display_name);
+  }
+
+  function applyGraphChannel(target: TeamsTargetSearchResult) {
+    const teamName = target.team_name || graphTeamName;
+    setDeliveryBackend("graph");
+    setGraphTargetKind("channel");
+    setGraphTargetId(target.channel_id || target.id);
+    setGraphTeamId(target.team_id || graphTeamId);
+    setGraphTeamName(teamName);
+    setGraphChannelId(target.channel_id || target.id);
+    setTargetName(teamName ? `${teamName} / ${target.display_name}` : target.display_name);
+    setBotServiceUrl("");
+    setBotConversationId("");
+    setBotTargetSource("graph_lookup");
+  }
+
+  function applyGraphChat(target: TeamsTargetSearchResult) {
+    setDeliveryBackend("graph");
+    setGraphTargetKind("chat");
+    setGraphTargetId(target.id);
+    setGraphTeamId("");
+    setGraphTeamName("");
+    setGraphChannelId("");
+    setTargetName(target.display_name);
+    setBotServiceUrl("");
+    setBotConversationId("");
+    setBotTargetSource("graph_lookup");
   }
 
   async function submit(event: FormEvent) {
@@ -2103,7 +2204,34 @@ function WebhookRouteModal({
               </button>
             </div>
           </div>
+          <div className="field">
+            <span>Delivery backend</span>
+            <div className="segmented-control" aria-label="Delivery backend">
+              <button
+                type="button"
+                className={classNames("segmented-control-button", deliveryBackend === "bot_framework" && "is-active")}
+                aria-pressed={deliveryBackend === "bot_framework"}
+                onClick={() => setDeliveryBackend("bot_framework")}
+              >
+                Bot Framework
+              </button>
+              <button
+                type="button"
+                className={classNames("segmented-control-button", deliveryBackend === "graph" && "is-active")}
+                aria-pressed={deliveryBackend === "graph"}
+                onClick={() => {
+                  setDeliveryBackend("graph");
+                  setBotServiceUrl("");
+                  setBotConversationId("");
+                  if (!graphTargetKind || graphTargetKind === "team" || graphTargetKind === "user") setGraphTargetKind("channel");
+                }}
+              >
+                Microsoft Graph
+              </button>
+            </div>
+          </div>
         </div>
+        {deliveryBackend === "bot_framework" ? (
         <div className="graph-target-picker">
           <div className="graph-target-picker-header">
             <div>
@@ -2173,6 +2301,121 @@ function WebhookRouteModal({
             </>
           ) : null}
         </div>
+        ) : null}
+        {deliveryBackend === "graph" ? (
+          <div className="graph-target-picker">
+            <div className="graph-target-picker-header">
+              <div>
+                <strong>Microsoft Graph target</strong>
+                <p>Send as the connected service user to a Team channel or an existing service-user chat.</p>
+              </div>
+              <StatusBadge label="Delegated" tone="neutral" />
+            </div>
+            <div className="segmented-control" aria-label="Graph target type">
+              <button
+                type="button"
+                className={classNames("segmented-control-button", graphTargetKind === "channel" && "is-active")}
+                aria-pressed={graphTargetKind === "channel"}
+                onClick={() => setGraphTargetKind("channel")}
+              >
+                Channel
+              </button>
+              <button
+                type="button"
+                className={classNames("segmented-control-button", graphTargetKind === "chat" && "is-active")}
+                aria-pressed={graphTargetKind === "chat"}
+                onClick={() => setGraphTargetKind("chat")}
+              >
+                Existing chat
+              </button>
+            </div>
+            {targetName ? (
+              <div className="selected-conversation-summary">
+                <div className="selected-conversation-copy">
+                  <span>Current Graph target</span>
+                  <strong>{targetName}</strong>
+                  <small>{graphTargetKind === "chat" ? shortId(graphTargetId) : [graphTeamName, shortId(graphChannelId)].filter(Boolean).join(" / ")}</small>
+                </div>
+                <StatusBadge label={graphTargetKind === "chat" ? "Chat" : "Channel"} tone="success" />
+              </div>
+            ) : null}
+            {graphSearchError ? <p className="form-error">{graphSearchError}</p> : null}
+            {graphTargetKind === "channel" ? (
+              <>
+                <Field label="Find team" hint="App-only Graph lookup is used for team and channel search.">
+                  <div className="settings-int-field">
+                    <input value={graphTeamSearch} placeholder="Search Teams" onChange={(event) => setGraphTeamSearch(event.target.value)} />
+                    <button className="secondary-button secondary-button--small" type="button" onClick={() => void searchGraphTeams()} disabled={graphTeamsLoading || graphTeamSearch.trim().length < 2}>
+                      {graphTeamsLoading ? "Searching..." : "Search"}
+                    </button>
+                  </div>
+                </Field>
+                {graphTeams.length ? (
+                  <div className="compact-conversation-list">
+                    {graphTeams.map((target) => (
+                      <button key={target.id} type="button" onClick={() => applyGraphTeam(target)} aria-pressed={(target.team_id || target.id) === graphTeamId}>
+                        <span className="compact-conversation-list-copy">
+                          <strong>{target.display_name}</strong>
+                          <small>{target.subtitle || target.id}</small>
+                        </span>
+                        {(target.team_id || target.id) === graphTeamId ? <StatusBadge label="Team" tone="success" /> : null}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+                <Field label="Find channel" hint="Select a team first, then search its channels.">
+                  <div className="settings-int-field">
+                    <input value={graphChannelSearch} placeholder="Search channels" onChange={(event) => setGraphChannelSearch(event.target.value)} disabled={!graphTeamId.trim()} />
+                    <button className="secondary-button secondary-button--small" type="button" onClick={() => void searchGraphChannels()} disabled={graphChannelsLoading || !graphTeamId.trim()}>
+                      {graphChannelsLoading ? "Loading..." : "Load channels"}
+                    </button>
+                  </div>
+                </Field>
+                {graphChannels.length ? (
+                  <div className="compact-conversation-list">
+                    {graphChannels.map((target) => {
+                      const channelId = target.channel_id || target.id;
+                      return (
+                        <button key={channelId} type="button" onClick={() => applyGraphChannel(target)} aria-pressed={channelId === graphChannelId}>
+                          <span className="compact-conversation-list-copy">
+                            <strong>{target.display_name}</strong>
+                            <small>{target.subtitle || channelId}</small>
+                          </span>
+                          {channelId === graphChannelId ? <StatusBadge label="Selected" tone="success" /> : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+            {graphTargetKind === "chat" ? (
+              <>
+                <Field label="Find service-user chat" hint="Lists existing chats the connected service user belongs to.">
+                  <div className="settings-int-field">
+                    <input value={graphChatSearch} placeholder="Search chat topic, type or ID" onChange={(event) => setGraphChatSearch(event.target.value)} />
+                    <button className="secondary-button secondary-button--small" type="button" onClick={() => void searchGraphChats()} disabled={graphChatsLoading}>
+                      {graphChatsLoading ? "Searching..." : "Search chats"}
+                    </button>
+                  </div>
+                </Field>
+                {graphChats.length ? (
+                  <div className="compact-conversation-list">
+                    {graphChats.map((target) => (
+                      <button key={target.id} type="button" onClick={() => applyGraphChat(target)} aria-pressed={target.id === graphTargetId}>
+                        <span className="compact-conversation-list-copy">
+                          <strong>{target.display_name}</strong>
+                          <small>{target.subtitle || shortId(target.id)}</small>
+                        </span>
+                        {target.id === graphTargetId ? <StatusBadge label="Selected" tone="success" /> : null}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+          </div>
+        ) : null}
         <button
           className="ghost-button ghost-button--small"
           type="button"
@@ -2185,33 +2428,66 @@ function WebhookRouteModal({
             <div className="graph-target-picker-header">
               <div>
                 <strong>Manual delivery target</strong>
-                <p>Use this only when you already have a valid Bot Framework service URL and conversation ID for the target conversation.</p>
+                <p>
+                  {deliveryBackend === "bot_framework"
+                    ? "Use this only when you already have a valid Bot Framework service URL and conversation ID for the target conversation."
+                    : "Use this when you already know the Graph channel or chat identifiers."}
+                </p>
               </div>
               <StatusBadge label="Manual fallback" tone="warn" />
             </div>
             <Field label="Teams target name" hint="A human-readable label shown in the route table.">
               <input value={targetName} required maxLength={200} onChange={(event) => setTargetName(event.target.value)} />
             </Field>
-            <Field label="Bot service URL" hint="Use the service URL from a known Bot Framework conversation reference.">
-              <input
-                value={botServiceUrl}
-                required
-                onChange={(event) => {
-                  setBotServiceUrl(event.target.value);
-                  setBotTargetSource("manual");
-                }}
-              />
-            </Field>
-            <Field label="Bot conversation ID" hint="Paste the full conversation ID. It is intentionally kept hidden in tables.">
-              <textarea
-                value={botConversationId}
-                required
-                onChange={(event) => {
-                  setBotConversationId(event.target.value);
-                  setBotTargetSource("manual");
-                }}
-              />
-            </Field>
+            {deliveryBackend === "bot_framework" ? (
+              <>
+                <Field label="Bot service URL" hint="Use the service URL from a known Bot Framework conversation reference.">
+                  <input
+                    value={botServiceUrl}
+                    required
+                    onChange={(event) => {
+                      setBotServiceUrl(event.target.value);
+                      setBotTargetSource("manual");
+                    }}
+                  />
+                </Field>
+                <Field label="Bot conversation ID" hint="Paste the full conversation ID. It is intentionally kept hidden in tables.">
+                  <textarea
+                    value={botConversationId}
+                    required
+                    onChange={(event) => {
+                      setBotConversationId(event.target.value);
+                      setBotTargetSource("manual");
+                    }}
+                  />
+                </Field>
+              </>
+            ) : (
+              <>
+                <Field label="Graph target kind">
+                  <select value={graphTargetKind || "channel"} onChange={(event) => setGraphTargetKind(event.target.value as GraphTargetKind)}>
+                    <option value="channel">Channel</option>
+                    <option value="chat">Existing chat</option>
+                  </select>
+                </Field>
+                <Field label={graphTargetKind === "chat" ? "Chat ID" : "Graph target ID"}>
+                  <textarea value={graphTargetId} required={graphTargetKind === "chat"} onChange={(event) => setGraphTargetId(event.target.value)} />
+                </Field>
+                {graphTargetKind === "channel" ? (
+                  <>
+                    <Field label="Team ID">
+                      <textarea value={graphTeamId} required onChange={(event) => setGraphTeamId(event.target.value)} />
+                    </Field>
+                    <Field label="Team name">
+                      <input value={graphTeamName} maxLength={200} onChange={(event) => setGraphTeamName(event.target.value)} />
+                    </Field>
+                    <Field label="Channel ID">
+                      <textarea value={graphChannelId} required onChange={(event) => setGraphChannelId(event.target.value)} />
+                    </Field>
+                  </>
+                ) : null}
+              </>
+            )}
           </div>
         ) : null}
         {createdWebhookUrl ? (
@@ -2238,7 +2514,7 @@ function WebhookRouteModal({
           <button
             className="primary-button"
             type="submit"
-            disabled={busy || Boolean(createdWebhookUrl) || !targetName.trim() || !botServiceUrl.trim() || !botConversationId.trim()}
+            disabled={busy || Boolean(createdWebhookUrl) || !routeTargetReady}
           >
             {busy ? "Saving..." : route ? "Save" : "Create route"}
           </button>
@@ -2583,6 +2859,7 @@ function SettingsPage() {
   const [settings, setSettings] = useState<SettingItemOut[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [graphOAuthBusy, setGraphOAuthBusy] = useState(false);
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
 
   const refresh = useCallback(async () => {
@@ -2609,6 +2886,32 @@ function SettingsPage() {
   async function copyDiagnosticValue(value: string, label: string) {
     await navigator.clipboard.writeText(value);
     notify({ tone: "success", title: `${label} copied` });
+  }
+
+  async function connectGraphDelivery() {
+    setGraphOAuthBusy(true);
+    setError("");
+    try {
+      const result = await api.startGraphDeliveryOAuth(csrfToken);
+      window.location.href = result.authorization_url;
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Graph delivery connection could not be started.");
+      setGraphOAuthBusy(false);
+    }
+  }
+
+  async function disconnectGraphDelivery() {
+    setGraphOAuthBusy(true);
+    setError("");
+    try {
+      await api.disconnectGraphDeliveryOAuth(csrfToken);
+      notify({ tone: "success", title: "Graph delivery disconnected" });
+      await refresh();
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Graph delivery connection could not be removed.");
+    } finally {
+      setGraphOAuthBusy(false);
+    }
   }
 
   const overrideCount = settings.filter((item) => item.is_overridden).length;
@@ -2730,7 +3033,13 @@ function SettingsPage() {
                 ]}
                 onCopy={copyDiagnosticValue}
               />
-              <GraphDeliveryReadinessCard readiness={readiness.graph_delivery} onCopy={copyDiagnosticValue} />
+              <GraphDeliveryReadinessCard
+                readiness={readiness.graph_delivery}
+                onCopy={copyDiagnosticValue}
+                onConnect={() => void connectGraphDelivery()}
+                onDisconnect={() => void disconnectGraphDelivery()}
+                busy={graphOAuthBusy}
+              />
             </div>
           </section>
 
@@ -2918,10 +3227,16 @@ function RuntimeSettingRow({
 }
 
 function GraphDeliveryReadinessCard({
+  busy,
+  onConnect,
   onCopy,
+  onDisconnect,
   readiness,
 }: {
+  busy: boolean;
+  onConnect: () => void;
   onCopy: (value: string, label: string) => void;
+  onDisconnect: () => void;
   readiness: AdminReadinessOut["graph_delivery"];
 }) {
   const serviceUser = readiness.service_user_display_name || readiness.service_user_principal_name || readiness.service_user_id || "-";
@@ -2950,6 +3265,16 @@ function GraphDeliveryReadinessCard({
               tone={readiness.credential_source === "delegated_service_user" ? "success" : "warn"}
             />
           </div>
+          <div className="integration-card-actions">
+            <button className="secondary-button secondary-button--small" type="button" onClick={onConnect} disabled={busy}>
+              {readiness.configured ? "Reconnect service user" : "Connect service user"}
+            </button>
+            {readiness.configured ? (
+              <button className="ghost-button ghost-button--small" type="button" onClick={onDisconnect} disabled={busy}>
+                Disconnect
+              </button>
+            ) : null}
+          </div>
         </div>
 
         <section className="settings-subsection">
@@ -2966,6 +3291,7 @@ function GraphDeliveryReadinessCard({
             <KeyValue label="Last checked">{readiness.refresh_checked_at ? formatDateTime(readiness.refresh_checked_at) : "Not checked"}</KeyValue>
             <KeyValue label="Service user">{serviceUser}</KeyValue>
           </dl>
+          <p className="settings-override-hint">Graph delivery messages appear in Teams as the connected service user.</p>
         </section>
 
         <section className="settings-subsection">

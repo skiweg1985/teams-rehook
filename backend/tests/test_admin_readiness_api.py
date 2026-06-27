@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+from urllib.parse import parse_qs, urlparse
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -357,7 +358,7 @@ def test_readiness_reports_graph_token_error_without_leaking_details(db_session:
     assert "raw graph response" not in body["graph_lookup"]["message"]
 
 
-def add_delegated_credential(db_session: Session, *, scopes: str = "offline_access ChannelMessage.Send ChatMessage.Send User.Read") -> GraphDelegatedCredential:
+def add_delegated_credential(db_session: Session, *, scopes: str = "offline_access ChannelMessage.Send ChatMessage.Send Chat.ReadBasic User.Read") -> GraphDelegatedCredential:
     organization_id = db_session.query(Organization.id).filter_by(slug="default").scalar()
     credential = GraphDelegatedCredential(
         organization_id=organization_id,
@@ -375,7 +376,7 @@ def add_delegated_credential(db_session: Session, *, scopes: str = "offline_acce
     return credential
 
 
-def delegated_token_response(scope: str = "offline_access ChannelMessage.Send ChatMessage.Send User.Read"):
+def delegated_token_response(scope: str = "offline_access ChannelMessage.Send ChatMessage.Send Chat.ReadBasic User.Read"):
     return {
         "access_token": fake_jwt(
             oid="service-user-id",
@@ -406,7 +407,7 @@ def test_readiness_reports_missing_graph_delivery_credential(db_session: Session
     assert body["graph_delivery"]["credential_source"] == "missing"
     assert body["graph_delivery"]["tenant_id"] == "tenant"
     assert body["graph_delivery"]["client_id"] == "client"
-    assert body["graph_delivery"]["required_scopes"] == ["offline_access", "ChannelMessage.Send", "ChatMessage.Send", "User.Read"]
+    assert body["graph_delivery"]["required_scopes"] == ["offline_access", "ChannelMessage.Send", "ChatMessage.Send", "Chat.ReadBasic", "User.Read"]
     assert "refresh-token" not in json.dumps(body["graph_delivery"])
 
 
@@ -509,4 +510,99 @@ def test_readiness_reports_graph_delivery_missing_required_scopes(db_session: Se
     assert body["graph_delivery"]["ready"] is False
     assert body["graph_delivery"]["auth_status"] == "permission_warning"
     assert body["graph_delivery"]["token_request_succeeded"] is True
-    assert body["graph_delivery"]["missing_scopes"] == ["ChannelMessage.Send", "ChatMessage.Send"]
+    assert body["graph_delivery"]["missing_scopes"] == ["ChannelMessage.Send", "ChatMessage.Send", "Chat.ReadBasic"]
+
+
+def test_graph_delivery_oauth_start_returns_authorization_url(db_session: Session, monkeypatch: pytest.MonkeyPatch):
+    with make_client(
+        db_session,
+        monkeypatch,
+        MS_APP_TENANT_ID="tenant",
+        MS_APP_CLIENT_ID="client",
+        MS_APP_CLIENT_SECRET="secret",
+        APP_PUBLIC_BASE_URL="https://app.example.com",
+    ) as client:
+        csrf_token = login_admin(client)
+        response = client.post("/api/v1/admin/graph-delivery/oauth/start", headers={"X-CSRF-Token": csrf_token})
+
+    assert response.status_code == 200
+    body = response.json()
+    parsed = urlparse(body["authorization_url"])
+    query = parse_qs(parsed.query)
+    assert parsed.path == "/tenant/oauth2/v2.0/authorize"
+    assert query["redirect_uri"] == ["https://app.example.com/api/v1/admin/graph-delivery/oauth/callback"]
+    scopes = query["scope"][0].split()
+    assert "Chat.ReadBasic" in scopes
+    assert "refresh-token" not in json.dumps(body)
+    assert query["state"][0]
+
+
+def test_graph_delivery_oauth_callback_exchanges_code_and_redirects(db_session: Session, monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, str] = {}
+
+    def fake_exchange(db, **kwargs):
+        captured.update(kwargs)
+        db.add(
+            GraphDelegatedCredential(
+                organization_id=kwargs["organization_id"],
+                encrypted_refresh_token=encrypt_secret("refresh-token"),
+                last_status="ready",
+            )
+        )
+        db.flush()
+
+    monkeypatch.setattr("app.routers.admin.exchange_authorization_code", fake_exchange)
+    with make_client(
+        db_session,
+        monkeypatch,
+        MS_APP_TENANT_ID="tenant",
+        MS_APP_CLIENT_ID="client",
+        MS_APP_CLIENT_SECRET="secret",
+        APP_PUBLIC_BASE_URL="https://app.example.com",
+        FRONTEND_BASE_URL="https://ui.example.com",
+    ) as client:
+        csrf_token = login_admin(client)
+        start = client.post("/api/v1/admin/graph-delivery/oauth/start", headers={"X-CSRF-Token": csrf_token})
+        state = parse_qs(urlparse(start.json()["authorization_url"]).query)["state"][0]
+        response = client.get(
+            "/api/v1/admin/graph-delivery/oauth/callback",
+            params={"code": "auth-code", "state": state},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "https://ui.example.com/settings?graph_delivery=connected"
+    assert captured["code"] == "auth-code"
+    assert captured["redirect_uri"] == "https://app.example.com/api/v1/admin/graph-delivery/oauth/callback"
+    assert captured["scopes"] == graph_delegated_auth.DEFAULT_DELEGATED_GRAPH_SCOPES
+    row = db_session.query(GraphDelegatedCredential).one()
+    assert row.last_status == "ready"
+
+
+def test_graph_delivery_oauth_callback_rejects_invalid_state(db_session: Session, monkeypatch: pytest.MonkeyPatch):
+    with make_client(
+        db_session,
+        monkeypatch,
+        MS_APP_TENANT_ID="tenant",
+        MS_APP_CLIENT_ID="client",
+        MS_APP_CLIENT_SECRET="secret",
+    ) as client:
+        login_admin(client)
+        response = client.get(
+            "/api/v1/admin/graph-delivery/oauth/callback",
+            params={"code": "auth-code", "state": "bad-state"},
+        )
+
+    assert response.status_code == 400
+    assert "state" in response.json()["detail"]
+
+
+def test_graph_delivery_oauth_disconnect_removes_credential(db_session: Session, monkeypatch: pytest.MonkeyPatch):
+    add_delegated_credential(db_session)
+
+    with make_client(db_session, monkeypatch) as client:
+        csrf_token = login_admin(client)
+        response = client.delete("/api/v1/admin/graph-delivery/oauth", headers={"X-CSRF-Token": csrf_token})
+
+    assert response.status_code == 204
+    assert db_session.query(GraphDelegatedCredential).count() == 0

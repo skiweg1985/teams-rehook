@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
+import secrets
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -9,17 +13,19 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from fastapi.responses import RedirectResponse
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.settings_overrides import clear_override, get_effective_settings, list_setting_items, set_override
 from app.database import get_db
 from app.deps import record_audit, require_admin, require_csrf
-from app.models import AuditEvent, BotActivityEvent, User
+from app.models import AuditEvent, BotActivityEvent, GraphDelegatedCredential, User
 from app.schemas import (
     AdminReadinessOut,
     AuditEventOut,
     BotReadinessOut,
+    GraphDeliveryOAuthStartOut,
     GraphDeliveryReadinessOut,
     GraphReadinessOut,
     LogCleanupOut,
@@ -38,7 +44,9 @@ from app.services.graph_delegated_auth import (
     DEFAULT_DELEGATED_GRAPH_SCOPES,
     GraphDelegatedAuthError,
     GraphDelegatedConfigError,
+    build_authorization_url,
     diagnostics_for_organization,
+    exchange_authorization_code,
     refresh_delegated_access_token,
 )
 from app.services.graph_targets import GraphConfigError, GraphRequestError
@@ -46,6 +54,7 @@ from app.services.log_retention import cleanup_log_events
 from app.services.teams_bot import BotDeliveryError
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+GRAPH_OAUTH_STATE_TTL_SECONDS = 600
 
 
 @dataclass(frozen=True)
@@ -111,6 +120,80 @@ def reset_setting(
     return None
 
 
+@router.post(
+    "/graph-delivery/oauth/start",
+    response_model=GraphDeliveryOAuthStartOut,
+    dependencies=[Depends(require_csrf)],
+)
+def start_graph_delivery_oauth(admin: User = Depends(require_admin)):
+    settings = get_effective_settings()
+    redirect_uri = _graph_delivery_redirect_uri(settings)
+    state = _issue_graph_oauth_state(admin, settings)
+    try:
+        authorization_url = build_authorization_url(
+            redirect_uri=redirect_uri,
+            state=state,
+            settings=settings,
+            scopes=DEFAULT_DELEGATED_GRAPH_SCOPES,
+        )
+    except GraphDelegatedConfigError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return GraphDeliveryOAuthStartOut(authorization_url=authorization_url)
+
+
+@router.get("/graph-delivery/oauth/callback")
+def graph_delivery_oauth_callback(
+    code: str = Query(default=""),
+    state: str = Query(default=""),
+    error: str = Query(default=""),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    settings = get_effective_settings()
+    _verify_graph_oauth_state(state, admin, settings)
+    if error:
+        return _graph_delivery_settings_redirect(settings, "error")
+    if not code.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing Microsoft Graph authorization code")
+    try:
+        exchange_authorization_code(
+            db,
+            organization_id=admin.organization_id,
+            code=code,
+            redirect_uri=_graph_delivery_redirect_uri(settings),
+            settings=settings,
+            scopes=DEFAULT_DELEGATED_GRAPH_SCOPES,
+        )
+    except (GraphDelegatedConfigError, GraphDelegatedAuthError) as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    record_audit(
+        db,
+        action="graph_delivery.oauth.connected",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata={"credential": "delegated_service_user"},
+    )
+    db.commit()
+    return _graph_delivery_settings_redirect(settings, "connected")
+
+
+@router.delete("/graph-delivery/oauth", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_csrf)])
+def disconnect_graph_delivery_oauth(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    db.execute(delete(GraphDelegatedCredential).where(GraphDelegatedCredential.organization_id == admin.organization_id))
+    record_audit(
+        db,
+        action="graph_delivery.oauth.disconnected",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata={"credential": "delegated_service_user"},
+    )
+    db.commit()
+    return None
+
+
 @router.get("/users", response_model=list[UserOut], dependencies=[Depends(require_csrf)])
 def list_users(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     return db.scalars(
@@ -147,6 +230,50 @@ def readiness(admin: User = Depends(require_admin), db: Session = Depends(get_db
             session_secure_cookie=settings.session_secure_cookie,
         ),
     )
+
+
+def _graph_delivery_redirect_uri(settings) -> str:
+    return f"{settings.app_public_base_url.rstrip('/')}{settings.api_v1_prefix.rstrip('/')}/admin/graph-delivery/oauth/callback"
+
+
+def _graph_delivery_settings_redirect(settings, result: str) -> RedirectResponse:
+    base = settings.frontend_base_url.rstrip("/")
+    return RedirectResponse(f"{base}/settings?graph_delivery={urllib.parse.quote(result)}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+def _issue_graph_oauth_state(admin: User, settings) -> str:
+    payload = {
+        "user_id": admin.id,
+        "organization_id": admin.organization_id,
+        "nonce": secrets.token_urlsafe(12),
+        "expires_at": int(time.time()) + GRAPH_OAUTH_STATE_TTL_SECONDS,
+    }
+    encoded = _b64url_json(payload)
+    signature = hmac.new(settings.session_secret.encode("utf-8"), encoded.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{encoded}.{signature}"
+
+
+def _verify_graph_oauth_state(state: str, admin: User, settings) -> None:
+    try:
+        encoded, signature = state.split(".", 1)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Microsoft Graph OAuth state") from exc
+    expected = hmac.new(settings.session_secret.encode("utf-8"), encoded.encode("utf-8"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Microsoft Graph OAuth state")
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Microsoft Graph OAuth state") from exc
+    if payload.get("user_id") != admin.id or payload.get("organization_id") != admin.organization_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Microsoft Graph OAuth state does not match the current admin")
+    if int(payload.get("expires_at") or 0) < int(time.time()):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Microsoft Graph OAuth state expired")
+
+
+def _b64url_json(payload: dict) -> str:
+    encoded = base64.urlsafe_b64encode(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).decode("utf-8")
+    return encoded.rstrip("=")
 
 
 def _bot_readiness(settings, delivery_mode: str) -> BotReadinessOut:

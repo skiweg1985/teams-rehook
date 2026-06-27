@@ -1341,6 +1341,12 @@ button:disabled {
   border-bottom: 1px solid var(--line);
 }
 
+.integration-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
 .integration-status-main {
   display: grid;
   gap: var(--space-3);

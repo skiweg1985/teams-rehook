@@ -63,7 +63,7 @@ export type SystemLogEventOut = {
 
 export type WebhookTargetType = "bot_conversation";
 export type DeliveryBackend = "bot_framework" | "graph";
-export type GraphTargetKind = "user" | "team" | "channel";
+export type GraphTargetKind = "user" | "team" | "channel" | "chat";
 
 export type WebhookRouteOut = {
   id: string;
@@ -196,6 +196,10 @@ export type SettingItemOut = {
   env_default: string;
   effective_value: string;
   is_overridden: boolean;
+};
+
+export type GraphDeliveryOAuthStartOut = {
+  authorization_url: string;
 };
 
 export type AdminReadinessOut = {
