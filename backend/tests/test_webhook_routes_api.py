@@ -301,6 +301,28 @@ def test_create_graph_user_route_is_deferred(client: TestClient):
     assert response.json()["detail"] == "Graph delivery supports channel and existing chat targets in V1"
 
 
+def test_create_graph_channel_route_requires_channel_metadata(client: TestClient):
+    csrf_token = login_admin(client)
+
+    response = client.post(
+        "/api/v1/webhook-routes",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "name": "Incomplete Graph channel",
+            "is_active": True,
+            "delivery_backend": "graph",
+            "target_type": "bot_conversation",
+            "target_name": "Ops / Alerts",
+            "graph_target_kind": "channel",
+            "graph_target_id": "channel-id",
+            "graph_team_id": "team-id",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Graph channel routes require a team ID and channel ID"
+
+
 def test_create_route_rejects_invalid_delivery_backend(client: TestClient):
     csrf_token = login_admin(client)
 
@@ -511,6 +533,58 @@ def test_graph_delivery_backend_records_safe_service_failure(client: TestClient,
     assert event is not None
     assert event.status == "failed"
     assert json.loads(event.delivery_result_json) == {"backend": "graph", "error_type": "auth_error"}
+
+
+def test_mixed_mode_delivery_summaries_keep_backend_separate_from_mode(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    bot_route = add_route(db_session, token="bot-token")
+    graph_route = add_route(db_session, token="graph-token")
+    graph_route.name = "Graph route"
+    graph_route.delivery_backend = "graph"
+    graph_route.bot_service_url = ""
+    graph_route.bot_conversation_id = ""
+    graph_route.graph_target_kind = "chat"
+    graph_route.graph_target_id = "chat-id"
+    db_session.commit()
+    csrf_token = login_admin(client)
+
+    class FakeGraphResult:
+        def to_dict(self):
+            return {
+                "backend": "graph",
+                "mode": "real",
+                "status_code": 201,
+                "message_id": "graph-message-id",
+                "target": {"kind": "chat", "chat_id": "chat-id"},
+            }
+
+    monkeypatch.setattr("app.routers.webhook_routes.send_graph_message", lambda *args, **kwargs: FakeGraphResult())
+
+    bot_response = client.post(
+        f"/api/v1/webhook-routes/{bot_route.id}/test",
+        headers={"X-CSRF-Token": csrf_token},
+        json={"title": "Bot", "text": "Hello", "severity": "info"},
+    )
+    graph_response = client.post(
+        f"/api/v1/webhook-routes/{graph_route.id}/test",
+        headers={"X-CSRF-Token": csrf_token},
+        json={"title": "Graph", "text": "Hello", "severity": "info"},
+    )
+
+    assert bot_response.status_code == 200
+    assert graph_response.status_code == 200
+    response = client.get("/api/v1/webhook-delivery-events?page_size=10")
+
+    assert response.status_code == 200
+    rows_by_title = {row["title"]: row for row in response.json()["items"]}
+    assert rows_by_title["Bot"]["delivery_backend"] == "bot_framework"
+    assert rows_by_title["Bot"]["delivery_mode"] == "mock"
+    assert rows_by_title["Graph"]["delivery_backend"] == "graph"
+    assert rows_by_title["Graph"]["delivery_mode"] == "real"
+    assert rows_by_title["Graph"]["status_code"] == 201
 
 
 def test_delivery_events_endpoint_filters_by_status(client: TestClient, db_session: Session):
