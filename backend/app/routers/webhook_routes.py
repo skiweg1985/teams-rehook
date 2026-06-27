@@ -27,6 +27,7 @@ from app.schemas import (
     WebhookRouteUpdate,
 )
 from app.security import dumps_json, issue_plain_secret, loads_json, lookup_secret_hash, utcnow
+from app.services.graph_delegated_lookup import GraphDelegatedLookupError, create_or_get_one_on_one_chat
 from app.services.graph_name_resolution import refresh_graph_names, resolve_route_graph_names, try_resolve_route_graph_names
 from app.services.graph_targets import GraphConfigError, GraphRequestError
 from app.services.log_retention import cleanup_log_events
@@ -86,8 +87,12 @@ def create_webhook_route(
         graph_team_id=payload.graph_team_id.strip(),
         graph_team_name=payload.graph_team_name.strip(),
         graph_channel_id=payload.graph_channel_id.strip(),
+        graph_user_id=payload.graph_user_id.strip(),
+        graph_user_display_name=payload.graph_user_display_name.strip(),
+        graph_user_principal_name=payload.graph_user_principal_name.strip(),
         bot_target_source=payload.bot_target_source.strip(),
     )
+    _materialize_graph_user_target(db, admin.organization_id, route)
     try_resolve_route_graph_names(route)
     _validate_target(route)
     _ensure_route_name_available(db, admin.organization_id, route.name, _route_delivery_backend(route))
@@ -142,8 +147,15 @@ def update_webhook_route(
         route.graph_team_name = payload.graph_team_name.strip()
     if payload.graph_channel_id is not None:
         route.graph_channel_id = payload.graph_channel_id.strip()
+    if payload.graph_user_id is not None:
+        route.graph_user_id = payload.graph_user_id.strip()
+    if payload.graph_user_display_name is not None:
+        route.graph_user_display_name = payload.graph_user_display_name.strip()
+    if payload.graph_user_principal_name is not None:
+        route.graph_user_principal_name = payload.graph_user_principal_name.strip()
     if payload.bot_target_source is not None:
         route.bot_target_source = payload.bot_target_source.strip()
+    _materialize_graph_user_target(db, admin.organization_id, route)
     try_resolve_route_graph_names(route)
     _validate_target(route)
     _ensure_route_name_available(db, admin.organization_id, route.name, _route_delivery_backend(route), route_id=route.id)
@@ -498,6 +510,36 @@ def _get_org_route(db: Session, organization_id: str, route_id: str) -> WebhookR
     return route
 
 
+def _materialize_graph_user_target(db: Session, organization_id: str, route: WebhookRoute) -> None:
+    if _route_delivery_backend(route) != DELIVERY_BACKEND_GRAPH or (route.graph_target_kind or "").strip() != "user":
+        return
+    user_id = route.graph_user_id.strip() or route.graph_target_id.strip()
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Graph one-on-one routes require a user ID")
+    try:
+        chat = create_or_get_one_on_one_chat(
+            db,
+            organization_id=organization_id,
+            user_id=user_id,
+            user_display_name=route.graph_user_display_name or route.target_name,
+            user_principal_name=route.graph_user_principal_name,
+        )
+    except GraphDelegatedLookupError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    route.graph_target_kind = "chat"
+    route.graph_target_id = chat.id
+    route.graph_user_id = chat.user_id
+    route.graph_user_display_name = chat.user_display_name
+    route.graph_user_principal_name = chat.user_principal_name
+    route.graph_team_id = ""
+    route.graph_team_name = ""
+    route.graph_channel_id = ""
+    route.bot_service_url = ""
+    route.bot_conversation_id = ""
+    if not route.bot_target_source.strip():
+        route.bot_target_source = "graph_user_lookup"
+
+
 def _validate_target(route: WebhookRoute) -> None:
     backend = _route_delivery_backend(route)
     if backend not in {DELIVERY_BACKEND_BOT, DELIVERY_BACKEND_GRAPH}:
@@ -683,6 +725,9 @@ def _manual_test_metadata(route: WebhookRoute) -> dict:
             "team_id": route.graph_team_id,
             "team_name": route.graph_team_name,
             "channel_id": route.graph_channel_id,
+            "user_id": route.graph_user_id,
+            "user_display_name": route.graph_user_display_name,
+            "user_principal_name": route.graph_user_principal_name,
         },
         "bot_target": {
             "service_url": route.bot_service_url,
@@ -712,6 +757,9 @@ def _route_out(
         "graph_team_id": route.graph_team_id,
         "graph_team_name": route.graph_team_name,
         "graph_channel_id": route.graph_channel_id,
+        "graph_user_id": route.graph_user_id,
+        "graph_user_display_name": route.graph_user_display_name,
+        "graph_user_principal_name": route.graph_user_principal_name,
         "bot_target_source": route.bot_target_source,
         "bot_registered_by_id": route.bot_registered_by_id,
         "bot_registered_at": route.bot_registered_at,

@@ -58,7 +58,7 @@ import type {
 } from "./types";
 import { classNames, compactJson, formatDateTime, formatRelativeTime } from "./utils";
 
-type RouteName = "dashboard" | "webhooks" | "payload-generator" | "users" | "settings" | "logs" | "system-logs";
+type RouteName = "dashboard" | "status" | "webhooks" | "payload-generator" | "users" | "settings" | "logs" | "system-logs";
 type DeliveryStatusFilter = "all" | WebhookDeliveryStatus;
 type PayloadGeneratorMode = "text" | "adaptive";
 type PayloadAccent = "neutral" | "success" | "warning" | "critical";
@@ -80,6 +80,7 @@ type PayloadAction = {
 
 const NAV: Array<{ route: RouteName; label: string; path: string; icon: string }> = [
   { route: "dashboard", label: "Dashboard", path: "/dashboard", icon: "D" },
+  { route: "status", label: "Status", path: "/status", icon: "H" },
   { route: "webhooks", label: "Webhooks", path: "/webhooks", icon: "W" },
   { route: "payload-generator", label: "Payload Generator", path: "/payload-generator", icon: "P" },
   { route: "users", label: "Users", path: "/users", icon: "U" },
@@ -249,6 +250,7 @@ function EmptyGuidance({ title, body }: { title: string; body: string }) {
 
 function routeFromPath(pathname: string): RouteName {
   if (pathname === "/" || pathname === "/dashboard") return "dashboard";
+  if (pathname === "/status") return "status";
   if (pathname === "/webhooks") return "webhooks";
   if (pathname === "/payload-generator") return "payload-generator";
   if (pathname === "/users") return "users";
@@ -453,6 +455,7 @@ function AppShell() {
           <ThemeToggle />
         </header>
         {route === "dashboard" ? <DashboardPage /> : null}
+        {route === "status" ? <StatusPage /> : null}
         {route === "webhooks" ? <WebhooksPage /> : null}
         {route === "payload-generator" ? <PayloadGeneratorPage /> : null}
         {route === "users" ? <UsersPage /> : null}
@@ -1926,6 +1929,9 @@ function emptyWebhookRoute(botDefaultServiceUrl = ""): WebhookRouteOut {
     graph_team_id: "",
     graph_team_name: "",
     graph_channel_id: "",
+    graph_user_id: "",
+    graph_user_display_name: "",
+    graph_user_principal_name: "",
     bot_target_source: "",
     bot_registered_by_id: "",
     bot_registered_at: null,
@@ -1950,6 +1956,9 @@ function webhookRouteFromReference(reference: BotConversationReferenceOut): Webh
     graph_team_id: reference.graph_team_id,
     graph_team_name: reference.team_name,
     graph_channel_id: kind === "channel" ? reference.channel_id : "",
+    graph_user_id: kind === "user" ? reference.graph_user_id || reference.user_id : "",
+    graph_user_display_name: kind === "user" ? reference.user_name : "",
+    graph_user_principal_name: "",
     bot_target_source: "conversation_reference",
     bot_registered_by_id: reference.graph_user_id || reference.user_id,
   };
@@ -1992,6 +2001,12 @@ function WebhookRouteModal({
   const [graphChatSearch, setGraphChatSearch] = useState("");
   const [graphChats, setGraphChats] = useState<TeamsTargetSearchResult[]>([]);
   const [graphChatsLoading, setGraphChatsLoading] = useState(false);
+  const [graphUserSearch, setGraphUserSearch] = useState(initial.graph_user_principal_name || initial.graph_user_display_name);
+  const [graphUsers, setGraphUsers] = useState<TeamsTargetSearchResult[]>([]);
+  const [graphUsersLoading, setGraphUsersLoading] = useState(false);
+  const [graphUserId, setGraphUserId] = useState(initial.graph_user_id);
+  const [graphUserDisplayName, setGraphUserDisplayName] = useState(initial.graph_user_display_name);
+  const [graphUserPrincipalName, setGraphUserPrincipalName] = useState(initial.graph_user_principal_name);
   const [graphSearchError, setGraphSearchError] = useState("");
   const [showAdvancedTarget, setShowAdvancedTarget] = useState(false);
   const [createdWebhookUrl, setCreatedWebhookUrl] = useState<string | null>(null);
@@ -2043,6 +2058,8 @@ function WebhookRouteModal({
         ? Boolean(targetName.trim() && graphTeamId.trim() && graphChannelId.trim())
         : graphTargetKind === "chat"
           ? Boolean(targetName.trim() && graphTargetId.trim())
+          : graphTargetKind === "user"
+            ? Boolean(targetName.trim() && (graphUserId.trim() || graphTargetId.trim()))
           : false;
 
   function applyReference(reference: BotConversationReferenceOut) {
@@ -2055,6 +2072,9 @@ function WebhookRouteModal({
     setGraphTeamId(reference.graph_team_id);
     setGraphTeamName(reference.team_name);
     setGraphChannelId(kind === "channel" ? reference.channel_id : "");
+    setGraphUserId(kind === "user" ? reference.graph_user_id || reference.user_id : "");
+    setGraphUserDisplayName(kind === "user" ? reference.user_name : "");
+    setGraphUserPrincipalName("");
     setBotTargetSource("conversation_reference");
     setShowAdvancedTarget(false);
   }
@@ -2096,12 +2116,27 @@ function WebhookRouteModal({
     }
   }
 
+  async function searchGraphUsers() {
+    setGraphUsersLoading(true);
+    setGraphSearchError("");
+    try {
+      setGraphUsers(await api.searchTeamsTargets("user", graphUserSearch));
+    } catch (err) {
+      setGraphSearchError(isApiError(err) ? err.message : "User search failed.");
+    } finally {
+      setGraphUsersLoading(false);
+    }
+  }
+
   function applyGraphTeam(target: TeamsTargetSearchResult) {
     setGraphTeamId(target.team_id || target.id);
     setGraphTeamName(target.team_name || target.display_name);
     setGraphChannelId("");
     setGraphTargetId("");
     setGraphChannels([]);
+    setGraphUserId("");
+    setGraphUserDisplayName("");
+    setGraphUserPrincipalName("");
     setTargetName(target.display_name);
   }
 
@@ -2113,6 +2148,9 @@ function WebhookRouteModal({
     setGraphTeamId(target.team_id || graphTeamId);
     setGraphTeamName(teamName);
     setGraphChannelId(target.channel_id || target.id);
+    setGraphUserId("");
+    setGraphUserDisplayName("");
+    setGraphUserPrincipalName("");
     setTargetName(teamName ? `${teamName} / ${target.display_name}` : target.display_name);
     setBotServiceUrl("");
     setBotConversationId("");
@@ -2126,10 +2164,29 @@ function WebhookRouteModal({
     setGraphTeamId("");
     setGraphTeamName("");
     setGraphChannelId("");
+    setGraphUserId("");
+    setGraphUserDisplayName("");
+    setGraphUserPrincipalName("");
     setTargetName(target.display_name);
     setBotServiceUrl("");
     setBotConversationId("");
     setBotTargetSource("graph_lookup");
+  }
+
+  function applyGraphUser(target: TeamsTargetSearchResult) {
+    setDeliveryBackend("graph");
+    setGraphTargetKind("user");
+    setGraphTargetId(target.id);
+    setGraphTeamId("");
+    setGraphTeamName("");
+    setGraphChannelId("");
+    setGraphUserId(target.id);
+    setGraphUserDisplayName(target.display_name);
+    setGraphUserPrincipalName(target.subtitle);
+    setTargetName(target.display_name);
+    setBotServiceUrl("");
+    setBotConversationId("");
+    setBotTargetSource("graph_user_lookup");
   }
 
   async function submit(event: FormEvent) {
@@ -2149,6 +2206,9 @@ function WebhookRouteModal({
       graph_team_id: graphTeamId.trim(),
       graph_team_name: graphTeamName.trim(),
       graph_channel_id: graphChannelId.trim(),
+      graph_user_id: graphUserId.trim(),
+      graph_user_display_name: graphUserDisplayName.trim(),
+      graph_user_principal_name: graphUserPrincipalName.trim(),
       bot_target_source: botTargetSource.trim(),
     };
     try {
@@ -2223,7 +2283,7 @@ function WebhookRouteModal({
                   setDeliveryBackend("graph");
                   setBotServiceUrl("");
                   setBotConversationId("");
-                  if (!graphTargetKind || graphTargetKind === "team" || graphTargetKind === "user") setGraphTargetKind("channel");
+                  if (!graphTargetKind || graphTargetKind === "team") setGraphTargetKind("channel");
                 }}
               >
                 Microsoft Graph
@@ -2307,7 +2367,7 @@ function WebhookRouteModal({
             <div className="graph-target-picker-header">
               <div>
                 <strong>Microsoft Graph target</strong>
-                <p>Send as the connected service user to a Team channel or an existing service-user chat.</p>
+                <p>Send as the connected service user to a Team channel, existing chat or one-on-one chat.</p>
               </div>
               <StatusBadge label="Delegated" tone="neutral" />
             </div>
@@ -2328,15 +2388,29 @@ function WebhookRouteModal({
               >
                 Existing chat
               </button>
+              <button
+                type="button"
+                className={classNames("segmented-control-button", graphTargetKind === "user" && "is-active")}
+                aria-pressed={graphTargetKind === "user"}
+                onClick={() => setGraphTargetKind("user")}
+              >
+                One-on-one
+              </button>
             </div>
             {targetName ? (
               <div className="selected-conversation-summary">
                 <div className="selected-conversation-copy">
                   <span>Current Graph target</span>
                   <strong>{targetName}</strong>
-                  <small>{graphTargetKind === "chat" ? shortId(graphTargetId) : [graphTeamName, shortId(graphChannelId)].filter(Boolean).join(" / ")}</small>
+                  <small>
+                    {graphTargetKind === "user"
+                      ? graphUserPrincipalName || shortId(graphUserId || graphTargetId)
+                      : graphTargetKind === "chat"
+                        ? shortId(graphTargetId)
+                        : [graphTeamName, shortId(graphChannelId)].filter(Boolean).join(" / ")}
+                  </small>
                 </div>
-                <StatusBadge label={graphTargetKind === "chat" ? "Chat" : "Channel"} tone="success" />
+                <StatusBadge label={graphTargetKind === "user" ? "One-on-one" : graphTargetKind === "chat" ? "Chat" : "Channel"} tone="success" />
               </div>
             ) : null}
             {graphSearchError ? <p className="form-error">{graphSearchError}</p> : null}
@@ -2414,6 +2488,40 @@ function WebhookRouteModal({
                 ) : null}
               </>
             ) : null}
+            {graphTargetKind === "user" ? (
+              <>
+                <Field label="Find user" hint="Select a Microsoft 365 user. The route will be linked to a one-on-one chat on save.">
+                  <div className="settings-int-field">
+                    <input
+                      value={graphUserSearch}
+                      placeholder="Search name, email or UPN"
+                      onChange={(event) => setGraphUserSearch(event.target.value)}
+                    />
+                    <button
+                      className="secondary-button secondary-button--small"
+                      type="button"
+                      onClick={() => void searchGraphUsers()}
+                      disabled={graphUsersLoading || graphUserSearch.trim().length < 2}
+                    >
+                      {graphUsersLoading ? "Searching..." : "Search users"}
+                    </button>
+                  </div>
+                </Field>
+                {graphUsers.length ? (
+                  <div className="compact-conversation-list">
+                    {graphUsers.map((target) => (
+                      <button key={target.id} type="button" onClick={() => applyGraphUser(target)} aria-pressed={target.id === graphUserId}>
+                        <span className="compact-conversation-list-copy">
+                          <strong>{target.display_name}</strong>
+                          <small>{target.subtitle || shortId(target.id)}</small>
+                        </span>
+                        {target.id === graphUserId ? <StatusBadge label="Selected" tone="success" /> : null}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </>
+            ) : null}
           </div>
         ) : null}
         <button
@@ -2431,7 +2539,7 @@ function WebhookRouteModal({
                 <p>
                   {deliveryBackend === "bot_framework"
                     ? "Use this only when you already have a valid Bot Framework service URL and conversation ID for the target conversation."
-                    : "Use this when you already know the Graph channel or chat identifiers."}
+                    : "Use this when you already know the Graph channel, chat or user identifiers."}
                 </p>
               </div>
               <StatusBadge label="Manual fallback" tone="warn" />
@@ -2468,10 +2576,11 @@ function WebhookRouteModal({
                   <select value={graphTargetKind || "channel"} onChange={(event) => setGraphTargetKind(event.target.value as GraphTargetKind)}>
                     <option value="channel">Channel</option>
                     <option value="chat">Existing chat</option>
+                    <option value="user">One-on-one user</option>
                   </select>
                 </Field>
-                <Field label={graphTargetKind === "chat" ? "Chat ID" : "Graph target ID"}>
-                  <textarea value={graphTargetId} required={graphTargetKind === "chat"} onChange={(event) => setGraphTargetId(event.target.value)} />
+                <Field label={graphTargetKind === "chat" ? "Chat ID" : graphTargetKind === "user" ? "User ID or UPN" : "Graph target ID"}>
+                  <textarea value={graphTargetId} required={graphTargetKind === "chat" || graphTargetKind === "user"} onChange={(event) => setGraphTargetId(event.target.value)} />
                 </Field>
                 {graphTargetKind === "channel" ? (
                   <>
@@ -2853,10 +2962,9 @@ const TECHNICAL_SETTING_KEYS = new Set([
   "graph_scope",
 ]);
 
-function SettingsPage() {
+function StatusPage() {
   const { notify, session } = useAppContext();
   const [readiness, setReadiness] = useState<AdminReadinessOut | null>(null);
-  const [settings, setSettings] = useState<SettingItemOut[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [graphOAuthBusy, setGraphOAuthBusy] = useState(false);
@@ -2866,14 +2974,9 @@ function SettingsPage() {
     setLoading(true);
     setError("");
     try {
-      const [nextReadiness, nextSettings] = await Promise.all([
-        api.adminReadiness(csrfToken),
-        api.adminSettings(csrfToken),
-      ]);
-      setReadiness(nextReadiness);
-      setSettings(nextSettings);
+      setReadiness(await api.adminReadiness(csrfToken));
     } catch (err) {
-      setError(isApiError(err) ? err.message : "Settings data could not be loaded.");
+      setError(isApiError(err) ? err.message : "Status data could not be loaded.");
     } finally {
       setLoading(false);
     }
@@ -2914,30 +3017,24 @@ function SettingsPage() {
     }
   }
 
-  const overrideCount = settings.filter((item) => item.is_overridden).length;
-  const groupedSettings = SETTING_GROUP_ORDER.map((name) => ({
-    name,
-    items: settings.filter((item) => (SETTING_META[item.key]?.group ?? "Other") === name),
-  })).filter((group) => group.items.length > 0);
-
   return (
     <>
       <PageIntro
-        eyebrow="Configuration"
-        title="Settings"
-        description="Override runtime defaults from the environment file and review integration readiness."
+        eyebrow="Operations"
+        title="Status"
+        description="Operational readiness and diagnostics for Teams Rehook."
       />
       {loading ? (
         <Card>
           <div className="table-state" role="status" aria-live="polite">
             <div className="spinner spinner--small" aria-hidden="true" />
-            <p>Loading settings...</p>
+            <p>Loading status...</p>
           </div>
         </Card>
       ) : error ? (
         <Card>
           <div className="table-state table-state--error" role="alert">
-            <h3>Could not load settings</h3>
+            <h3>Could not load status</h3>
             <p>{error}</p>
             <button className="secondary-button secondary-button--small" type="button" onClick={() => void refresh()}>
               Retry
@@ -2945,48 +3042,7 @@ function SettingsPage() {
           </div>
         </Card>
       ) : readiness ? (
-        <div className="settings-page">
-          <section className="settings-section">
-            <div className="settings-section-header">
-              <h2>Runtime overrides</h2>
-              <p>
-                Values from the environment file are defaults. Overrides apply immediately without restart. Reset
-                restores the environment default.
-              </p>
-            </div>
-            <Card
-              title="Editable settings"
-              description="Live runtime configuration for relay operations."
-              headerActions={
-                <StatusBadge
-                  label={overrideCount > 0 ? `${overrideCount} ${overrideCount === 1 ? "override" : "overrides"} active` : "All defaults"}
-                  tone={overrideCount > 0 ? "warn" : "neutral"}
-                />
-              }
-            >
-              <div className="settings-overrides">
-                {groupedSettings.map((group) => (
-                  <div className="settings-override-group" key={group.name}>
-                    <div className="settings-subsection-header">
-                      <h3>{group.name}</h3>
-                    </div>
-                    <div className="settings-override-rows">
-                      {group.items.map((item) => (
-                        <RuntimeSettingRow
-                          key={item.key}
-                          item={item}
-                          csrfToken={csrfToken}
-                          onChanged={refresh}
-                          notify={notify}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </Card>
-          </section>
-
+        <div className="settings-page status-page">
           <section className="settings-section">
             <div className="settings-section-header">
               <h2>Integrations</h2>
@@ -3084,6 +3140,107 @@ function SettingsPage() {
           </section>
         </div>
       ) : null}
+    </>
+  );
+}
+
+function SettingsPage() {
+  const { notify, session } = useAppContext();
+  const [settings, setSettings] = useState<SettingItemOut[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      setSettings(await api.adminSettings(csrfToken));
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Settings data could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
+  }, [csrfToken]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const overrideCount = settings.filter((item) => item.is_overridden).length;
+  const groupedSettings = SETTING_GROUP_ORDER.map((name) => ({
+    name,
+    items: settings.filter((item) => (SETTING_META[item.key]?.group ?? "Other") === name),
+  })).filter((group) => group.items.length > 0);
+
+  return (
+    <>
+      <PageIntro
+        eyebrow="Configuration"
+        title="Settings"
+        description="Override runtime defaults from the environment file."
+      />
+      {loading ? (
+        <Card>
+          <div className="table-state" role="status" aria-live="polite">
+            <div className="spinner spinner--small" aria-hidden="true" />
+            <p>Loading settings...</p>
+          </div>
+        </Card>
+      ) : error ? (
+        <Card>
+          <div className="table-state table-state--error" role="alert">
+            <h3>Could not load settings</h3>
+            <p>{error}</p>
+            <button className="secondary-button secondary-button--small" type="button" onClick={() => void refresh()}>
+              Retry
+            </button>
+          </div>
+        </Card>
+      ) : (
+        <div className="settings-page">
+          <section className="settings-section">
+            <div className="settings-section-header">
+              <h2>Runtime overrides</h2>
+              <p>
+                Values from the environment file are defaults. Overrides apply immediately without restart. Reset
+                restores the environment default.
+              </p>
+            </div>
+            <Card
+              title="Editable settings"
+              description="Live runtime configuration for relay operations."
+              headerActions={
+                <StatusBadge
+                  label={overrideCount > 0 ? `${overrideCount} ${overrideCount === 1 ? "override" : "overrides"} active` : "All defaults"}
+                  tone={overrideCount > 0 ? "warn" : "neutral"}
+                />
+              }
+            >
+              <div className="settings-overrides">
+                {groupedSettings.map((group) => (
+                  <div className="settings-override-group" key={group.name}>
+                    <div className="settings-subsection-header">
+                      <h3>{group.name}</h3>
+                    </div>
+                    <div className="settings-override-rows">
+                      {group.items.map((item) => (
+                        <RuntimeSettingRow
+                          key={item.key}
+                          item={item}
+                          csrfToken={csrfToken}
+                          onChanged={refresh}
+                          notify={notify}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </section>
+        </div>
+      )}
     </>
   );
 }

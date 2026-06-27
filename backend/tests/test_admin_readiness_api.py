@@ -358,7 +358,11 @@ def test_readiness_reports_graph_token_error_without_leaking_details(db_session:
     assert "raw graph response" not in body["graph_lookup"]["message"]
 
 
-def add_delegated_credential(db_session: Session, *, scopes: str = "offline_access ChannelMessage.Send ChatMessage.Send Chat.ReadBasic User.Read") -> GraphDelegatedCredential:
+def add_delegated_credential(
+    db_session: Session,
+    *,
+    scopes: str = "offline_access ChannelMessage.Send ChatMessage.Send Chat.ReadBasic Chat.Create User.Read",
+) -> GraphDelegatedCredential:
     organization_id = db_session.query(Organization.id).filter_by(slug="default").scalar()
     credential = GraphDelegatedCredential(
         organization_id=organization_id,
@@ -376,7 +380,7 @@ def add_delegated_credential(db_session: Session, *, scopes: str = "offline_acce
     return credential
 
 
-def delegated_token_response(scope: str = "offline_access ChannelMessage.Send ChatMessage.Send Chat.ReadBasic User.Read"):
+def delegated_token_response(scope: str = "offline_access ChannelMessage.Send ChatMessage.Send Chat.ReadBasic Chat.Create User.Read"):
     return {
         "access_token": fake_jwt(
             oid="service-user-id",
@@ -407,7 +411,14 @@ def test_readiness_reports_missing_graph_delivery_credential(db_session: Session
     assert body["graph_delivery"]["credential_source"] == "missing"
     assert body["graph_delivery"]["tenant_id"] == "tenant"
     assert body["graph_delivery"]["client_id"] == "client"
-    assert body["graph_delivery"]["required_scopes"] == ["offline_access", "ChannelMessage.Send", "ChatMessage.Send", "Chat.ReadBasic", "User.Read"]
+    assert body["graph_delivery"]["required_scopes"] == [
+        "offline_access",
+        "ChannelMessage.Send",
+        "ChatMessage.Send",
+        "Chat.ReadBasic",
+        "Chat.Create",
+        "User.Read",
+    ]
     assert "refresh-token" not in json.dumps(body["graph_delivery"])
 
 
@@ -510,7 +521,7 @@ def test_readiness_reports_graph_delivery_missing_required_scopes(db_session: Se
     assert body["graph_delivery"]["ready"] is False
     assert body["graph_delivery"]["auth_status"] == "permission_warning"
     assert body["graph_delivery"]["token_request_succeeded"] is True
-    assert body["graph_delivery"]["missing_scopes"] == ["ChannelMessage.Send", "ChatMessage.Send", "Chat.ReadBasic"]
+    assert body["graph_delivery"]["missing_scopes"] == ["ChannelMessage.Send", "ChatMessage.Send", "Chat.ReadBasic", "Chat.Create"]
 
 
 def test_graph_delivery_oauth_start_returns_authorization_url(db_session: Session, monkeypatch: pytest.MonkeyPatch):

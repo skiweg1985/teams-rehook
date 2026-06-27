@@ -344,8 +344,69 @@ def test_create_graph_chat_route_uses_graph_target_id_as_chat_id(client: TestCli
     assert body["graph_target_id"] == "chat-id"
 
 
-def test_create_graph_user_route_is_deferred(client: TestClient):
+def test_create_graph_user_route_materializes_one_on_one_chat(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
     csrf_token = login_admin(client)
+
+    def fake_one_on_one_chat(db, *, organization_id: str, user_id: str, user_display_name: str, user_principal_name: str):
+        assert user_id == "user-id"
+        assert user_display_name == "Ada Admin"
+        assert user_principal_name == "ada@example.com"
+        return type(
+            "Chat",
+            (),
+            {
+                "id": "chat-id",
+                "user_id": user_id,
+                "user_display_name": user_display_name,
+                "user_principal_name": user_principal_name,
+            },
+        )()
+
+    monkeypatch.setattr("app.routers.webhook_routes.create_or_get_one_on_one_chat", fake_one_on_one_chat)
+
+    response = client.post(
+        "/api/v1/webhook-routes",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "name": "Graph user route",
+            "is_active": True,
+            "delivery_backend": "graph",
+            "target_type": "bot_conversation",
+            "target_name": "Ada Admin",
+            "graph_target_kind": "user",
+            "graph_target_id": "user-id",
+            "graph_user_id": "user-id",
+            "graph_user_display_name": "Ada Admin",
+            "graph_user_principal_name": "ada@example.com",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["graph_target_kind"] == "chat"
+    assert body["graph_target_id"] == "chat-id"
+    assert body["graph_user_id"] == "user-id"
+    assert body["graph_user_display_name"] == "Ada Admin"
+    assert body["graph_user_principal_name"] == "ada@example.com"
+    route = db_session.scalar(select(WebhookRoute).where(WebhookRoute.name == "Graph user route"))
+    assert route is not None
+    assert route.graph_target_kind == "chat"
+    assert route.graph_target_id == "chat-id"
+
+
+def test_create_graph_user_route_reports_graph_lookup_error(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    csrf_token = login_admin(client)
+
+    def fail_one_on_one_chat(*args, **kwargs):
+        from app.services.graph_delegated_lookup import GraphDelegatedLookupError
+
+        raise GraphDelegatedLookupError("Microsoft Graph one-on-one chat creation failed with HTTP 403: Forbidden")
+
+    monkeypatch.setattr("app.routers.webhook_routes.create_or_get_one_on_one_chat", fail_one_on_one_chat)
 
     response = client.post(
         "/api/v1/webhook-routes",
@@ -361,8 +422,55 @@ def test_create_graph_user_route_is_deferred(client: TestClient):
         },
     )
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Graph delivery supports channel and existing chat targets in V1"
+    assert response.status_code == 502
+    assert "HTTP 403" in response.json()["detail"]
+
+
+def test_update_graph_user_route_materializes_one_on_one_chat(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    route = add_route(db_session)
+    csrf_token = login_admin(client)
+
+    def fake_one_on_one_chat(db, *, organization_id: str, user_id: str, user_display_name: str, user_principal_name: str):
+        return type(
+            "Chat",
+            (),
+            {
+                "id": "updated-chat-id",
+                "user_id": user_id,
+                "user_display_name": user_display_name,
+                "user_principal_name": user_principal_name,
+            },
+        )()
+
+    monkeypatch.setattr("app.routers.webhook_routes.create_or_get_one_on_one_chat", fake_one_on_one_chat)
+
+    response = client.patch(
+        f"/api/v1/webhook-routes/{route.id}",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "delivery_backend": "graph",
+            "target_name": "Ada Admin",
+            "graph_target_kind": "user",
+            "graph_target_id": "user-id",
+            "graph_user_id": "user-id",
+            "graph_user_display_name": "Ada Admin",
+            "graph_user_principal_name": "ada@example.com",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["delivery_backend"] == "graph"
+    assert body["graph_target_kind"] == "chat"
+    assert body["graph_target_id"] == "updated-chat-id"
+    assert body["bot_service_url"] == ""
+    assert body["bot_conversation_id"] == ""
+    db_session.refresh(route)
+    assert route.graph_user_id == "user-id"
 
 
 def test_create_graph_channel_route_requires_channel_metadata(client: TestClient):

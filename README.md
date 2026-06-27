@@ -120,6 +120,7 @@ Configure these Microsoft Graph **Delegated permissions** on the same Entra app 
 - `ChannelMessage.Send` for Graph channel delivery.
 - `ChatMessage.Send` for delivery into existing chats.
 - `Chat.ReadBasic` for service-user chat search in the route UI.
+- `Chat.Create` for creating or linking one-on-one chats when a route targets a selected user.
 
 Add this redirect URI under the app registration's web authentication platform:
 

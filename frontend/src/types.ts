@@ -80,6 +80,9 @@ export type WebhookRouteOut = {
   graph_team_id: string;
   graph_team_name: string;
   graph_channel_id: string;
+  graph_user_id: string;
+  graph_user_display_name: string;
+  graph_user_principal_name: string;
   bot_target_source: string;
   bot_registered_by_id: string;
   bot_registered_at: string | null;
@@ -104,6 +107,9 @@ export type WebhookRouteCreate = {
   graph_team_id?: string;
   graph_team_name?: string;
   graph_channel_id?: string;
+  graph_user_id?: string;
+  graph_user_display_name?: string;
+  graph_user_principal_name?: string;
   bot_target_source?: string;
 };
 

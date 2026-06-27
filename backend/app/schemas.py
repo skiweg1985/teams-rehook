@@ -81,6 +81,9 @@ class WebhookRouteBase(BaseModel):
     graph_team_id: str = Field(default="", max_length=2000)
     graph_team_name: str = Field(default="", max_length=200)
     graph_channel_id: str = Field(default="", max_length=2000)
+    graph_user_id: str = Field(default="", max_length=2000)
+    graph_user_display_name: str = Field(default="", max_length=255)
+    graph_user_principal_name: str = Field(default="", max_length=255)
     bot_target_source: str = Field(default="", max_length=40)
 
 
@@ -101,6 +104,9 @@ class WebhookRouteUpdate(BaseModel):
     graph_team_id: str | None = Field(default=None, max_length=2000)
     graph_team_name: str | None = Field(default=None, max_length=200)
     graph_channel_id: str | None = Field(default=None, max_length=2000)
+    graph_user_id: str | None = Field(default=None, max_length=2000)
+    graph_user_display_name: str | None = Field(default=None, max_length=255)
+    graph_user_principal_name: str | None = Field(default=None, max_length=255)
     bot_target_source: str | None = Field(default=None, max_length=40)
 
     @model_validator(mode="after")
@@ -118,6 +124,9 @@ class WebhookRouteUpdate(BaseModel):
             and self.graph_team_id is None
             and self.graph_team_name is None
             and self.graph_channel_id is None
+            and self.graph_user_id is None
+            and self.graph_user_display_name is None
+            and self.graph_user_principal_name is None
             and self.bot_target_source is None
         ):
             raise ValueError("At least one field must be provided")
@@ -141,6 +150,9 @@ class WebhookRouteOut(BaseModel):
     graph_team_id: str
     graph_team_name: str
     graph_channel_id: str
+    graph_user_id: str
+    graph_user_display_name: str
+    graph_user_principal_name: str
     bot_target_source: str
     bot_registered_by_id: str
     bot_registered_at: datetime | None = None

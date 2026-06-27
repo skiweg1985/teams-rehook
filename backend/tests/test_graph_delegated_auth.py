@@ -107,7 +107,7 @@ def test_exchange_authorization_code_stores_encrypted_refresh_token_and_safe_met
                 ),
                 "refresh_token": "refresh-token",
                 "expires_in": 1800,
-                "scope": "offline_access ChannelMessage.Send ChatMessage.Send Chat.ReadBasic User.Read",
+                "scope": "offline_access ChannelMessage.Send ChatMessage.Send Chat.ReadBasic Chat.Create User.Read",
             }
         )
 
@@ -161,7 +161,7 @@ def test_refresh_delegated_access_token_rotates_refresh_token(
                 "access_token": _jwt({"oid": "user-id", "name": "Teams Sender"}),
                 "refresh_token": "new-refresh",
                 "expires_in": 3600,
-                "scope": "offline_access ChannelMessage.Send ChatMessage.Send Chat.ReadBasic User.Read",
+                "scope": "offline_access ChannelMessage.Send ChatMessage.Send Chat.ReadBasic Chat.Create User.Read",
             }
         )
 
@@ -189,7 +189,7 @@ def test_refresh_delegated_access_token_retains_offline_access_when_token_respon
             organization_id=org_id,
             tenant_id="tenant",
             client_id="client",
-            scopes="offline_access ChannelMessage.Send ChatMessage.Send Chat.ReadBasic User.Read",
+            scopes="offline_access ChannelMessage.Send ChatMessage.Send Chat.ReadBasic Chat.Create User.Read",
             encrypted_refresh_token=encrypt_secret("refresh-token"),
             last_status="ready",
         )
@@ -201,7 +201,7 @@ def test_refresh_delegated_access_token_retains_offline_access_when_token_respon
             {
                 "access_token": _jwt({"oid": "user-id", "name": "Teams Sender"}),
                 "expires_in": 3600,
-                "scope": "ChannelMessage.Send ChatMessage.Send Chat.ReadBasic User.Read",
+                "scope": "ChannelMessage.Send ChatMessage.Send Chat.ReadBasic Chat.Create User.Read",
             }
         )
 
