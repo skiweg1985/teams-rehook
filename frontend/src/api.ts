@@ -3,6 +3,7 @@ import type {
   ApiError,
   AuditEventOut,
   BotConversationReferenceOut,
+  EventLogEntryPageOut,
   FirstAdminCreate,
   GraphDeliveryOAuthStartOut,
   LogCleanupOut,
@@ -36,6 +37,17 @@ type RequestOptions = {
   method?: HttpMethod;
   body?: unknown;
   csrfToken?: string;
+};
+
+type EventLogFilters = {
+  page?: number;
+  pageSize?: number;
+  level?: string;
+  category?: string;
+  eventType?: string;
+  correlationId?: string;
+  requestId?: string;
+  query?: string;
 };
 
 let activeSessionRequest: Promise<SessionResponse> | null = null;
@@ -130,6 +142,19 @@ export const api = {
   },
   adminSystemLogs(csrfToken: string) {
     return request<SystemLogEventOut[]>("/api/v1/admin/system-logs", { csrfToken });
+  },
+  adminEventLogs(csrfToken: string, filters: EventLogFilters = {}) {
+    const params = new URLSearchParams();
+    if (filters.page) params.set("page", String(filters.page));
+    if (filters.pageSize) params.set("page_size", String(filters.pageSize));
+    if (filters.level) params.set("level", filters.level);
+    if (filters.category) params.set("category", filters.category);
+    if (filters.eventType) params.set("event_type", filters.eventType);
+    if (filters.correlationId) params.set("correlation_id", filters.correlationId);
+    if (filters.requestId) params.set("request_id", filters.requestId);
+    if (filters.query) params.set("q", filters.query);
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    return request<EventLogEntryPageOut>(`/api/v1/admin/event-logs${suffix}`, { csrfToken });
   },
   adminWebhookAbuseBuckets(csrfToken: string) {
     return request<WebhookAbuseBucketOut[]>("/api/v1/admin/webhook-abuse-buckets", { csrfToken });

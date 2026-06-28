@@ -26,25 +26,27 @@ For local development without Docker:
 Create local configuration:
 
 ```bash
-cp .env.example .env
+./manage.sh setup
 ```
+
+`./manage.sh setup` is a guided wizard with `local`, `production`, and `custom` profiles. The recommended `local` profile publishes HTTPS on `https://localhost:8443` with a self-signed development certificate and a random bundled Postgres password. Use the `production` or `custom` profile to set listener ports, the publish scheme, the public DNS name, and an optional public port.
 
 Start the stack:
 
 ```bash
-docker compose up -d --build
+./manage.sh start
 ```
 
-Open:
+Open (recommended `local` profile):
 
 ```text
-http://localhost:8080
+https://localhost:8443
 ```
 
 FastAPI docs:
 
 ```text
-http://localhost:8080/api/v1/docs
+https://localhost:8443/api/v1/docs
 ```
 
 ## First Admin User
@@ -74,13 +76,7 @@ Important security-sensitive settings include:
 
 Use a real secret manager for production-like deployments. Do not commit populated `.env` files.
 
-## Delivery Modes
-
-Real Teams delivery is the default:
-
-```text
-BOT_DELIVERY_MODE=real
-```
+## Microsoft Delivery Setup
 
 Real Bot Framework delivery requires:
 
@@ -90,14 +86,6 @@ MS_APP_CLIENT_ID=
 MS_APP_CLIENT_SECRET=
 BOT_DEFAULT_SERVICE_URL=
 ```
-
-For credential-free local validation:
-
-```text
-BOT_DELIVERY_MODE=mock
-```
-
-Mock mode records successful delivery attempts without contacting Bot Framework.
 
 Delivery feature policy is controlled separately:
 
@@ -132,7 +120,13 @@ Add this redirect URI under the app registration web authentication platform:
 {APP_PUBLIC_BASE_URL}/api/v1/admin/graph-delivery/oauth/callback
 ```
 
-With local defaults:
+The callback host follows `APP_PUBLIC_BASE_URL`. With the recommended `local` setup profile (`https://localhost:8443`):
+
+```text
+https://localhost:8443/api/v1/admin/graph-delivery/oauth/callback
+```
+
+With the `.env.example` HTTP defaults (`http://localhost:8080`):
 
 ```text
 http://localhost:8080/api/v1/admin/graph-delivery/oauth/callback
@@ -209,7 +203,7 @@ Common situations:
 
 | Symptom | Likely cause | What to check |
 |---|---|---|
-| Many real clients appear as one client. | The backend is seeing the proxy IP instead of the original client IP. | Confirm `TRUST_X_FORWARDED_FOR=true` and `TRUSTED_PROXY_IPS` contains only the trusted reverse proxy. |
+| Many real clients appear as one client. | The backend is seeing the proxy IP instead of the original client IP. | Confirm `TRUST_X_FORWARDED_FOR=true`, `COMPOSE_APP_SUBNET` matches the app stack network, and `TRUSTED_PROXY_IPS` contains only additional trusted upstream proxies. |
 | `Unblock` worked, but previous block count is still visible. | Unblock is not a full forgiveness reset. | This is expected. It clears the active block and current failures, but keeps escalation history. |
 | A client is `Observed` but not `Blocked`. | The client has current failed attempts but is below the block threshold. | Review last reason, failure count, and last activity. |
 
@@ -217,9 +211,9 @@ Common situations:
 
 The Docker stack stores Postgres data in the `postgres_data` volume.
 
-TODO: Define the production backup schedule, restore procedure, retention period, and restore validation process.
+For local evaluation, `./manage.sh backup-db` writes a `pg_dump` SQL file to `backups/`, and `./manage.sh restore-db <backup.sql>` restores a dump after a typed `RESTORE` confirmation. Both operate on the bundled Compose Postgres service.
 
-For local evaluation, use standard Postgres backup tools against the Compose database if data must be preserved.
+TODO: Define the production backup schedule, restore procedure, retention period, and restore validation process.
 
 ## Updates And Rollback
 

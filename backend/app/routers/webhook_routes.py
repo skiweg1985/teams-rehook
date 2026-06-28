@@ -8,6 +8,7 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.proxy_trust import combined_trusted_proxy_ips
 from app.core.settings_overrides import get_effective_settings
 from app.database import get_db
 from app.deps import record_audit, require_admin, require_csrf
@@ -32,6 +33,7 @@ from app.services.graph_delegated_lookup import GraphDelegatedLookupError, creat
 from app.services.graph_name_resolution import refresh_graph_names, resolve_route_graph_names, try_resolve_route_graph_names
 from app.services.graph_targets import GraphConfigError, GraphRequestError
 from app.services.log_retention import cleanup_log_events
+from app.services.event_log import emit_event, sanitize_path
 from app.services.teams_bot import BotDeliveryError, send_bot_activity
 from app.services.teams_graph_delivery import GraphDeliveryError, send_graph_message
 from app.services.client_ip_allowlist import (
@@ -828,6 +830,36 @@ def _record_event(
     )
     db.add(event)
     db.flush()
+    delivery_backend = _string_value(delivery_result or {}, "backend") or (_route_delivery_backend(route) if route else "")
+    emit_event(
+        db,
+        level="error" if status_value == "failed" else "warning" if status_value == "rejected" else "info",
+        category="webhook",
+        event_type=f"webhook.delivery.{status_value}",
+        message=f"Webhook delivery {status_value}",
+        user_message="Webhook delivered" if status_value == "delivered" else "Webhook could not be delivered",
+        target={
+            "type": "webhook",
+            "id": route.id if route else "",
+            "name": route.name if route else "",
+            "backend": delivery_backend,
+        },
+        source={
+            "ip": request_metadata.get("client_host", ""),
+            "user_agent": request_metadata.get("user_agent", ""),
+            "x_forwarded_for": request_metadata.get("x_forwarded_for", ""),
+        },
+        http={
+            "method": request_metadata.get("method", ""),
+            "path": sanitize_path(str(request_metadata.get("path", ""))),
+            "content_type": request_metadata.get("content_type", ""),
+            "content_length": request_metadata.get("content_length", ""),
+        },
+        security={"severity": "medium" if status_value == "rejected" else "low", "reason": error[:160] if error else ""},
+        raw={"delivery_result": delivery_result or {}, "normalized_message": normalized_message or {}},
+        domain="webhook_delivery",
+        domain_event_id=event.id,
+    )
     return event
 
 
@@ -852,7 +884,9 @@ def _resolve_client_host(request: Request) -> tuple[str, str, str, str]:
     direct_client_host = request.client.host if request.client else ""
     x_forwarded_for = request.headers.get("x-forwarded-for", "")
     settings = get_effective_settings()
-    trusted_proxy_networks = _trusted_proxy_networks(settings.trusted_proxy_ips)
+    trusted_proxy_networks = _trusted_proxy_networks(
+        combined_trusted_proxy_ips(settings.compose_app_subnet, settings.trusted_proxy_ips)
+    )
     if (
         not settings.trust_x_forwarded_for
         or not x_forwarded_for.strip()

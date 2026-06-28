@@ -99,6 +99,35 @@ export type SystemLogEventOut = {
   created_at: string;
 };
 
+export type EventLogEntryOut = {
+  id: string;
+  level: string;
+  category: string;
+  event_type: string;
+  message: string;
+  user_message: string;
+  correlation_id: string;
+  request_id: string;
+  actor: Record<string, unknown>;
+  target: Record<string, unknown>;
+  source: Record<string, unknown>;
+  http: Record<string, unknown>;
+  security: Record<string, unknown>;
+  raw: Record<string, unknown>;
+  domain: string;
+  domain_event_id: string | null;
+  created_at: string;
+};
+
+export type EventLogEntryPageOut = {
+  items: EventLogEntryOut[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+  retention_days: number;
+};
+
 export type WebhookAbuseBucketOut = {
   id: string;
   scope: "ip" | "ip_route";
@@ -256,6 +285,7 @@ export type LogCleanupOut = {
   deleted_webhook_delivery_events: number;
   deleted_audit_events: number;
   deleted_bot_activity_events: number;
+  deleted_event_log_entries: number;
   retention_days: number;
   cutoff: string;
 };
@@ -327,9 +357,13 @@ export type AdminReadinessOut = {
     app_public_base_url: string;
     frontend_base_url: string;
     cors_origins: string[];
+    compose_app_subnet: string;
+    trusted_proxy_ips: string;
+    trusted_proxy_chain: string;
     webhook_max_payload_bytes: number;
     log_retention_days: number;
     log_cleanup_interval_minutes: number;
+    event_debug_previews_enabled: boolean;
     session_secure_cookie: boolean;
     settings_encryption_key_source: "configured" | "generated" | "missing" | string;
     settings_encryption_ready: boolean;

@@ -296,7 +296,8 @@ def test_client_host_uses_compose_haproxy_forwarded_client(monkeypatch: pytest.M
     from app.core.config import get_settings
 
     monkeypatch.setenv("TRUST_X_FORWARDED_FOR", "true")
-    monkeypatch.setenv("TRUSTED_PROXY_IPS", "172.30.0.10")
+    monkeypatch.delenv("TRUSTED_PROXY_IPS", raising=False)
+    monkeypatch.setenv("COMPOSE_APP_SUBNET", "172.30.0.0/24")
     get_settings.cache_clear()
     request = SimpleNamespace(
         client=SimpleNamespace(host="172.30.0.10"),
@@ -308,6 +309,29 @@ def test_client_host_uses_compose_haproxy_forwarded_client(monkeypatch: pytest.M
             "203.0.113.42",
             "172.30.0.10",
             "203.0.113.42",
+            "x_forwarded_for",
+        )
+    finally:
+        get_settings.cache_clear()
+
+
+def test_client_host_uses_trusted_upstream_proxy_chain(monkeypatch: pytest.MonkeyPatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("TRUST_X_FORWARDED_FOR", "true")
+    monkeypatch.setenv("COMPOSE_APP_SUBNET", "172.30.0.0/24")
+    monkeypatch.setenv("TRUSTED_PROXY_IPS", "10.0.0.9/32")
+    get_settings.cache_clear()
+    request = SimpleNamespace(
+        client=SimpleNamespace(host="172.30.0.10"),
+        headers={"x-forwarded-for": "203.0.113.42, 10.0.0.9"},
+    )
+
+    try:
+        assert _resolve_client_host(request) == (
+            "203.0.113.42",
+            "172.30.0.10",
+            "203.0.113.42, 10.0.0.9",
             "x_forwarded_for",
         )
     finally:

@@ -14,9 +14,29 @@ No Kubernetes manifests, Terraform, Helm chart, hosted image registry, or produc
 Start:
 
 ```bash
-cp .env.example .env
-docker compose up -d --build
+./manage.sh start
 ```
+
+On first run, `./manage.sh start` launches the guided `.env` setup if the file is missing. `./manage.sh setup` offers `local`, `production`, and `custom` profiles and writes a local `.env` with ports, URLs, bundled Postgres credentials, `BOT_DELIVERY_MODE=real`, and the session cookie flag, then offers to start the stack. The recommended `local` profile publishes HTTPS on `https://localhost:8443` with a self-signed development certificate, enables `SESSION_SECURE_COOKIE=true`, and generates a random bundled Postgres password. The `production` and `custom` profiles prompt for listener ports, the publish scheme, the public DNS name, an optional public port, trusted upstream proxies, and the Postgres password mode. The root-level `./manage.sh` script is a thin operator wrapper around Docker Compose, `.env`, and bundled Postgres maintenance. It does not replace the in-app admin UI for normal users, runtime settings, or Microsoft integration setup.
+
+Common commands:
+
+```bash
+./manage.sh check-env
+./manage.sh sync-env
+./manage.sh status
+./manage.sh restart
+./manage.sh logs backend
+./manage.sh doctor
+./manage.sh backup-db
+./manage.sh restore-db <backup.sql>
+./manage.sh rotate-db-password
+./manage.sh update
+```
+
+`./manage.sh restore-db` restores a SQL dump after a typed `RESTORE` confirmation. `./manage.sh rotate-db-password` rotates the bundled Postgres password and restarts the backend; it only manages the bundled Postgres fallback and refuses to run when `DATABASE_URL` is set.
+
+`./manage.sh restart` recreates the Compose services with the current `.env` values. Use it after changing ports, proxy trust settings, URLs, or other environment-backed configuration. `./manage.sh update` remains the repository-refresh path for pulling new commits and rebuilding from the latest source tree.
 
 Services:
 
@@ -25,18 +45,19 @@ Services:
 | `proxy` | HAProxy routes `/api/*` to backend and all other paths to frontend. | `${PROXY_HTTP_PORT:-8080}:80`, `${PROXY_HTTPS_PORT:-8443}:443` |
 | `frontend` | React/Vite build served by nginx. | Internal `80` |
 | `backend` | FastAPI app served by Uvicorn. | Internal `8000` |
-| `postgres` | Local Postgres database. | Host `5432` |
+| `postgres` | Local Postgres database. | Internal `5432` |
 
 HAProxy health checks:
 
 - Backend: `/api/v1/health`
 - Frontend: `/`
 
-The Compose stack uses a fixed internal network so the backend can trust `X-Forwarded-For` only when the direct client is the bundled HAProxy container:
+The Compose stack keeps a stable internal network so the backend can trust `X-Forwarded-For` from the bundled HAProxy and from explicitly approved upstream proxies:
 
-- `proxy`: `172.30.0.10`
+- `COMPOSE_APP_SUBNET=172.30.0.0/24`
 - `backend`: `TRUST_X_FORWARDED_FOR=true`
-- `backend`: `TRUSTED_PROXY_IPS=172.30.0.10`
+- `backend`: trusts `COMPOSE_APP_SUBNET` as the direct app-HAProxy hop
+- `backend` and `proxy`: use `TRUSTED_PROXY_IPS` for additional trusted upstream proxy IPs or CIDRs
 
 This lets automatic abuse blocking group attempts by the real caller IP instead of the proxy IP. Do not broaden `TRUSTED_PROXY_IPS` to public networks; clients must not be able to self-declare their source address.
 
@@ -50,7 +71,7 @@ Default local URLs:
 - HTTPS UI with local cert: `https://localhost:8443`
 - API docs through proxy: `http://localhost:8080/api/v1/docs`
 
-If a port is already in use, change `PROXY_HTTP_PORT` or `PROXY_HTTPS_PORT` in `.env`.
+If a port is already in use, rerun `./manage.sh setup` and choose a different port.
 
 ## Persistent Data
 
@@ -62,7 +83,17 @@ The backend default outside Docker is SQLite at:
 sqlite:///./app.db
 ```
 
-The Docker backend overrides this to the bundled Postgres service.
+The Docker backend uses the bundled Postgres service by default. Set `DATABASE_URL` in `.env` only when the backend should use an external Postgres instance.
+
+The bundled Postgres service reads these bootstrap values when a new `postgres_data` volume is initialized:
+
+- `POSTGRES_DB`
+- `POSTGRES_USER`
+- `POSTGRES_PASSWORD`
+
+Changing `POSTGRES_*` after the volume already exists does not rename users, rotate passwords, or recreate databases. For existing databases, rotate credentials with Postgres administration tools, update `DATABASE_URL` if needed, and restart the backend.
+
+If production database credentials contain URL-special characters, set `DATABASE_URL` explicitly with proper URL encoding instead of relying on the Compose fallback assembled from `POSTGRES_*`.
 
 ## Secrets
 
@@ -89,7 +120,13 @@ The local HAProxy config binds HTTP and HTTPS and forwards:
 - All other paths to frontend.
 - `X-Forwarded-For`, `X-Forwarded-Proto`, and `X-Forwarded-Host` to the backend.
 
-For production, define TLS termination and public URL policy outside this repository. If another reverse proxy replaces HAProxy, set `TRUSTED_PROXY_IPS` to that proxy's private IP address or CIDR range and keep `TRUST_X_FORWARDED_FOR=true` only when that direct proxy boundary is controlled.
+The bundled app HAProxy sanitizes `X-Forwarded-For` on every request:
+
+- Requests from untrusted peers have any incoming `X-Forwarded-For` removed, then the direct source IP is forwarded.
+- Requests from peers listed in `TRUSTED_PROXY_IPS` keep the incoming chain and append that peer IP before forwarding to the backend.
+- The backend then trusts the app HAProxy's direct Compose hop plus the configured upstream proxy ranges when resolving the caller IP.
+
+For production, define TLS termination and public URL policy outside this repository. The default trust model is intentionally simple: the backend always trusts the direct app HAProxy / controlled Compose proxy boundary, and any outer reverse proxy must be listed in `TRUSTED_PROXY_IPS` before its forwarded chain is preserved. If HAProxy is replaced, move that direct proxy boundary into `COMPOSE_APP_SUBNET` or the deployment equivalent and keep `TRUST_X_FORWARDED_FOR=true` only when that boundary is controlled.
 
 TODO: Document the intended production reverse proxy, TLS certificate source, HSTS policy, and allowed public origins.
 
@@ -132,12 +169,12 @@ No formal release process is visible in the repository. Until one exists:
 2. Review `CHANGELOG.md`.
 3. Run validation.
 4. Rebuild images.
-5. Start the stack.
+5. Recreate or start the stack.
 6. Check health, readiness, and route tests.
 
 ```bash
 npm run test
-docker compose up -d --build
+./manage.sh update
 ```
 
 ## Rollback

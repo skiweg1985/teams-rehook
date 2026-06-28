@@ -18,6 +18,7 @@ from app.deps import (
 from app.models import Organization, Session as SessionModel, User
 from app.schemas import FirstAdminCreateIn, LoginRequest, SessionResponse, SetupStatusOut, UserOut
 from app.security import hash_secret, issue_plain_secret, lookup_secret_hash, session_expiry, utcnow, verify_secret
+from app.services.event_log import emit_event
 
 router = APIRouter(tags=["auth"])
 
@@ -111,6 +112,16 @@ def login(payload: LoginRequest, response: Response, db: Session = Depends(get_d
     email = str(payload.email or "").strip().lower()
     user = db.scalar(select(User).where(User.email == email, User.is_active.is_(True)))
     if not user or not verify_secret(payload.password, user.password_hash):
+        emit_event(
+            level="warning",
+            category="auth",
+            event_type="auth.login.failure",
+            message="Login attempt failed.",
+            actor={"type": "external"},
+            target={"type": "user", "id": user.id if user else "", "email": email},
+            security={"severity": "medium", "reason": "invalid_credentials"},
+            domain="system",
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     session_token, csrf_token = _issue_session(db, user)

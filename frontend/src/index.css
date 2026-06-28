@@ -3876,6 +3876,18 @@ button:disabled {
   margin-bottom: var(--space-4);
 }
 
+.event-log-filters {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.55fr) minmax(160px, 0.65fr) minmax(220px, 1fr) minmax(260px, 1.2fr);
+  align-items: end;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.event-log-row .json-block {
+  max-height: 320px;
+}
+
 .compact-filter {
   display: grid;
   gap: var(--space-1);
@@ -4221,7 +4233,8 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
-  .message-log-filters {
+  .message-log-filters,
+  .event-log-filters {
     grid-template-columns: 1fr;
   }
 

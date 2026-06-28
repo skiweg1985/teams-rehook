@@ -8,6 +8,7 @@ This project follows the structure of [Keep a Changelog](https://keepachangelog.
 
 ### Added
 
+- Guided `./manage.sh setup` flow that writes a small local `.env` with ports, URLs, bundled Postgres credentials, real delivery defaults, and the session cookie flag.
 - Repository documentation restructure with a short README and detailed `/docs` guides for users, administrators, developers, APIs, architecture, configuration, deployment, troubleshooting, and data models.
 - Documentation audit report covering updated files, obsolete content, remaining gaps, and manual-review items.
 - README coverage for the Payload Generator, Teams bot commands, Users page limitations, and local Vite proxy behavior.
@@ -18,6 +19,20 @@ This project follows the structure of [Keep a Changelog](https://keepachangelog.
 
 ### Changed
 
+- Documentation audit: corrected post-setup access URLs to the HTTPS `local` profile (`https://localhost:8443`), documented the `setup` profiles, documented the `event_debug_previews_enabled` runtime setting, and added the `event-logs`, `client-events`, and `webhook-abuse-buckets` admin endpoints to the API reference.
+- `./manage.sh restart` now recreates Compose services with the current `.env` values instead of only restarting existing containers, so environment changes apply immediately.
+- Compose network CIDR is now controlled through `COMPOSE_APP_SUBNET`, the backend always trusts that internal HAProxy hop by default, and the status view reports the effective proxy trust chain for operators.
+- The bundled HAProxy now drops untrusted incoming `X-Forwarded-For` headers and only preserves forwarded chains from upstream proxies explicitly listed in `TRUSTED_PROXY_IPS`.
+- Abuse-blocking settings now show only the on/off switch, failure limit, and abuse window in the admin UI; initial block, max block, and cleanup retention move to environment-only configuration.
+- `./manage.sh` now uses a consistent CLI output style with structured status messages, stronger destructive-action confirmations, clearer command help, and setup/doctor flows that better guide operators toward the next safe step.
+- `./manage.sh setup` now captures listener ports separately from the published app URL, asks for the publish scheme explicitly, and only adds a public URL port when operators want one.
+- `./manage.sh setup` now starts with a recommended local-defaults path so the common case only needs a few confirmations; custom ports, HTTP-only mode, and the fixed `app` password remain available when explicitly selected.
+- `./manage.sh setup` now generates a random bundled Postgres password by default; the fixed `app` password is only used when explicitly selected.
+- `./manage.sh start` now launches the guided setup when `.env` is missing, avoids rebuilding when the Compose stack is already running, and prints the known URLs instead.
+- `./manage.sh setup` now offers to start the stack after writing `.env`, but skips that prompt when the Compose stack is already running.
+- `.env.example` now keeps only the core infrastructure defaults active; Microsoft identity and most runtime overrides stay commented and are intended to be configured through the Settings UI.
+- `bot_delivery_mode` is now an environment-only developer override instead of a runtime setting exposed in the admin UI.
+- Runtime overrides can now update `cors_origins` and `session_secure_cookie`, and CORS/session behavior follows effective settings without restarting the backend.
 - README is now a concise repository landing page instead of a full user guide.
 - Detailed operational, user, API, and architecture content moved under `/docs`.
 - Known Teams conversations modal condensed into compact single-row entries showing the channel or user, the involved user, and a relative last-seen time; technical conversation ID, service URL, and Graph IDs removed.

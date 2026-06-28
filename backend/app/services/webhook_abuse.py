@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.settings_overrides import get_effective_settings
 from app.models import WebhookAbuseBucket
 from app.security import ensure_utc, utcnow
+from app.services.event_log import emit_event
 
 BLOCKED_WEBHOOK_DETAIL = "Too many failed webhook attempts"
 SCOPE_IP = "ip"
@@ -91,6 +92,32 @@ def record_failure(db: Session, *, client_host: str, route_token_hash: str | Non
         if bucket.failure_count >= settings.webhook_abuse_failure_limit:
             bucket.block_count += 1
             bucket.blocked_until = now + _block_duration(bucket.block_count)
+            emit_event(
+                db,
+                level="warning",
+                category="security",
+                event_type="webhook_abuse.client_blocked",
+                message="Webhook client was blocked after repeated failed attempts.",
+                source={"ip": client_host},
+                security={"severity": "medium", "reason": reason},
+                target={"type": "webhook", "scope": scope, "route_fingerprint": (route_token_hash or "")[:12]},
+                raw={"failure_count": bucket.failure_count, "block_count": bucket.block_count},
+                domain="abuse",
+                domain_event_id=bucket.id,
+            )
+        else:
+            emit_event(
+                db,
+                level="warning",
+                category="security",
+                event_type="webhook_abuse.failure_recorded",
+                message="Failed webhook attempt was recorded for abuse tracking.",
+                source={"ip": client_host},
+                security={"severity": "low", "reason": reason},
+                target={"type": "webhook", "scope": scope, "route_fingerprint": (route_token_hash or "")[:12]},
+                domain="abuse",
+                domain_event_id=bucket.id,
+            )
         buckets.append(bucket)
 
     db.flush()
@@ -126,6 +153,18 @@ def unblock_bucket(db: Session, bucket_id: str) -> WebhookAbuseBucket | None:
     bucket.window_started_at = now
     bucket.last_seen_at = now
     db.flush()
+    emit_event(
+        db,
+        level="info",
+        category="security",
+        event_type="webhook_abuse.client_unblocked",
+        message="Webhook abuse bucket was manually unblocked.",
+        source={"ip": bucket.last_client_host},
+        target={"type": "webhook", "scope": bucket.scope, "route_fingerprint": (bucket.route_token_hash or "")[:12]},
+        security={"severity": "low", "reason": "manual_unblock"},
+        domain="abuse",
+        domain_event_id=bucket.id,
+    )
     return bucket
 
 
@@ -138,7 +177,18 @@ def cleanup_buckets(db: Session) -> WebhookAbuseCleanupResult:
             WebhookAbuseBucket.blocked_until.is_(None),
         )
     )
-    return WebhookAbuseCleanupResult(deleted=result.rowcount or 0, cutoff=cutoff)
+    deleted = result.rowcount or 0
+    if deleted:
+        emit_event(
+            db,
+            level="info",
+            category="security",
+            event_type="webhook_abuse.cleanup",
+            message="Inactive webhook abuse buckets were cleaned up.",
+            raw={"deleted": deleted, "cutoff": cutoff.isoformat()},
+            domain="abuse",
+        )
+    return WebhookAbuseCleanupResult(deleted=deleted, cutoff=cutoff)
 
 
 def _load_buckets(db: Session, *, client_host: str, route_token_hash: str | None) -> list[WebhookAbuseBucket]:

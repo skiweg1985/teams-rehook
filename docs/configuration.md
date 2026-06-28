@@ -9,7 +9,7 @@ Database overrides are loaded at startup and after setting changes. Resetting an
 
 ## Environment Variables
 
-Use `.env.example` as the safe template. Do not commit a populated `.env`.
+Use `.env.example` as the safe template. For local Docker setup, prefer `./manage.sh setup`; it writes the small infrastructure-focused `.env` that the stack needs. Do not commit a populated `.env`.
 
 | Variable / Option | Description | Required | Default | Example | Security relevant |
 |---|---|---:|---|---|---:|
@@ -18,24 +18,35 @@ Use `.env.example` as the safe template. Do not commit a populated `.env`.
 | `API_V1_PREFIX` | API path prefix used for routers, OpenAPI docs, and generated callback paths. Code default only; not listed in `.env.example`. | No | `/api/v1` | `/api/v1` | No |
 | `PROXY_HTTP_PORT` | Host port mapped to HAProxy HTTP listener. Used by Docker Compose and Vite proxy config. | No | `8080` in `.env.example` | `8080` | No |
 | `PROXY_HTTPS_PORT` | Host port mapped to HAProxy HTTPS listener. | No | `8443` in `.env.example` | `8443` | No |
+| `COMPOSE_APP_SUBNET` | CIDR used for the internal Docker Compose application network. The backend always trusts this subnet as the direct bundled HAProxy hop. | No | `172.30.0.0/24` in `.env.example` | `172.30.0.0/24` | Yes |
 | `APP_PUBLIC_BASE_URL` | Public base URL used to build relay and OAuth callback URLs. | No | Code default `http://localhost:8000`; `.env.example` uses `http://localhost:8080` | `http://localhost:8080` | No |
 | `FRONTEND_BASE_URL` | Base URL used for generated UI links and OAuth redirects back to the frontend. | No | Code default `http://localhost:5173`; `.env.example` uses `http://localhost:8080` | `http://localhost:8080` | No |
 | `CORS_ORIGINS` | Comma-separated origins allowed for credentialed browser requests. Must not be empty. | Yes | Code default `http://localhost:5173,http://localhost` | `http://localhost:8080` | No |
-| `DATABASE_URL` | SQLAlchemy database URL. Docker Compose overrides this to Postgres for the backend container. | No | `sqlite:///./app.db` | `postgresql+psycopg2://app:app@postgres:5432/app` | Yes |
+| `DATABASE_URL` | SQLAlchemy database URL. Bare-process backend defaults to SQLite. Docker Compose uses the bundled Postgres service unless this is set to an external database URL. | No | `sqlite:///./app.db`; Docker Compose builds an internal Postgres URL | `postgresql+psycopg2://app:app@postgres:5432/app` | Yes |
+| `POSTGRES_DB` | Database name created when the bundled Postgres volume is initialized. Used by Docker Compose to build the default backend `DATABASE_URL`. | No | `app` in `.env.example` | `teams_rehook` | No |
+| `POSTGRES_USER` | Database user created when the bundled Postgres volume is initialized. Used by Docker Compose to build the default backend `DATABASE_URL`. | No | `app` in `.env.example` | `teams_rehook` | Yes |
+| `POSTGRES_PASSWORD` | Database password created when the bundled Postgres volume is initialized. Used by Docker Compose to build the default backend `DATABASE_URL`. | No | `app` in `.env.example` | Secret manager value | Yes |
 | `WEBHOOK_MAX_PAYLOAD_BYTES` | Maximum accepted webhook request body size. | No | `64000` | `64000` | No |
+| `WEBHOOK_ABUSE_BLOCKING_ENABLED` | Enables temporary blocking after repeated failed webhook attempts. Admins can also change this in the Settings UI. | No | `true` | `true` | No |
+| `WEBHOOK_ABUSE_FAILURE_LIMIT` | Failed attempts allowed inside the abuse window before a client is blocked. Admins can also change this in the Settings UI. | No | `10` | `5` | No |
+| `WEBHOOK_ABUSE_WINDOW_MINUTES` | Rolling failure-count window for abuse tracking. Admins can also change this in the Settings UI. | No | `10` | `15` | No |
+| `WEBHOOK_ABUSE_INITIAL_BLOCK_MINUTES` | Duration of the first temporary abuse block. This is environment-only and not exposed as a runtime override. | No | `10` | `30` | No |
+| `WEBHOOK_ABUSE_MAX_BLOCK_MINUTES` | Maximum duration for escalated abuse blocks. This is environment-only and not exposed as a runtime override. | No | `1440` | `720` | No |
+| `WEBHOOK_ABUSE_CLEANUP_DAYS` | Retention window for inactive abuse tracking buckets. This is environment-only and not exposed as a runtime override. | No | `30` | `14` | No |
 | `LOG_RETENTION_DAYS` | Retention window for delivery, audit, and bot activity logs. `0` means cleanup can remove events older than now. | No | `7` | `7` | No |
 | `LOG_CLEANUP_INTERVAL_MINUTES` | Minimum interval between automatic cleanup runs. | No | `60` | `60` | No |
+| `EVENT_DEBUG_PREVIEWS_ENABLED` | Keeps redacted, size-clipped previews of raw payloads in event log entries. Code default only; not listed in `.env.example`. Admins can also change this in the Settings UI. | No | `false` | `false` | No |
 | `TRUST_X_FORWARDED_FOR` | Allows the backend to use `X-Forwarded-For` as the webhook client IP, but only when the direct client is trusted. Docker Compose overrides this to `true` for the bundled HAProxy. | No | `false` in `.env.example`; Docker backend uses `true` | `true` | Yes |
-| `TRUSTED_PROXY_IPS` | Comma-separated trusted proxy IP addresses or CIDR ranges. Docker Compose sets this to the fixed HAProxy IP `172.30.0.10`. | Required if `TRUST_X_FORWARDED_FOR=true` | Empty in `.env.example`; Docker backend uses `172.30.0.10` | `172.30.0.10` | Yes |
-| `MS_APP_TENANT_ID` | Entra tenant ID for Bot Framework and Microsoft Graph token requests. | Required for real Microsoft integrations | Empty | `00000000-0000-0000-0000-000000000000` | No |
-| `MS_APP_CLIENT_ID` | Entra app client ID for Bot Framework and Microsoft Graph token requests. | Required for real Microsoft integrations | Empty | `00000000-0000-0000-0000-000000000000` | No |
-| `MS_APP_CLIENT_SECRET` | Entra app client secret. | Required for real Microsoft integrations | Empty | `change-me` | Yes |
-| `BOTFRAMEWORK_SCOPE` | OAuth scope requested for Bot Framework tokens. | No | `https://api.botframework.com/.default` | `https://api.botframework.com/.default` | No |
-| `GRAPH_SCOPE` | OAuth scope requested for Microsoft Graph app-only tokens. | No | `https://graph.microsoft.com/.default` | `https://graph.microsoft.com/.default` | No |
-| `BOT_FRAMEWORK_ENABLED` | Enables Bot Framework route setup, delivery, and readiness impact. | No | `true` | `true` | No |
-| `GRAPH_LOOKUP_ENABLED` | Enables Graph target search, name refresh, and readiness impact. | No | `true` | `true` | No |
-| `GRAPH_DELIVERY_ENABLED` | Enables delegated Graph delivery. Requires Graph lookup to remain enabled. | No | `true` | `true` | No |
-| `BOT_DELIVERY_MODE` | `real` sends through Microsoft services; `mock` simulates delivery. Invalid values normalize to `mock`. | No | `real` | `mock` | No |
+| `TRUSTED_PROXY_IPS` | Comma-separated additional trusted upstream proxy IP addresses or CIDR ranges. The bundled HAProxy subnet is trusted separately through `COMPOSE_APP_SUBNET`. | No | Empty in `.env.example` | `10.0.0.0/24,192.168.10.15` | Yes |
+| `MS_APP_TENANT_ID` | Entra tenant ID for Bot Framework and Microsoft Graph token requests. The repository keeps this commented in `.env.example` because operators can also set it in the Settings UI. | Required for real Microsoft integrations | Empty | `00000000-0000-0000-0000-000000000000` | No |
+| `MS_APP_CLIENT_ID` | Entra app client ID for Bot Framework and Microsoft Graph token requests. The repository keeps this commented in `.env.example` because operators can also set it in the Settings UI. | Required for real Microsoft integrations | Empty | `00000000-0000-0000-0000-000000000000` | No |
+| `MS_APP_CLIENT_SECRET` | Entra app client secret. The repository keeps this commented in `.env.example` because operators can also set it in the Settings UI. | Required for real Microsoft integrations | Empty | `change-me` | Yes |
+| `BOTFRAMEWORK_SCOPE` | OAuth scope requested for Bot Framework tokens. The repository keeps this commented in `.env.example` because operators can also set it in the Settings UI. | No | `https://api.botframework.com/.default` | `https://api.botframework.com/.default` | No |
+| `GRAPH_SCOPE` | OAuth scope requested for Microsoft Graph app-only tokens. The repository keeps this commented in `.env.example` because operators can also set it in the Settings UI. | No | `https://graph.microsoft.com/.default` | `https://graph.microsoft.com/.default` | No |
+| `BOT_FRAMEWORK_ENABLED` | Enables Bot Framework route setup, delivery, and readiness impact. The repository keeps this commented in `.env.example` because operators can also set it in the Settings UI. | No | `true` | `true` | No |
+| `GRAPH_LOOKUP_ENABLED` | Enables Graph target search, name refresh, and readiness impact. The repository keeps this commented in `.env.example` because operators can also set it in the Settings UI. | No | `true` | `true` | No |
+| `GRAPH_DELIVERY_ENABLED` | Enables delegated Graph delivery. Requires Graph lookup to remain enabled. The repository keeps this commented in `.env.example` because operators can also set it in the Settings UI. | No | `true` | `true` | No |
+| `BOT_DELIVERY_MODE` | `real` sends through Microsoft services; `mock` simulates delivery. Invalid values normalize to `mock`. This remains an environment-only developer override and is not editable in the Settings UI. | No | `real` | `mock` | No |
 | `BOT_DEFAULT_SERVICE_URL` | Optional fallback Bot Framework service URL. Route-specific values still take precedence. | Required for some real Bot Framework setups | Empty | `https://smba.trafficmanager.net/emea/` | No |
 | `MONITORING_API_KEY` | Bearer token for `/api/v1/monitoring/status`. Empty disables the endpoint with `503`. | Required for monitoring endpoint | Empty | `change-me` | Yes |
 | `SESSION_SECRET` | Secret used for session signing and OAuth state protection. If omitted, an instance secret is generated and stored at first startup. | No | Generated instance secret | Secret manager value | Yes |
@@ -50,23 +61,25 @@ When the default organization has no admin users, the frontend shows the first-r
 
 ## Docker Compose Overrides
 
-`docker-compose.yml` loads `.env` into the backend and overrides:
+`docker-compose.yml` loads `.env` into the backend and applies these stack defaults:
 
 ```text
-DATABASE_URL=postgresql+psycopg2://app:app@postgres:5432/app
-TRUST_X_FORWARDED_FOR=true
-TRUSTED_PROXY_IPS=172.30.0.10
+DATABASE_URL=${DATABASE_URL:-postgresql+psycopg2://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-app}}
+COMPOSE_APP_SUBNET=${COMPOSE_APP_SUBNET:-172.30.0.0/24}
+TRUST_X_FORWARDED_FOR=${TRUST_X_FORWARDED_FOR:-true}
 ```
 
-The fixed trusted proxy IP belongs to the bundled HAProxy service on the internal Compose network. This makes webhook abuse blocking use the real caller from `X-Forwarded-For` instead of grouping all callers under the proxy IP.
+The bundled HAProxy is always trusted through `COMPOSE_APP_SUBNET`. Additional upstream reverse proxies belong in `TRUSTED_PROXY_IPS`. This makes webhook abuse blocking use the caller from `X-Forwarded-For` when the direct proxy hop is the bundled HAProxy, while still allowing an explicit trust chain through approved upstream proxies.
 
-The bundled Postgres service uses local development credentials:
+The bundled Postgres service uses local development bootstrap values:
 
 - `POSTGRES_DB=app`
 - `POSTGRES_USER=app`
 - `POSTGRES_PASSWORD=app`
 
-Do not reuse these credentials for production.
+Do not reuse these values for production. `POSTGRES_*` values are applied by the Postgres image only when a new `postgres_data` volume is initialized. They are not ongoing credential management for an existing database. To rotate credentials for an existing database, change the user/password in Postgres, update `DATABASE_URL` if needed, and restart the backend.
+
+If production database credentials contain URL-special characters, set `DATABASE_URL` explicitly with proper URL encoding instead of relying on the Compose fallback assembled from `POSTGRES_*`.
 
 ## Admin-Overridable Runtime Settings
 
@@ -74,7 +87,6 @@ These settings are defined in `backend/app/core/settings_overrides.py` and can b
 
 | Key | Type | Secret | Validation / Notes |
 |---|---|---:|---|
-| `bot_delivery_mode` | enum | No | `mock` or `real`. |
 | `bot_framework_enabled` | bool | No | Enables Bot Framework setup, delivery, and readiness impact. |
 | `graph_lookup_enabled` | bool | No | Enables Graph target search and name refresh. |
 | `graph_delivery_enabled` | bool | No | Requires `graph_lookup_enabled=true`. |
@@ -83,13 +95,12 @@ These settings are defined in `backend/app/core/settings_overrides.py` and can b
 | `webhook_abuse_blocking_enabled` | bool | No | Enables temporary blocking for repeated failed webhook attempts. |
 | `webhook_abuse_failure_limit` | int | No | Minimum `1`; default code value is `10`. |
 | `webhook_abuse_window_minutes` | int | No | Minimum `1`; default code value is `10`. |
-| `webhook_abuse_initial_block_minutes` | int | No | Minimum `1`; default code value is `10`. |
-| `webhook_abuse_max_block_minutes` | int | No | Minimum `1`; default code value is `1440`. |
-| `webhook_abuse_cleanup_days` | int | No | Minimum `1`; controls cleanup of inactive abuse tracking records. |
 | `log_retention_days` | int | No | Minimum `0`. |
 | `log_cleanup_interval_minutes` | int | No | Minimum `1`. |
+| `event_debug_previews_enabled` | bool | No | When enabled, event log entries keep redacted, size-clipped previews of raw payloads. Disabled by default; previews are empty when off. |
+| `session_secure_cookie` | bool | No | Applies the session cookie `Secure` flag immediately for new logins. |
 | `trust_x_forwarded_for` | bool | No | Runtime override for trusting `X-Forwarded-For` from trusted proxies. |
-| `trusted_proxy_ips` | string | No | Comma-separated IP addresses or CIDR ranges for trusted reverse proxies. |
+| `cors_origins` | string | No | Comma-separated HTTP/HTTPS origins; scheme, host, and optional port only. |
 | `app_public_base_url` | url | No | Valid `http`/`https` URL. |
 | `frontend_base_url` | url | No | Valid `http`/`https` URL. |
 | `ms_app_tenant_id` | string | No | Shared Microsoft tenant ID. |
@@ -99,6 +110,10 @@ These settings are defined in `backend/app/core/settings_overrides.py` and can b
 | `graph_scope` | string | No | Microsoft Graph OAuth scope. |
 
 Secret overrides are encrypted at rest using Fernet with `SETTINGS_ENC_KEY`. `SESSION_SECRET` is not used for settings encryption.
+
+Advanced webhook abuse timings stay in environment configuration. Only `webhook_abuse_blocking_enabled`, `webhook_abuse_failure_limit`, and `webhook_abuse_window_minutes` are admin-overridable runtime settings.
+
+`TRUSTED_PROXY_IPS` is environment-only because the bundled HAProxy consumes the same value at container start. The admin readiness view reports the effective compose subnet, trusted upstream proxies, and combined trust chain as read-only diagnostics.
 
 ## Session Secret And Scaling
 

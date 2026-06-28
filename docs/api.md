@@ -80,23 +80,35 @@ The route token is secret. Do not log or publish real relay URLs.
 | `GET` | `/api/v1/webhook-delivery-events/{event_id}` | Admin session | Delivery event detail. |
 | `POST` | `/api/v1/webhook-delivery-events/cleanup` | Admin session + CSRF | Manual delivery/audit/bot activity cleanup. |
 | `GET` | `/api/v1/admin/logs` | Admin session + CSRF | Audit events. |
+| `GET` | `/api/v1/admin/event-logs` | Admin session + CSRF | Paginated unified event log with level, category, type, correlation/request ID, and search filters. |
+| `POST` | `/api/v1/admin/client-events` | Admin session + CSRF | Records a frontend-originated event log entry. |
 | `GET` | `/api/v1/admin/system-logs` | Admin session + CSRF | Captured Teams bot activity events. |
 | `POST` | `/api/v1/admin/logs/cleanup` | Admin session + CSRF | Manual cleanup endpoint exposed by the admin router. |
+
+## Webhook Abuse Blocking
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/admin/webhook-abuse-buckets` | Admin session + CSRF | List currently blocked clients and clients observed within the active abuse window. |
+| `DELETE` | `/api/v1/admin/webhook-abuse-buckets/{bucket_id}` | Admin session + CSRF | Unblock a client and clear its current failure count while keeping escalation history. |
+| `POST` | `/api/v1/admin/webhook-abuse-buckets/cleanup` | Admin session + CSRF | Remove inactive abuse tracking buckets older than `WEBHOOK_ABUSE_CLEANUP_DAYS`. |
 
 ## Admin Settings And Readiness
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/api/v1/admin/settings` | Admin session + CSRF | List overridable settings with environment, effective, and override state. |
+| `GET` | `/api/v1/admin/settings` | Admin session + CSRF | List overridable settings with environment, effective, and override state. Proxy trust ranges that must also be consumed by HAProxy remain environment-only and are not writable here. |
 | `PUT` | `/api/v1/admin/settings/{key}` | Admin session + CSRF | Set or update one override. |
 | `DELETE` | `/api/v1/admin/settings/{key}` | Admin session + CSRF | Remove one override and restore environment value. |
-| `GET` | `/api/v1/admin/readiness` | Admin session + CSRF | Return non-secret Bot, Graph, OAuth, runtime, payload, retention, and cookie diagnostics. |
+| `GET` | `/api/v1/admin/readiness` | Admin session + CSRF | Return non-secret Bot, Graph, OAuth, runtime, payload, retention, cookie, and proxy trust diagnostics. |
 | `GET` | `/api/v1/admin/users` | Admin session + CSRF | List users in the current organization. |
 | `POST` | `/api/v1/admin/users` | Admin session + CSRF | Create a user. |
 | `PATCH` | `/api/v1/admin/users/{user_id}` | Admin session + CSRF | Update a user email, display name, role, or active status. |
 | `PUT` | `/api/v1/admin/users/{user_id}/password` | Admin session + CSRF | Set a user password. |
 
 Secret setting values are write-only. Responses report configured/missing state, not plaintext.
+
+The readiness runtime payload includes the configured Compose subnet, additional trusted upstream proxies, and the combined effective trust chain used for forwarded client IP resolution.
 
 ## Graph Delivery OAuth
 
