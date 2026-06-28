@@ -14,7 +14,7 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.settings_overrides import clear_override, get_effective_settings, list_setting_items, set_override
@@ -1138,8 +1138,22 @@ def list_webhook_abuse_buckets(
     db: Session = Depends(get_db),
 ):
     _ = admin
+    settings = get_effective_settings()
+    now = utcnow()
+    observed_cutoff = now - timedelta(minutes=settings.webhook_abuse_window_minutes)
     rows = db.scalars(
-        select(WebhookAbuseBucket).order_by(WebhookAbuseBucket.last_seen_at.desc()).limit(limit)
+        select(WebhookAbuseBucket)
+        .where(
+            or_(
+                WebhookAbuseBucket.blocked_until > now,
+                and_(
+                    WebhookAbuseBucket.failure_count > 0,
+                    WebhookAbuseBucket.window_started_at >= observed_cutoff,
+                ),
+            )
+        )
+        .order_by(WebhookAbuseBucket.last_seen_at.desc())
+        .limit(limit)
     ).all()
     return [_webhook_abuse_bucket_out(row) for row in rows]
 

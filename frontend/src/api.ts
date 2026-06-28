@@ -134,7 +134,7 @@ export const api = {
   adminWebhookAbuseBuckets(csrfToken: string) {
     return request<WebhookAbuseBucketOut[]>("/api/v1/admin/webhook-abuse-buckets", { csrfToken });
   },
-  resetWebhookAbuseBucket(csrfToken: string, id: string) {
+  unblockWebhookAbuseBucket(csrfToken: string, id: string) {
     return request<WebhookAbuseBucketOut>(`/api/v1/admin/webhook-abuse-buckets/${encodeURIComponent(id)}`, {
       method: "DELETE",
       csrfToken,

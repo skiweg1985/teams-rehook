@@ -292,6 +292,28 @@ def test_client_host_uses_x_forwarded_for_from_trusted_proxy(monkeypatch: pytest
         get_settings.cache_clear()
 
 
+def test_client_host_uses_compose_haproxy_forwarded_client(monkeypatch: pytest.MonkeyPatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("TRUST_X_FORWARDED_FOR", "true")
+    monkeypatch.setenv("TRUSTED_PROXY_IPS", "172.30.0.10")
+    get_settings.cache_clear()
+    request = SimpleNamespace(
+        client=SimpleNamespace(host="172.30.0.10"),
+        headers={"x-forwarded-for": "203.0.113.42"},
+    )
+
+    try:
+        assert _resolve_client_host(request) == (
+            "203.0.113.42",
+            "172.30.0.10",
+            "203.0.113.42",
+            "x_forwarded_for",
+        )
+    finally:
+        get_settings.cache_clear()
+
+
 def test_client_host_ignores_x_forwarded_for_from_untrusted_proxy(monkeypatch: pytest.MonkeyPatch):
     from app.core.config import get_settings
 
@@ -451,7 +473,31 @@ def test_webhook_abuse_uses_resolved_forwarded_client(
     }
 
 
-def test_admin_can_list_reset_and_cleanup_webhook_abuse_buckets(client: TestClient, db_session: Session):
+def test_admin_webhook_abuse_list_hides_expired_observed_clients(client: TestClient, db_session: Session):
+    csrf_token = login_admin(client)
+    set_admin_setting(client, csrf_token, "webhook_abuse_failure_limit", "10")
+    set_admin_setting(client, csrf_token, "webhook_abuse_window_minutes", "10")
+
+    rejected = client.post("/api/v1/webhooks/observed-token", json={"text": "hello"})
+    assert rejected.status_code == 404
+
+    recent_response = client.get("/api/v1/admin/webhook-abuse-buckets", headers={"X-CSRF-Token": csrf_token})
+    assert recent_response.status_code == 200
+    assert len(recent_response.json()) == 1
+    assert recent_response.json()[0]["status"] == "watching"
+
+    bucket = db_session.scalar(select(WebhookAbuseBucket))
+    assert bucket is not None
+    bucket.window_started_at = utcnow() - timedelta(minutes=11)
+    bucket.last_seen_at = utcnow() - timedelta(minutes=11)
+    db_session.commit()
+
+    expired_response = client.get("/api/v1/admin/webhook-abuse-buckets", headers={"X-CSRF-Token": csrf_token})
+    assert expired_response.status_code == 200
+    assert expired_response.json() == []
+
+
+def test_admin_can_list_unblock_and_cleanup_webhook_abuse_buckets(client: TestClient, db_session: Session):
     csrf_token = login_admin(client)
     set_admin_setting(client, csrf_token, "webhook_abuse_failure_limit", "1")
 
@@ -468,6 +514,7 @@ def test_admin_can_list_reset_and_cleanup_webhook_abuse_buckets(client: TestClie
     assert buckets[0]["status"] == "blocked"
     assert buckets[0]["client_host"] == "testclient"
     assert buckets[0]["client_fingerprint"]
+    assert buckets[0]["block_count"] == 1
 
     reset_without_csrf = client.delete(f"/api/v1/admin/webhook-abuse-buckets/{buckets[0]['id']}")
     assert reset_without_csrf.status_code == 403
@@ -479,6 +526,12 @@ def test_admin_can_list_reset_and_cleanup_webhook_abuse_buckets(client: TestClie
     assert reset_response.status_code == 200
     assert reset_response.json()["status"] == "watching"
     assert reset_response.json()["failure_count"] == 0
+    assert reset_response.json()["block_count"] == 1
+    assert reset_response.json()["blocked_until"] is None
+
+    add_route(db_session, token="after-unblock-token")
+    delivered = client.post("/api/v1/webhooks/after-unblock-token", json={"text": "valid after unblock"})
+    assert delivered.status_code == 200
 
     old_bucket = WebhookAbuseBucket(
         bucket_key="old-cleanup-bucket",

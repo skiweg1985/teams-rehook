@@ -5774,7 +5774,7 @@ function SystemLogsPage() {
   const [loading, setLoading] = useState(true);
   const [cleanupBusy, setCleanupBusy] = useState(false);
   const [abuseCleanupBusy, setAbuseCleanupBusy] = useState(false);
-  const [resettingClientKey, setResettingClientKey] = useState("");
+  const [unblockingClientKey, setUnblockingClientKey] = useState("");
   const [error, setError] = useState("");
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
 
@@ -5843,30 +5843,30 @@ function SystemLogsPage() {
     }
   }
 
-  async function resetAbuseClient(client: WebhookAbuseClientRow) {
-    setResettingClientKey(client.key);
+  async function unblockAbuseClient(client: WebhookAbuseClientRow) {
+    setUnblockingClientKey(client.key);
     try {
-      await Promise.all(client.buckets.map((bucket) => api.resetWebhookAbuseBucket(csrfToken, bucket.id)));
+      await Promise.all(client.buckets.map((bucket) => api.unblockWebhookAbuseBucket(csrfToken, bucket.id)));
       notify({
         tone: "success",
-        title: "Webhook client reset",
-        description: `${client.clientHost || client.clientFingerprint} is watching again.`,
+        title: "Webhook client unblocked",
+        description: `${client.clientHost || client.clientFingerprint} is no longer actively blocked.`,
       });
       await refresh();
     } catch (err) {
       notify({
         tone: "error",
-        title: "Reset failed",
-        description: isApiError(err) ? err.message : "Webhook abuse client could not be reset.",
+        title: "Unblock failed",
+        description: isApiError(err) ? err.message : "Webhook abuse client could not be unblocked.",
       });
     } finally {
-      setResettingClientKey("");
+      setUnblockingClientKey("");
     }
   }
 
   const abuseClients = useMemo(() => buildWebhookAbuseClients(abuseBuckets), [abuseBuckets]);
   const activeBlockCount = abuseClients.filter((client) => client.status === "blocked").length;
-  const watchedClientCount = abuseClients.filter((client) => client.status === "watching").length;
+  const observedClientCount = abuseClients.filter((client) => client.status === "watching").length;
   const unknownAuthCount = systemLogs.filter((event) => event.auth_status !== "verified").length;
   const lastActivityAt = latestDate(
     [
@@ -5876,7 +5876,7 @@ function SystemLogsPage() {
     ].filter(Boolean),
   );
   const attentionClients = abuseClients.filter((client) => client.status === "blocked").slice(0, 3);
-  const watchedClients = abuseClients.filter((client) => client.status === "watching").slice(0, 3);
+  const observedClients = abuseClients.filter((client) => client.status === "watching").slice(0, 3);
 
   return (
     <>
@@ -5886,7 +5886,11 @@ function SystemLogsPage() {
         description="Monitor ingress protection, admin actions and Teams bot activity from one operational view."
         actions={
           <div className="system-logs-actions">
-            <StatusBadge label={activeBlockCount ? `${activeBlockCount} blocked` : "No active blocks"} tone={activeBlockCount ? "warn" : "success"} />
+            <StatusBadge
+              label={activeBlockCount ? `${activeBlockCount} blocked` : "No active blocks"}
+              title={activeBlockCount ? "These clients are currently receiving 429 responses." : "No webhook client is currently blocked."}
+              tone={activeBlockCount ? "warn" : "success"}
+            />
             <button className="secondary-button button-with-icon" type="button" disabled={loading} onClick={() => void refresh()}>
               <RefreshCw aria-hidden="true" className={classNames("button-icon", loading && "button-icon--spin")} focusable="false" />
               Refresh
@@ -5916,7 +5920,7 @@ function SystemLogsPage() {
           icon={ShieldAlert}
           label="Ingress protection"
           value={activeBlockCount ? `${activeBlockCount} blocked` : "Clear"}
-          context={`${watchedClientCount} watched ${watchedClientCount === 1 ? "client" : "clients"}`}
+          context={`${observedClientCount} observed ${observedClientCount === 1 ? "client" : "clients"}`}
           tone={activeBlockCount ? "warn" : "success"}
         />
         <SystemSummaryTile
@@ -5949,21 +5953,21 @@ function SystemLogsPage() {
             <h2>{activeBlockCount ? "Ingress needs attention" : "Ingress is quiet"}</h2>
             <p>
               {activeBlockCount
-                ? "Blocked webhook clients are listed first so they can be reviewed or reset quickly."
-                : "No active webhook blocks. Watched clients are still visible for early signal detection."}
+                ? "Blocked webhook clients are listed first so they can be reviewed or unblocked quickly."
+                : "No active webhook blocks. Observed clients only mean failed attempts were seen."}
             </p>
           </div>
         </div>
         <div className="attention-client-list">
-          {(attentionClients.length ? attentionClients : watchedClients).map((client) => (
+          {(attentionClients.length ? attentionClients : observedClients).map((client) => (
             <AbuseClientCompactRow
               key={client.key}
               client={client}
-              resetting={resettingClientKey === client.key}
-              onReset={() => void resetAbuseClient(client)}
+              unblocking={unblockingClientKey === client.key}
+              onUnblock={() => void unblockAbuseClient(client)}
             />
           ))}
-          {!attentionClients.length && !watchedClients.length ? (
+          {!attentionClients.length && !observedClients.length ? (
             <div className="attention-empty">
               <strong>No tracked clients</strong>
               <span>Repeated failed webhook attempts will appear here.</span>
@@ -5991,14 +5995,14 @@ function SystemLogsPage() {
         }
       >
         {activeTab === "security" ? (
-          <SystemLogState loading={loading} error={error} empty={!abuseClients.length} emptyTitle="No webhook abuse clients" emptyBody="Failed webhook attempts will appear here when a client starts being watched." onRetry={() => void refresh()}>
+          <SystemLogState loading={loading} error={error} empty={!abuseClients.length} emptyTitle="No webhook abuse clients" emptyBody="Failed webhook attempts will appear here when a client starts being observed." onRetry={() => void refresh()}>
             <div className="activity-list">
               {abuseClients.map((client) => (
                 <AbuseClientActivityRow
                   key={client.key}
                   client={client}
-                  resetting={resettingClientKey === client.key}
-                  onReset={() => void resetAbuseClient(client)}
+                  unblocking={unblockingClientKey === client.key}
+                  onUnblock={() => void unblockAbuseClient(client)}
                 />
               ))}
             </div>
@@ -6102,64 +6106,93 @@ function SystemLogState({
 
 function AbuseClientCompactRow({
   client,
-  resetting,
-  onReset,
+  unblocking,
+  onUnblock,
 }: {
   client: WebhookAbuseClientRow;
-  resetting: boolean;
-  onReset: () => void;
+  unblocking: boolean;
+  onUnblock: () => void;
 }) {
   return (
     <div className="attention-client-row">
       <div>
         <strong>{client.clientHost || "Unknown client"}</strong>
-        <span>{abuseReasonLabel(client.lastReason)} · {formatRelativeTime(client.lastSeen)}</span>
+        <span>{abuseReasonLabel(client.lastReason)} · {client.failureCount} failed attempts · {formatRelativeTime(client.lastSeen)}</span>
       </div>
-      <StatusBadge label={client.status === "blocked" ? "Blocked" : "Watching"} tone={client.status === "blocked" ? "warn" : "neutral"} />
-      <button className="secondary-button secondary-button--small" type="button" disabled={resetting} onClick={onReset}>
-        {resetting ? "Resetting..." : "Reset"}
-      </button>
+      <StatusBadge
+        label={abuseStatusLabel(client.status)}
+        title={abuseStatusTooltip(client.status)}
+        tone={client.status === "blocked" ? "warn" : "neutral"}
+      />
+      {client.status === "blocked" ? (
+        <button
+          className="secondary-button secondary-button--small"
+          type="button"
+          disabled={unblocking}
+          title="Remove the active block and clear current failed attempts. Previous block history is kept."
+          onClick={onUnblock}
+        >
+          {unblocking ? "Unblocking..." : "Unblock"}
+        </button>
+      ) : null}
     </div>
   );
 }
 
 function AbuseClientActivityRow({
   client,
-  resetting,
-  onReset,
+  unblocking,
+  onUnblock,
 }: {
   client: WebhookAbuseClientRow;
-  resetting: boolean;
-  onReset: () => void;
+  unblocking: boolean;
+  onUnblock: () => void;
 }) {
   return (
     <article className="activity-row">
       <div className="activity-row-main">
-        <StatusBadge label={client.status === "blocked" ? "Blocked" : "Watching"} tone={client.status === "blocked" ? "warn" : "neutral"} />
+        <StatusBadge
+          label={abuseStatusLabel(client.status)}
+          title={abuseStatusTooltip(client.status)}
+          tone={client.status === "blocked" ? "warn" : "neutral"}
+        />
         <div className="activity-row-copy">
           <strong>{client.clientHost || "Unknown webhook client"}</strong>
-          <span>{abuseReasonLabel(client.lastReason)} · {client.failureCount} failures · {client.bucketCount} {client.bucketCount === 1 ? "bucket" : "buckets"}</span>
+          <span>
+            {abuseReasonLabel(client.lastReason)} · {client.failureCount} failed attempts
+            {client.blockedUntil ? ` · blocked until ${formatDateTime(client.blockedUntil)}` : ""}
+          </span>
         </div>
       </div>
       <div className="activity-row-meta">
         <span>{formatRelativeTime(client.lastSeen)}</span>
-        <button className="secondary-button secondary-button--small" type="button" disabled={resetting} onClick={onReset}>
-          {resetting ? "Resetting..." : "Reset"}
-        </button>
+        {client.status === "blocked" ? (
+          <button
+            className="secondary-button secondary-button--small"
+            type="button"
+            disabled={unblocking}
+            title="Remove the active block and clear current failed attempts. Previous block history is kept."
+            onClick={onUnblock}
+          >
+            {unblocking ? "Unblocking..." : "Unblock"}
+          </button>
+        ) : null}
       </div>
       <details className="activity-row-details">
-        <summary>Details</summary>
+        <summary>Technical details</summary>
         <dl className="definition-list definition-list--compact">
-          <dt>Fingerprint</dt>
+          <dt>Client fingerprint</dt>
           <dd><code>{client.clientFingerprint || "-"}</code></dd>
           <dt>Activity</dt>
           <dd>{client.activityLabel}</dd>
-          <dt>Routes</dt>
+          <dt>Route fingerprints</dt>
           <dd>{client.routeFingerprints.length ? client.routeFingerprints.map((value) => `route ${value}`).join(", ") : "all routes"}</dd>
           <dt>Blocked until</dt>
           <dd>{client.blockedUntil ? formatDateTime(client.blockedUntil) : "-"}</dd>
-          <dt>Blocks</dt>
+          <dt>Previous blocks</dt>
           <dd>{client.blockCount}</dd>
+          <dt>Tracked records</dt>
+          <dd>{client.bucketCount}</dd>
         </dl>
       </details>
     </article>
@@ -6259,9 +6292,20 @@ function abuseReasonLabel(reason: string): string {
       return "Route disabled";
     case "unknown_route":
       return "Unknown route";
+    case "client_ip_not_allowed":
+      return "Client IP not allowed";
     default:
       return reason || "-";
   }
+}
+
+function abuseStatusLabel(status: "watching" | "blocked"): string {
+  return status === "blocked" ? "Blocked" : "Observed";
+}
+
+function abuseStatusTooltip(status: "watching" | "blocked"): string {
+  if (status === "blocked") return "This client is currently blocked and receives 429 responses.";
+  return "Failed attempts were seen, but this client is not currently blocked.";
 }
 
 type WebhookAbuseClientRow = {
@@ -6294,6 +6338,7 @@ function buildWebhookAbuseClients(buckets: WebhookAbuseBucketOut[]): WebhookAbus
       const blockedUntil = latestDate(blockedBuckets.map((bucket) => bucket.blocked_until).filter((value): value is string => Boolean(value)));
       const routeFingerprints = Array.from(new Set(rows.map((bucket) => bucket.route_token_fingerprint).filter(Boolean)));
       const hasAllRoutes = rows.some((bucket) => !bucket.route_token_fingerprint);
+      const failureCount = rows.reduce((sum, bucket) => sum + bucket.failure_count, 0);
       return {
         key,
         buckets: rows,
@@ -6301,7 +6346,7 @@ function buildWebhookAbuseClients(buckets: WebhookAbuseBucketOut[]): WebhookAbus
         clientHost: sortedBySeen[0]?.client_host ?? "",
         clientFingerprint: sortedBySeen[0]?.client_fingerprint ?? "",
         routeFingerprints,
-        failureCount: rows.reduce((sum, bucket) => sum + bucket.failure_count, 0),
+        failureCount,
         blockCount: rows.reduce((sum, bucket) => sum + bucket.block_count, 0),
         bucketCount: rows.length,
         lastReason: sortedBySeen.find((bucket) => bucket.last_reason)?.last_reason ?? "",
@@ -6310,6 +6355,7 @@ function buildWebhookAbuseClients(buckets: WebhookAbuseBucketOut[]): WebhookAbus
         activityLabel: abuseActivityLabel(hasAllRoutes, routeFingerprints.length),
       } satisfies WebhookAbuseClientRow;
     })
+    .filter((client) => client.status === "blocked" || client.failureCount > 0)
     .sort((a, b) => {
       if (a.status !== b.status) return a.status === "blocked" ? -1 : 1;
       return timestampMs(b.lastSeen) - timestampMs(a.lastSeen);

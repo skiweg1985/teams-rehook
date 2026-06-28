@@ -32,6 +32,14 @@ HAProxy health checks:
 - Backend: `/api/v1/health`
 - Frontend: `/`
 
+The Compose stack uses a fixed internal network so the backend can trust `X-Forwarded-For` only when the direct client is the bundled HAProxy container:
+
+- `proxy`: `172.30.0.10`
+- `backend`: `TRUST_X_FORWARDED_FOR=true`
+- `backend`: `TRUSTED_PROXY_IPS=172.30.0.10`
+
+This lets automatic abuse blocking group attempts by the real caller IP instead of the proxy IP. Do not broaden `TRUSTED_PROXY_IPS` to public networks; clients must not be able to self-declare their source address.
+
 The proxy generates or uses local development certificates in `devcert/` through `haproxy/start-haproxy.sh`. This is suitable for local development only.
 
 ## Ports
@@ -79,8 +87,9 @@ The local HAProxy config binds HTTP and HTTPS and forwards:
 
 - `/api` and `/api/*` to backend.
 - All other paths to frontend.
+- `X-Forwarded-For`, `X-Forwarded-Proto`, and `X-Forwarded-Host` to the backend.
 
-For production, define TLS termination and public URL policy outside this repository.
+For production, define TLS termination and public URL policy outside this repository. If another reverse proxy replaces HAProxy, set `TRUSTED_PROXY_IPS` to that proxy's private IP address or CIDR range and keep `TRUST_X_FORWARDED_FOR=true` only when that direct proxy boundary is controlled.
 
 TODO: Document the intended production reverse proxy, TLS certificate source, HSTS policy, and allowed public origins.
 
