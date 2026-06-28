@@ -305,7 +305,7 @@ function LoginScreen() {
             <input
               value={email}
               autoComplete="email"
-              placeholder="admin@example.local"
+              placeholder="admin@example.com"
               required
               onChange={(event) => setEmail(event.target.value)}
             />
@@ -323,6 +323,99 @@ function LoginScreen() {
           {error ? <p className="form-error">{error}</p> : null}
           <button className="primary-button" type="submit" disabled={busy}>
             {busy ? "Signing in..." : "Sign in"}
+          </button>
+        </form>
+      </section>
+    </main>
+  );
+}
+
+function FirstAdminSetupScreen() {
+  const { createFirstAdmin } = useAppContext();
+  const [email, setEmail] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (password !== confirmPassword) {
+      setError("Passwords do not match");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await createFirstAdmin(email, displayName, password);
+      window.history.replaceState(null, "", "/dashboard");
+    } catch (err) {
+      setError(isApiError(err) ? err.message : err instanceof Error ? err.message : "Setup failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="login-screen">
+      <section className="login-panel setup-panel">
+        <div className="login-panel-header">
+          <div className="app-mark">T</div>
+          <ThemeToggle />
+        </div>
+        <div>
+          <p className="eyebrow">First-run setup</p>
+          <h1>Create the first admin</h1>
+          <p className="lede">This account controls Teams Rehook administration for the default workspace.</p>
+        </div>
+        <form className="compact-form" onSubmit={submit}>
+          <Field label="Email">
+            <input
+              value={email}
+              autoComplete="email"
+              placeholder="admin@example.com"
+              required
+              onChange={(event) => setEmail(event.target.value)}
+            />
+          </Field>
+          <Field label="Display name">
+            <input
+              value={displayName}
+              autoComplete="name"
+              placeholder="Operations Admin"
+              required
+              maxLength={255}
+              onChange={(event) => setDisplayName(event.target.value)}
+            />
+          </Field>
+          <Field label="Password">
+            <input
+              value={password}
+              type="password"
+              autoComplete="new-password"
+              placeholder="Set a password"
+              required
+              minLength={8}
+              maxLength={200}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+          </Field>
+          <Field label="Confirm password">
+            <input
+              value={confirmPassword}
+              type="password"
+              autoComplete="new-password"
+              placeholder="Repeat the password"
+              required
+              minLength={8}
+              maxLength={200}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+            />
+          </Field>
+          {error ? <p className="form-error">{error}</p> : null}
+          <button className="primary-button" type="submit" disabled={busy}>
+            {busy ? "Creating admin..." : "Create admin"}
           </button>
         </form>
       </section>
@@ -5951,6 +6044,7 @@ function timestampMs(value: string): number {
 function InnerApp() {
   const { session } = useAppContext();
   if (session.status === "booting") return <LoadingScreen label="Loading workspace" />;
+  if (session.status === "setup") return <FirstAdminSetupScreen />;
   if (session.status === "anonymous") return <LoginScreen />;
   return <AppShell />;
 }

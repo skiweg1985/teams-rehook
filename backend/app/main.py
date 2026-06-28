@@ -10,6 +10,7 @@ from app.seed import init_db
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    settings.ensure_session_secret()
     app = FastAPI(
         title=settings.app_name,
         version=settings.app_version,

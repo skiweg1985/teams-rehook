@@ -11,7 +11,7 @@ from app.core.config import get_settings
 
 def _fernet() -> Fernet:
     settings = get_settings()
-    source = (settings.settings_enc_key or settings.session_secret or "change-me-session-secret").strip()
+    source = (settings.settings_enc_key or settings.ensure_session_secret()).strip()
     digest = hashlib.sha256(source.encode("utf-8")).digest()
     return Fernet(base64.urlsafe_b64encode(digest))
 

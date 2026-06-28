@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import secrets
 
+from pydantic import PrivateAttr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+PLACEHOLDER_SESSION_SECRETS = {"change-me-session-secret", "change-me", "changeme", "secret", "default"}
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="", extra="ignore")
+    _session_secret_generated: bool = PrivateAttr(default=False)
 
     app_name: str = "Teams Rehook"
     app_version: str = "0.1.0"
@@ -19,7 +24,7 @@ class Settings(BaseSettings):
     session_cookie_name: str = "teams_rehook_session"
     session_ttl_hours: int = 8
     session_secure_cookie: bool = False
-    session_secret: str = "change-me-session-secret"
+    session_secret: str = ""
 
     default_org_slug: str = "default"
     default_org_name: str = "Default Organization"
@@ -55,6 +60,24 @@ class Settings(BaseSettings):
     def bot_delivery_mode_normalized(self) -> str:
         mode = self.bot_delivery_mode.strip().lower()
         return mode if mode in {"mock", "real"} else "mock"
+
+    def has_configured_session_secret(self) -> bool:
+        return bool(self.session_secret.strip()) and not self._session_secret_generated
+
+    def ensure_session_secret(self) -> str:
+        if not self.session_secret.strip():
+            self.session_secret = secrets.token_urlsafe(48)
+            self._session_secret_generated = True
+        return self.session_secret
+
+    def use_generated_session_secret(self, value: str) -> None:
+        self.session_secret = value
+        self._session_secret_generated = True
+
+
+def is_placeholder_session_secret(value: str) -> bool:
+    normalized = value.strip().lower()
+    return not normalized or normalized in PLACEHOLDER_SESSION_SECRETS or normalized.startswith("change-me")
 
 
 @lru_cache

@@ -67,6 +67,6 @@ Reviewed documentation and documentation-like sources:
 
 ## Security Review
 
-No real secrets were intentionally copied into documentation. Placeholder values such as `change-me`, `admin@example.local`, and localhost URLs remain for local setup examples.
+No real secrets were intentionally copied into documentation. Placeholder values such as `change-me` and localhost URLs remain for local setup examples.
 
 Documentation now treats relay URLs, session secrets, Microsoft client secrets, monitoring API keys, bootstrap passwords, route tokens, and delegated Graph credential material as sensitive.

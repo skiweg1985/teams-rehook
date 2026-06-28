@@ -49,16 +49,13 @@ http://localhost:8080/api/v1/docs
 
 ## First Admin User
 
-On startup, the backend creates a default organization if it does not exist. If that organization has no users, it also creates the first admin:
+On startup, the backend creates a default organization if it does not exist. If that organization has no admin users, the frontend opens the first-run setup screen before the normal sign-in page.
 
-```text
-Email: admin@example.local
-Password: change-me-admin-password
-```
+Enter the first admin's email address, display name, and password in that setup flow. The account is created as an active administrator and is signed in immediately.
 
 `DEFAULT_ORG_*` are code defaults and are not listed in `.env.example`. Add them only if the deployment needs to override the defaults.
 
-Sign in and change the admin user and password before any production-like use. Also change `SESSION_SECRET`.
+`SESSION_SECRET` can be left unset. In that case, startup generates and stores an instance secret automatically in the shared database, so backend replicas using the same database reuse the same value. Operators may still provide `SESSION_SECRET` from a secret manager when they want deployment-managed rotation or stricter stateless rollout controls.
 
 ## Configuration
 

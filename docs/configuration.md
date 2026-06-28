@@ -36,7 +36,7 @@ Use `.env.example` as the safe template. Do not commit a populated `.env`.
 | `BOT_DELIVERY_MODE` | `real` sends through Microsoft services; `mock` simulates delivery. Invalid values normalize to `mock`. | No | `real` | `mock` | No |
 | `BOT_DEFAULT_SERVICE_URL` | Optional fallback Bot Framework service URL. Route-specific values still take precedence. | Required for some real Bot Framework setups | Empty | `https://smba.trafficmanager.net/emea/` | No |
 | `MONITORING_API_KEY` | Bearer token for `/api/v1/monitoring/status`. Empty disables the endpoint with `503`. | Required for monitoring endpoint | Empty | `change-me` | Yes |
-| `SESSION_SECRET` | Secret used for session signing and fallback encryption-key derivation. | Yes | `change-me-session-secret` | `change-me` | Yes |
+| `SESSION_SECRET` | Secret used for session signing and fallback encryption-key derivation. If omitted, an instance secret is generated and stored at first startup. | No | Generated instance secret | Secret manager value | Yes |
 | `SETTINGS_ENC_KEY` | Optional Fernet key for encrypted settings overrides at rest. Falls back to `SESSION_SECRET` if empty. | No | Empty | `change-me` | Yes |
 | `SESSION_COOKIE_NAME` | Session cookie name. | No | `teams_rehook_session` | `teams_rehook_session` | No |
 | `SESSION_TTL_HOURS` | Session lifetime in hours. | No | `8` | `8` | No |
@@ -44,7 +44,7 @@ Use `.env.example` as the safe template. Do not commit a populated `.env`.
 | `DEFAULT_ORG_SLUG` | Bootstrap organization slug. Code default only; not listed in `.env.example`. | No | `default` | `default` | No |
 | `DEFAULT_ORG_NAME` | Bootstrap organization display name. Code default only; not listed in `.env.example`. | No | `Default Organization` | `Operations` | No |
 
-When the default organization has no users, startup creates `admin@example.local` with password `change-me-admin-password`. These bootstrap credentials are fixed code defaults and are not environment settings.
+When the default organization has no admin users, the frontend shows the first-run setup flow. That flow creates the first admin from the email, display name, and password entered by the installer. No fixed admin credentials are created by startup.
 
 ## Docker Compose Overrides
 
@@ -84,11 +84,18 @@ These settings are defined in `backend/app/core/settings_overrides.py` and can b
 | `botframework_scope` | string | No | Bot Framework OAuth scope. |
 | `graph_scope` | string | No | Microsoft Graph OAuth scope. |
 
-Secret overrides are encrypted at rest using Fernet. The encryption key is `SETTINGS_ENC_KEY` when set, otherwise derived from `SESSION_SECRET`.
+Secret overrides are encrypted at rest using Fernet. The encryption key is `SETTINGS_ENC_KEY` when set, otherwise derived from `SESSION_SECRET` or the generated instance secret.
+
+## Session Secret And Scaling
+
+`SESSION_SECRET` is intentionally not listed in `.env.example`. For local and simple Docker deployments, leave it unset: the backend creates one instance secret on first startup, stores it in the shared database, and reuses it after restarts. Backend replicas that use the same database will therefore share the same generated secret.
+
+For production-like deployments with strict secret rotation, stateless release requirements, or controlled multi-region rollout, provide `SESSION_SECRET` from the deployment platform's secret manager instead. All backend replicas in the same environment must use the same value. Never use `change-me` style placeholders; startup rejects placeholder session secrets.
 
 ## Security Notes
 
 - Replace every `change-me` style placeholder before production-like use.
+- Leave `SESSION_SECRET` unset for the generated shared database-backed instance secret, or provide the same strong deployment-managed value to every backend replica.
 - Do not publish `.env`.
 - Treat relay URLs as secrets.
 - Avoid documenting tenant-specific production URLs or credentials in repository docs.

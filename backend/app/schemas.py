@@ -44,6 +44,12 @@ class UserCreateIn(BaseModel):
     is_active: bool = True
 
 
+class FirstAdminCreateIn(BaseModel):
+    email: str = Field(min_length=3, max_length=255)
+    display_name: str = Field(min_length=1, max_length=255)
+    password: str = Field(min_length=8, max_length=200)
+
+
 class UserUpdateIn(BaseModel):
     email: str | None = Field(default=None, min_length=3, max_length=255)
     display_name: str | None = Field(default=None, min_length=1, max_length=255)
@@ -65,6 +71,12 @@ class SessionResponse(BaseModel):
     ok: bool = True
     user: UserOut
     csrf_token: str
+
+
+class SetupStatusOut(BaseModel):
+    ok: bool = True
+    needs_setup: bool
+    admin_exists: bool
 
 
 class AuditEventOut(BaseModel):

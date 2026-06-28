@@ -3,10 +3,12 @@ import type {
   ApiError,
   AuditEventOut,
   BotConversationReferenceOut,
+  FirstAdminCreate,
   GraphDeliveryOAuthStartOut,
   LogCleanupOut,
   SessionResponse,
   SettingItemOut,
+  SetupStatusOut,
   SystemLogEventOut,
   TeamsTargetSearchResult,
   UserCreate,
@@ -72,6 +74,15 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 }
 
 export const api = {
+  setupStatus() {
+    return request<SetupStatusOut>("/api/v1/setup/status");
+  },
+  createFirstAdmin(body: FirstAdminCreate) {
+    return request<SessionResponse>("/api/v1/setup/admin", {
+      method: "POST",
+      body,
+    });
+  },
   login(email: string, password: string) {
     return request<SessionResponse>("/api/v1/auth/login", {
       method: "POST",

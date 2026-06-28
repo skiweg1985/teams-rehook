@@ -7,9 +7,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base
-from app.models import Organization, User
-from app.security import hash_secret, verify_secret
-from app.seed import DEFAULT_BOOTSTRAP_ADMIN_EMAIL, DEFAULT_BOOTSTRAP_ADMIN_PASSWORD, init_db
+from app.models import AppSetting, Organization, User
+from app.security import hash_secret
+from app.seed import INSTANCE_SESSION_SECRET_KEY, init_db
 from app.seed import _ensure_webhook_route_name_backend_uniqueness
 
 
@@ -243,7 +243,7 @@ def test_sqlite_route_name_migration_replaces_old_name_unique_constraint(monkeyp
             )
 
 
-def test_init_db_bootstraps_default_admin_for_empty_org(monkeypatch: pytest.MonkeyPatch):
+def test_init_db_creates_default_org_and_instance_secret_without_bootstrap_admin(monkeypatch: pytest.MonkeyPatch):
     from app.core.config import get_settings
 
     engine = create_engine(
@@ -253,15 +253,38 @@ def test_init_db_bootstraps_default_admin_for_empty_org(monkeypatch: pytest.Monk
         future=True,
     )
     monkeypatch.setattr("app.seed.engine", engine)
+    monkeypatch.setenv("SESSION_SECRET", "")
     get_settings.cache_clear()
     try:
         init_db()
         with Session(engine) as db:
-            user = db.scalar(select(User).where(User.email == DEFAULT_BOOTSTRAP_ADMIN_EMAIL))
-            assert user is not None
-            assert user.is_admin is True
-            assert user.is_active is True
-            assert verify_secret(DEFAULT_BOOTSTRAP_ADMIN_PASSWORD, user.password_hash)
+            org = db.scalar(select(Organization).where(Organization.slug == "default"))
+            users = db.scalars(select(User)).all()
+            instance_secret = db.get(AppSetting, INSTANCE_SESSION_SECRET_KEY)
+            assert org is not None
+            assert users == []
+            assert instance_secret is not None
+            assert len(instance_secret.value) >= 40
+            assert get_settings().session_secret == instance_secret.value
+    finally:
+        get_settings.cache_clear()
+
+
+def test_init_db_rejects_placeholder_session_secret(monkeypatch: pytest.MonkeyPatch):
+    from app.core.config import get_settings
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
+    monkeypatch.setattr("app.seed.engine", engine)
+    monkeypatch.setenv("SESSION_SECRET", "change-me-session-secret")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="SESSION_SECRET"):
+            init_db()
     finally:
         get_settings.cache_clear()
 
@@ -293,6 +316,7 @@ def test_init_db_does_not_bootstrap_default_admin_when_org_has_user(monkeypatch:
         db.commit()
 
     monkeypatch.setattr("app.seed.engine", engine)
+    monkeypatch.setenv("SESSION_SECRET", "")
     get_settings.cache_clear()
     try:
         init_db()

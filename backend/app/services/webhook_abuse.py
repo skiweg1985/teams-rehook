@@ -195,7 +195,7 @@ def _bucket_scopes(route_token_hash: str | None) -> list[tuple[str, str | None]]
 
 def _client_hash(client_host: str) -> str:
     settings = get_effective_settings()
-    secret = settings.session_secret or "change-me-session-secret"
+    secret = settings.ensure_session_secret()
     return hmac.new(secret.encode("utf-8"), client_host.encode("utf-8"), hashlib.sha256).hexdigest()
 
 

@@ -7,16 +7,14 @@ from sqlalchemy import select
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
+from app.core.config import get_settings, is_placeholder_session_secret
 from app.core.settings_overrides import load_overrides
 from app.database import Base, engine
-from app.models import BotActivityEvent, BotConversationReference, Organization, User, WebhookRoute
-from app.security import hash_secret
+from app.models import AppSetting, BotActivityEvent, BotConversationReference, Organization, User, WebhookRoute
+from app.security import issue_plain_secret
 from app.services.log_retention import cleanup_log_events
 
-DEFAULT_BOOTSTRAP_ADMIN_EMAIL = "admin@example.local"
-DEFAULT_BOOTSTRAP_ADMIN_PASSWORD = "change-me-admin-password"
-DEFAULT_BOOTSTRAP_ADMIN_DISPLAY_NAME = "App Admin"
+INSTANCE_SESSION_SECRET_KEY = "__instance_session_secret"
 
 
 def init_db() -> None:
@@ -26,6 +24,7 @@ def init_db() -> None:
     _ensure_webhook_route_name_backend_uniqueness()
     settings = get_settings()
     with Session(engine) as db:
+        _ensure_instance_session_secret(db)
         _backfill_bot_reference_metadata(db)
         _backfill_webhook_route_targets(db)
         cleanup_log_events(db, force=True)
@@ -37,21 +36,24 @@ def init_db() -> None:
             db.add(org)
             db.flush()
 
-        user_count = len(db.scalars(select(User.id).where(User.organization_id == org.id)).all())
-        if user_count == 0:
-            db.add(
-                User(
-                    organization_id=org.id,
-                    email=DEFAULT_BOOTSTRAP_ADMIN_EMAIL,
-                    display_name=DEFAULT_BOOTSTRAP_ADMIN_DISPLAY_NAME,
-                    password_hash=hash_secret(DEFAULT_BOOTSTRAP_ADMIN_PASSWORD),
-                    is_admin=True,
-                    is_active=True,
-                )
-            )
-            db.flush()
-
         db.commit()
+
+
+def _ensure_instance_session_secret(db: Session) -> str:
+    settings = get_settings()
+    if settings.has_configured_session_secret():
+        if is_placeholder_session_secret(settings.session_secret):
+            raise RuntimeError("SESSION_SECRET must not use a placeholder value")
+        return settings.session_secret
+
+    row = db.get(AppSetting, INSTANCE_SESSION_SECRET_KEY)
+    if row is None:
+        row = AppSetting(key=INSTANCE_SESSION_SECRET_KEY, value=issue_plain_secret(48), is_secret=True)
+        db.add(row)
+        db.flush()
+
+    settings.use_generated_session_secret(row.value)
+    return row.value
 
 
 def _backfill_bot_reference_metadata(db: Session) -> None:

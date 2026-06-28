@@ -20,10 +20,23 @@ export type SessionResponse = {
   csrf_token: string;
 };
 
+export type SetupStatusOut = {
+  ok: boolean;
+  needs_setup: boolean;
+  admin_exists: boolean;
+};
+
 export type SessionState =
   | { status: "booting"; user: null; csrfToken: "" }
+  | { status: "setup"; user: null; csrfToken: "" }
   | { status: "anonymous"; user: null; csrfToken: "" }
   | { status: "authenticated"; user: UserOut; csrfToken: string };
+
+export type FirstAdminCreate = {
+  email: string;
+  display_name: string;
+  password: string;
+};
 
 export type UserCreate = {
   email: string;
