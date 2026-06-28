@@ -52,6 +52,8 @@ On first startup, open the application and complete the first-run setup screen. 
 
 `SESSION_SECRET` is optional. If it is omitted, the backend generates and stores an instance secret during first startup. Backend replicas that share the same database reuse that generated secret; production deployments can still provide one shared value through a secret manager.
 
+`SETTINGS_ENC_KEY` protects encrypted settings and delegated refresh material. If it is omitted, first startup generates a separate database-backed key for local/simple shared-database deployments; production deployments should provide a stable value through a secret manager.
+
 ## Minimal Webhook Example
 
 After creating a route in the UI and copying its relay URL, send a JSON payload:

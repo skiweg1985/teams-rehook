@@ -96,7 +96,10 @@ def _decrypt_secret(value: str) -> str:
     except HTTPException as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Stored secret override could not be decrypted",
+            detail=(
+                "Stored secret override could not be decrypted with the current SETTINGS_ENC_KEY. "
+                "Keep the previous key or re-enter the affected secret."
+            ),
         ) from exc
 
 

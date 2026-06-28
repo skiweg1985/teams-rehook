@@ -9,7 +9,7 @@ from sqlalchemy.pool import StaticPool
 from app.database import Base
 from app.models import AppSetting, Organization, User
 from app.security import hash_secret
-from app.seed import INSTANCE_SESSION_SECRET_KEY, init_db
+from app.seed import INSTANCE_SESSION_SECRET_KEY, INSTANCE_SETTINGS_ENC_KEY, init_db
 from app.seed import _ensure_additive_schema, _ensure_webhook_route_name_backend_uniqueness
 
 
@@ -254,6 +254,7 @@ def test_init_db_creates_default_org_and_instance_secret_without_bootstrap_admin
     )
     monkeypatch.setattr("app.seed.engine", engine)
     monkeypatch.setenv("SESSION_SECRET", "")
+    monkeypatch.setenv("SETTINGS_ENC_KEY", "")
     get_settings.cache_clear()
     try:
         init_db()
@@ -261,11 +262,16 @@ def test_init_db_creates_default_org_and_instance_secret_without_bootstrap_admin
             org = db.scalar(select(Organization).where(Organization.slug == "default"))
             users = db.scalars(select(User)).all()
             instance_secret = db.get(AppSetting, INSTANCE_SESSION_SECRET_KEY)
+            settings_enc_key = db.get(AppSetting, INSTANCE_SETTINGS_ENC_KEY)
             assert org is not None
             assert users == []
             assert instance_secret is not None
             assert len(instance_secret.value) >= 40
             assert get_settings().session_secret == instance_secret.value
+            assert settings_enc_key is not None
+            assert len(settings_enc_key.value) >= 40
+            assert get_settings().settings_enc_key == settings_enc_key.value
+            assert get_settings().settings_enc_key_source == "generated"
     finally:
         get_settings.cache_clear()
 
@@ -388,9 +394,30 @@ def test_init_db_rejects_placeholder_session_secret(monkeypatch: pytest.MonkeyPa
     )
     monkeypatch.setattr("app.seed.engine", engine)
     monkeypatch.setenv("SESSION_SECRET", "change-me-session-secret")
+    monkeypatch.setenv("SETTINGS_ENC_KEY", "test-settings-encryption-key")
     get_settings.cache_clear()
     try:
         with pytest.raises(RuntimeError, match="SESSION_SECRET"):
+            init_db()
+    finally:
+        get_settings.cache_clear()
+
+
+def test_init_db_rejects_placeholder_settings_enc_key(monkeypatch: pytest.MonkeyPatch):
+    from app.core.config import get_settings
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
+    monkeypatch.setattr("app.seed.engine", engine)
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SETTINGS_ENC_KEY", "change-me-settings-enc-key")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="SETTINGS_ENC_KEY"):
             init_db()
     finally:
         get_settings.cache_clear()
@@ -424,6 +451,7 @@ def test_init_db_does_not_bootstrap_default_admin_when_org_has_user(monkeypatch:
 
     monkeypatch.setattr("app.seed.engine", engine)
     monkeypatch.setenv("SESSION_SECRET", "")
+    monkeypatch.setenv("SETTINGS_ENC_KEY", "")
     get_settings.cache_clear()
     try:
         init_db()

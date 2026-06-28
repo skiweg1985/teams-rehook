@@ -51,18 +51,39 @@ def org_id(db_session: Session) -> str:
     return org.id
 
 
+@pytest.fixture(autouse=True)
+def settings_enc_key_env(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SETTINGS_ENC_KEY", "test-settings-encryption-key")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 def test_encrypted_secret_round_trip_and_invalid_key(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("SESSION_SECRET", "first-key")
+    monkeypatch.setenv("SETTINGS_ENC_KEY", "first-key")
+    monkeypatch.setenv("SESSION_SECRET", "first-session")
     get_settings.cache_clear()
     encrypted = encrypt_secret("refresh-token")
 
     assert encrypted != "refresh-token"
     assert decrypt_secret(encrypted) == "refresh-token"
 
-    monkeypatch.setenv("SESSION_SECRET", "second-key")
+    monkeypatch.setenv("SESSION_SECRET", "second-session")
     get_settings.cache_clear()
-    with pytest.raises(HTTPException):
+    assert decrypt_secret(encrypted) == "refresh-token"
+
+    monkeypatch.setenv("SETTINGS_ENC_KEY", "second-key")
+    get_settings.cache_clear()
+    with pytest.raises(HTTPException, match="SETTINGS_ENC_KEY"):
         decrypt_secret(encrypted)
+
+
+def test_encrypt_secret_requires_settings_enc_key(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SETTINGS_ENC_KEY", "")
+    get_settings.cache_clear()
+
+    with pytest.raises(HTTPException, match="SETTINGS_ENC_KEY"):
+        encrypt_secret("refresh-token")
 
 
 def test_build_authorization_url_uses_existing_app_registration():

@@ -57,6 +57,8 @@ Enter the first admin's email address, display name, and password in that setup 
 
 `SESSION_SECRET` can be left unset. In that case, startup generates and stores an instance secret automatically in the shared database, so backend replicas using the same database reuse the same value. Operators may still provide `SESSION_SECRET` from a secret manager when they want deployment-managed rotation or stricter stateless rollout controls.
 
+`SETTINGS_ENC_KEY` is separate from `SESSION_SECRET` and protects encrypted settings, Microsoft client secret overrides, and delegated Graph refresh material. For local/simple shared-database deployments, startup generates and stores a separate settings encryption key when it is omitted. For production-like deployments, provide a stable value through a secret manager and keep it unchanged unless secrets are re-encrypted or re-entered.
+
 ## Configuration
 
 See [Configuration](configuration.md) for the full environment and runtime settings reference.

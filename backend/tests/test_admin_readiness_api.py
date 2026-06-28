@@ -54,6 +54,16 @@ def db_session() -> Iterator[Session]:
         yield db
 
 
+@pytest.fixture(autouse=True)
+def settings_enc_key_env(monkeypatch: pytest.MonkeyPatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("SETTINGS_ENC_KEY", "test-settings-encryption-key")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 @contextmanager
 def make_client(db_session: Session, monkeypatch: pytest.MonkeyPatch, **env: str) -> Iterator[TestClient]:
     from app.core.config import get_settings
@@ -167,6 +177,8 @@ def test_readiness_reports_mock_delivery_ready_without_bot_credentials(db_sessio
     assert body["graph_lookup"]["auth_status"] == "incomplete"
     assert body["graph_delivery"]["ready"] is False
     assert body["graph_delivery"]["auth_status"] == "missing"
+    assert body["runtime"]["settings_encryption_key_source"] == "configured"
+    assert body["runtime"]["settings_encryption_ready"] is True
 
 
 def test_readiness_marks_disabled_features_without_token_checks(db_session: Session, monkeypatch: pytest.MonkeyPatch):
@@ -523,6 +535,29 @@ def test_readiness_reports_graph_delivery_token_error_without_raw_details(db_ses
     assert body["graph_delivery"]["token_checked"] is True
     assert body["graph_delivery"]["token_request_succeeded"] is False
     assert "raw provider body" not in json.dumps(body["graph_delivery"])
+
+
+def test_readiness_reports_graph_delivery_settings_key_error(db_session: Session, monkeypatch: pytest.MonkeyPatch):
+    add_delegated_credential(db_session)
+
+    with make_client(
+        db_session,
+        monkeypatch,
+        SETTINGS_ENC_KEY="wrong-settings-encryption-key",
+        MS_APP_TENANT_ID="tenant",
+        MS_APP_CLIENT_ID="client",
+        MS_APP_CLIENT_SECRET="secret",
+    ) as client:
+        csrf_token = login_admin(client)
+        response = client.get("/api/v1/admin/readiness", headers={"X-CSRF-Token": csrf_token})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["graph_delivery"]["ready"] is False
+    assert body["graph_delivery"]["auth_status"] == "configuration_error"
+    assert body["graph_delivery"]["token_checked"] is False
+    assert "SETTINGS_ENC_KEY" in body["graph_delivery"]["message"]
+    assert "refresh-token" not in json.dumps(body["graph_delivery"])
 
 
 def test_readiness_reports_graph_delivery_missing_required_scopes(db_session: Session, monkeypatch: pytest.MonkeyPatch):

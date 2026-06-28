@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings, is_placeholder_session_secret
+from app.core.config import get_settings, is_placeholder_session_secret, is_placeholder_settings_enc_key
 from app.core.settings_overrides import load_overrides
 from app.database import Base, engine
 from app.models import AppSetting, BotActivityEvent, BotConversationReference, Organization, User, WebhookRoute
@@ -15,6 +15,7 @@ from app.security import issue_plain_secret
 from app.services.log_retention import cleanup_log_events
 
 INSTANCE_SESSION_SECRET_KEY = "__instance_session_secret"
+INSTANCE_SETTINGS_ENC_KEY = "__instance_settings_enc_key"
 
 
 def init_db() -> None:
@@ -25,6 +26,7 @@ def init_db() -> None:
     settings = get_settings()
     with Session(engine) as db:
         _ensure_instance_session_secret(db)
+        _ensure_instance_settings_enc_key(db)
         _backfill_bot_reference_metadata(db)
         _backfill_webhook_route_targets(db)
         cleanup_log_events(db, force=True)
@@ -53,6 +55,23 @@ def _ensure_instance_session_secret(db: Session) -> str:
         db.flush()
 
     settings.use_generated_session_secret(row.value)
+    return row.value
+
+
+def _ensure_instance_settings_enc_key(db: Session) -> str:
+    settings = get_settings()
+    if settings.has_configured_settings_enc_key():
+        if is_placeholder_settings_enc_key(settings.settings_enc_key):
+            raise RuntimeError("SETTINGS_ENC_KEY must not use a placeholder value")
+        return settings.settings_enc_key
+
+    row = db.get(AppSetting, INSTANCE_SETTINGS_ENC_KEY)
+    if row is None:
+        row = AppSetting(key=INSTANCE_SETTINGS_ENC_KEY, value=issue_plain_secret(48), is_secret=True)
+        db.add(row)
+        db.flush()
+
+    settings.use_generated_settings_enc_key(row.value)
     return row.value
 
 

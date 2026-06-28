@@ -90,7 +90,7 @@ Stores admin-overridden runtime settings:
 - `updated_at`
 - `updated_by_id`
 
-Secret values are encrypted at rest using `SETTINGS_ENC_KEY` or a key derived from `SESSION_SECRET`.
+Secret values are encrypted at rest using `SETTINGS_ENC_KEY`. `SESSION_SECRET` is not used for settings encryption.
 
 ## Retention
 

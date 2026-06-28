@@ -36,8 +36,8 @@ Use `.env.example` as the safe template. Do not commit a populated `.env`.
 | `BOT_DELIVERY_MODE` | `real` sends through Microsoft services; `mock` simulates delivery. Invalid values normalize to `mock`. | No | `real` | `mock` | No |
 | `BOT_DEFAULT_SERVICE_URL` | Optional fallback Bot Framework service URL. Route-specific values still take precedence. | Required for some real Bot Framework setups | Empty | `https://smba.trafficmanager.net/emea/` | No |
 | `MONITORING_API_KEY` | Bearer token for `/api/v1/monitoring/status`. Empty disables the endpoint with `503`. | Required for monitoring endpoint | Empty | `change-me` | Yes |
-| `SESSION_SECRET` | Secret used for session signing and fallback encryption-key derivation. If omitted, an instance secret is generated and stored at first startup. | No | Generated instance secret | Secret manager value | Yes |
-| `SETTINGS_ENC_KEY` | Optional Fernet key for encrypted settings overrides at rest. Falls back to `SESSION_SECRET` if empty. | No | Empty | `change-me` | Yes |
+| `SESSION_SECRET` | Secret used for session signing and OAuth state protection. If omitted, an instance secret is generated and stored at first startup. | No | Generated instance secret | Secret manager value | Yes |
+| `SETTINGS_ENC_KEY` | Stable secret string used for encrypted settings overrides and delegated refresh material. If omitted, first startup creates a separate generated key in the database for local/simple shared-database deployments. | No | Generated settings encryption key | Secret manager value | Yes |
 | `SESSION_COOKIE_NAME` | Session cookie name. | No | `teams_rehook_session` | `teams_rehook_session` | No |
 | `SESSION_TTL_HOURS` | Session lifetime in hours. | No | `8` | `8` | No |
 | `SESSION_SECURE_COOKIE` | Sets the session cookie `Secure` flag. Use `true` behind HTTPS. | No | `false` | `true` | Yes |
@@ -84,7 +84,7 @@ These settings are defined in `backend/app/core/settings_overrides.py` and can b
 | `botframework_scope` | string | No | Bot Framework OAuth scope. |
 | `graph_scope` | string | No | Microsoft Graph OAuth scope. |
 
-Secret overrides are encrypted at rest using Fernet. The encryption key is `SETTINGS_ENC_KEY` when set, otherwise derived from `SESSION_SECRET` or the generated instance secret.
+Secret overrides are encrypted at rest using Fernet with `SETTINGS_ENC_KEY`. `SESSION_SECRET` is not used for settings encryption.
 
 ## Session Secret And Scaling
 
@@ -92,10 +92,19 @@ Secret overrides are encrypted at rest using Fernet. The encryption key is `SETT
 
 For production-like deployments with strict secret rotation, stateless release requirements, or controlled multi-region rollout, provide `SESSION_SECRET` from the deployment platform's secret manager instead. All backend replicas in the same environment must use the same value. Never use `change-me` style placeholders; startup rejects placeholder session secrets.
 
+## Settings Encryption Key
+
+`SETTINGS_ENC_KEY` protects encrypted application settings, Microsoft client secret overrides, and delegated Graph refresh material. For production-like deployments, provide it through a durable secret manager or `.env` and keep the same value for every backend replica.
+
+If `SETTINGS_ENC_KEY` is omitted, first startup creates a separate generated settings encryption key in the application database. This supports local and simple shared-database Docker deployments, but the key is still tied to that database. Keep the database volume when rebuilding containers.
+
+Changing `SETTINGS_ENC_KEY` without re-encrypting or re-entering existing secrets makes those encrypted values unreadable. Restore the previous key or re-enter/reconnect the affected secret material.
+
 ## Security Notes
 
 - Replace every `change-me` style placeholder before production-like use.
 - Leave `SESSION_SECRET` unset for the generated shared database-backed instance secret, or provide the same strong deployment-managed value to every backend replica.
+- Provide a stable `SETTINGS_ENC_KEY` for production-like deployments, or preserve the generated database-backed settings key in local/simple deployments.
 - Do not publish `.env`.
 - Treat relay URLs as secrets.
 - Avoid documenting tenant-specific production URLs or credentials in repository docs.

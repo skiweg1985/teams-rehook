@@ -7,11 +7,20 @@ from pydantic import PrivateAttr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PLACEHOLDER_SESSION_SECRETS = {"change-me-session-secret", "change-me", "changeme", "secret", "default"}
+PLACEHOLDER_SETTINGS_ENC_KEYS = {
+    "change-me-settings-enc-key",
+    "change-me-settings-key",
+    "change-me",
+    "changeme",
+    "secret",
+    "default",
+}
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="", extra="ignore")
     _session_secret_generated: bool = PrivateAttr(default=False)
+    _settings_enc_key_generated: bool = PrivateAttr(default=False)
 
     app_name: str = "Teams Rehook"
     app_version: str = "0.1.0"
@@ -74,10 +83,30 @@ class Settings(BaseSettings):
         self.session_secret = value
         self._session_secret_generated = True
 
+    def has_configured_settings_enc_key(self) -> bool:
+        return bool(self.settings_enc_key.strip()) and not self._settings_enc_key_generated
+
+    def use_generated_settings_enc_key(self, value: str) -> None:
+        self.settings_enc_key = value
+        self._settings_enc_key_generated = True
+
+    @property
+    def settings_enc_key_source(self) -> str:
+        if self.has_configured_settings_enc_key():
+            return "configured"
+        if self.settings_enc_key.strip() and self._settings_enc_key_generated:
+            return "generated"
+        return "missing"
+
 
 def is_placeholder_session_secret(value: str) -> bool:
     normalized = value.strip().lower()
     return not normalized or normalized in PLACEHOLDER_SESSION_SECRETS or normalized.startswith("change-me")
+
+
+def is_placeholder_settings_enc_key(value: str) -> bool:
+    normalized = value.strip().lower()
+    return not normalized or normalized in PLACEHOLDER_SETTINGS_ENC_KEYS or normalized.startswith("change-me")
 
 
 @lru_cache

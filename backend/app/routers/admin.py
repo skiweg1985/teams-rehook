@@ -414,6 +414,8 @@ def readiness(admin: User = Depends(require_admin), db: Session = Depends(get_db
             log_retention_days=settings.log_retention_days,
             log_cleanup_interval_minutes=settings.log_cleanup_interval_minutes,
             session_secure_cookie=settings.session_secure_cookie,
+            settings_encryption_key_source=settings.settings_enc_key_source,
+            settings_encryption_ready=bool(settings.settings_enc_key.strip()),
         ),
     )
 
@@ -755,6 +757,22 @@ def _graph_delivery_readiness(db: Session, organization_id: str, settings) -> Gr
             token_checked=False,
             token_request_succeeded=False,
             message="Delegated Graph delivery requires MS_APP_TENANT_ID, MS_APP_CLIENT_ID and MS_APP_CLIENT_SECRET.",
+        )
+    except HTTPException as exc:
+        detail = str(exc.detail)
+        if "SETTINGS_ENC_KEY" not in detail:
+            raise
+        diagnostics = diagnostics_for_organization(db, organization_id)
+        return _graph_delivery_readiness_out(
+            diagnostics=diagnostics,
+            settings=settings,
+            required_scopes=required_scopes,
+            credential_source=credential_source,
+            ready=False,
+            auth_status="configuration_error",
+            token_checked=False,
+            token_request_succeeded=False,
+            message=detail,
         )
     except GraphDelegatedAuthError:
         diagnostics = diagnostics_for_organization(db, organization_id)

@@ -331,6 +331,8 @@ export type AdminReadinessOut = {
     log_retention_days: number;
     log_cleanup_interval_minutes: number;
     session_secure_cookie: boolean;
+    settings_encryption_key_source: "configured" | "generated" | "missing" | string;
+    settings_encryption_ready: boolean;
   };
 };
 

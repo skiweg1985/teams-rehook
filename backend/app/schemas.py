@@ -428,6 +428,8 @@ class RuntimeReadinessOut(BaseModel):
     log_retention_days: int
     log_cleanup_interval_minutes: int
     session_secure_cookie: bool
+    settings_encryption_key_source: str
+    settings_encryption_ready: bool
 
 
 class AdminReadinessOut(BaseModel):

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
+  Activity,
   AlertTriangle,
+  Bot,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -22,7 +24,9 @@ import {
   RotateCcwKey,
   Search,
   Send,
+  ShieldAlert,
   Trash2,
+  Wrench,
   Webhook,
   type LucideIcon,
 } from "lucide-react";
@@ -72,6 +76,7 @@ type PayloadAccent = "neutral" | "success" | "warning" | "critical";
 type PayloadImageSize = "Auto" | "Stretch";
 type PayloadTitleSize = "Default" | "Medium" | "Large";
 type PayloadTitleWeight = "Default" | "Bolder";
+type SystemLogTab = "security" | "audit" | "bot";
 
 type PayloadFact = {
   id: string;
@@ -5270,9 +5275,18 @@ function RuntimeSnapshotCard({ onCopy, readiness }: { onCopy: (value: string, la
         <dd>{readiness.runtime.log_cleanup_interval_minutes} minutes</dd>
         <dt>Secure session cookie</dt>
         <dd>{yesNo(readiness.runtime.session_secure_cookie)}</dd>
+        <dt>Settings encryption</dt>
+        <dd>{settingsEncryptionLabel(readiness.runtime.settings_encryption_key_source, readiness.runtime.settings_encryption_ready)}</dd>
       </dl>
     </Card>
   );
+}
+
+function settingsEncryptionLabel(source: string, ready: boolean) {
+  if (!ready) return "Missing";
+  if (source === "configured") return "Configured";
+  if (source === "generated") return "Generated";
+  return "Configured";
 }
 
 function CopyInlineValue({ label, onCopy, value }: { label: string; onCopy: (value: string, label: string) => void; value: string }) {
@@ -5342,6 +5356,7 @@ function graphDeliverySummary(readiness: AdminReadinessOut["graph_delivery"]): s
   if (readiness.auth_status === "expired") return readiness.message || "The delegated service-user connection has expired or was revoked.";
   if (readiness.auth_status === "permission_warning") return readiness.message || "The delegated token is valid, but required Graph delivery scopes are missing.";
   if (readiness.auth_status === "token_error") return readiness.message || "Delegated token verification failed.";
+  if (readiness.auth_status === "configuration_error") return readiness.message || "Delegated Graph delivery has a configuration error.";
   if (readiness.auth_status === "incomplete") return readiness.message || "Required app registration settings are missing.";
   return readiness.message || "Graph delivery readiness could not be fully determined.";
 }
@@ -5395,6 +5410,7 @@ function authStatusTone(status: string): "neutral" | "success" | "warn" | "dange
   if (status === "ready") return "success";
   if (status === "permission_warning") return "warn";
   if (status === "token_error") return "danger";
+  if (status === "configuration_error") return "danger";
   if (status === "expired") return "danger";
   if (status === "missing") return "warn";
   if (status === "incomplete") return "warn";
@@ -5404,7 +5420,7 @@ function authStatusTone(status: string): "neutral" | "success" | "warn" | "dange
 function healthStateLabel(status: string): string {
   if (status === "disabled") return "Disabled";
   if (status === "ready" || status === "mock") return "Ready";
-  if (status === "token_error" || status === "expired") return "Error";
+  if (status === "token_error" || status === "expired" || status === "configuration_error") return "Error";
   return "Warning";
 }
 
@@ -5479,6 +5495,14 @@ function graphDeliveryAttentionItems(readiness: AdminReadinessOut["graph_deliver
     items.push({
       title: "Delegated token check failed",
       description: readiness.message || "Required: verify the service-user connection and tenant access.",
+      tone: "danger",
+    });
+  }
+
+  if (readiness.auth_status === "configuration_error") {
+    items.push({
+      title: "Settings encryption key error",
+      description: readiness.message || "Required: restore the previous SETTINGS_ENC_KEY or reconnect the delegated Graph service user.",
       tone: "danger",
     });
   }
@@ -5746,6 +5770,7 @@ function SystemLogsPage() {
   const [auditLogs, setAuditLogs] = useState<AuditEventOut[]>([]);
   const [systemLogs, setSystemLogs] = useState<SystemLogEventOut[]>([]);
   const [abuseBuckets, setAbuseBuckets] = useState<WebhookAbuseBucketOut[]>([]);
+  const [activeTab, setActiveTab] = useState<SystemLogTab>("security");
   const [loading, setLoading] = useState(true);
   const [cleanupBusy, setCleanupBusy] = useState(false);
   const [abuseCleanupBusy, setAbuseCleanupBusy] = useState(false);
@@ -5841,116 +5866,374 @@ function SystemLogsPage() {
 
   const abuseClients = useMemo(() => buildWebhookAbuseClients(abuseBuckets), [abuseBuckets]);
   const activeBlockCount = abuseClients.filter((client) => client.status === "blocked").length;
+  const watchedClientCount = abuseClients.filter((client) => client.status === "watching").length;
+  const unknownAuthCount = systemLogs.filter((event) => event.auth_status !== "verified").length;
+  const lastActivityAt = latestDate(
+    [
+      ...abuseClients.map((client) => client.lastSeen),
+      ...auditLogs.map((event) => event.created_at),
+      ...systemLogs.map((event) => event.created_at),
+    ].filter(Boolean),
+  );
+  const attentionClients = abuseClients.filter((client) => client.status === "blocked").slice(0, 3);
+  const watchedClients = abuseClients.filter((client) => client.status === "watching").slice(0, 3);
 
   return (
     <>
       <PageIntro
         eyebrow="Administration"
         title="System logs"
-        description="Review audit events and Teams bot activity separately from webhook message delivery."
+        description="Monitor ingress protection, admin actions and Teams bot activity from one operational view."
         actions={
-          <>
+          <div className="system-logs-actions">
             <StatusBadge label={activeBlockCount ? `${activeBlockCount} blocked` : "No active blocks"} tone={activeBlockCount ? "warn" : "success"} />
-            <button className="secondary-button button-with-icon" type="button" disabled={abuseCleanupBusy} onClick={() => void cleanupAbuseBuckets()}>
-              <Trash2 aria-hidden="true" className="button-icon" focusable="false" />
-              {abuseCleanupBusy ? "Cleaning..." : "Clean abuse"}
+            <button className="secondary-button button-with-icon" type="button" disabled={loading} onClick={() => void refresh()}>
+              <RefreshCw aria-hidden="true" className={classNames("button-icon", loading && "button-icon--spin")} focusable="false" />
+              Refresh
             </button>
-            <button className="secondary-button button-with-icon" type="button" disabled={cleanupBusy} onClick={() => void cleanupLogs()}>
-              <Trash2 aria-hidden="true" className="button-icon" focusable="false" />
-              {cleanupBusy ? "Cleaning..." : "Clean logs"}
-            </button>
-          </>
+            <details className="maintenance-menu">
+              <summary>
+                <Wrench aria-hidden="true" className="button-icon" focusable="false" />
+                Maintenance
+              </summary>
+              <div className="maintenance-menu-popover">
+                <button className="secondary-button button-with-icon" type="button" disabled={abuseCleanupBusy} onClick={() => void cleanupAbuseBuckets()}>
+                  <Trash2 aria-hidden="true" className="button-icon" focusable="false" />
+                  {abuseCleanupBusy ? "Cleaning..." : "Clean abuse clients"}
+                </button>
+                <button className="secondary-button button-with-icon" type="button" disabled={cleanupBusy} onClick={() => void cleanupLogs()}>
+                  <Trash2 aria-hidden="true" className="button-icon" focusable="false" />
+                  {cleanupBusy ? "Cleaning..." : "Clean retained logs"}
+                </button>
+              </div>
+            </details>
+          </div>
         }
       />
-      <Card title="Webhook abuse" description="Temporary blocks and watched clients for public webhook ingress.">
-        <DataTable
-          columns={["Status", "Client IP", "Failures", "Reason", "Blocked until", "Activity", "Last seen", "Action"]}
-          rows={abuseClients.map((client) => [
-            <StatusBadge label={client.status === "blocked" ? "Blocked" : "Watching"} tone={client.status === "blocked" ? "warn" : "neutral"} />,
-            <div className="stacked-cell">
-              <code>{client.clientHost || "-"}</code>
-              <span className="muted">{client.clientFingerprint}</span>
-            </div>,
-            <div className="stacked-cell">
-              <span>{client.failureCount}</span>
-              <span className="muted">{client.bucketCount} {client.bucketCount === 1 ? "bucket" : "buckets"} / {client.blockCount} blocks</span>
-            </div>,
-            abuseReasonLabel(client.lastReason),
-            client.blockedUntil ? formatDateTime(client.blockedUntil) : "-",
-            <div className="stacked-cell">
-              <span>{client.activityLabel}</span>
-              <span className="muted">
-                {client.routeFingerprints.length ? client.routeFingerprints.map((value) => `route ${value}`).join(", ") : "all routes"}
-              </span>
-            </div>,
-            formatRelativeTime(client.lastSeen),
-            <button
-              className="secondary-button secondary-button--small"
-              type="button"
-              disabled={resettingClientKey === client.key}
-              onClick={() => void resetAbuseClient(client)}
-            >
-              {resettingClientKey === client.key ? "Resetting..." : "Reset"}
-            </button>,
-          ])}
-          emptyTitle="No webhook abuse clients"
-          emptyBody="Repeated failed webhook attempts will appear here once blocking starts tracking a client."
-          loading={loading}
-          loadingLabel="Loading webhook abuse clients..."
-          error={error}
-          onRetry={() => void refresh()}
-          rowKey={(index) => abuseClients[index]?.key ?? index}
+
+      <section className="system-summary-grid" aria-label="System log overview">
+        <SystemSummaryTile
+          icon={ShieldAlert}
+          label="Ingress protection"
+          value={activeBlockCount ? `${activeBlockCount} blocked` : "Clear"}
+          context={`${watchedClientCount} watched ${watchedClientCount === 1 ? "client" : "clients"}`}
+          tone={activeBlockCount ? "warn" : "success"}
         />
-      </Card>
-      <Card title="Audit logs" description="Recent sign-ins, route changes and administration activity.">
-        <DataTable
-          columns={["Action", "Actor", "Metadata", "Time"]}
-          rows={auditLogs.map((event) => [
-            <strong>{event.action}</strong>,
-            `${event.actor_type}${event.actor_id ? `:${event.actor_id.slice(0, 8)}` : ""}`,
-            <span className="muted">{compactJson(event.metadata)}</span>,
-            formatDateTime(event.created_at),
-          ])}
-          emptyTitle="No audit events"
-          emptyBody="Log entries appear after sign-in or route administration changes."
-          loading={loading}
-          loadingLabel="Loading audit logs..."
-          error={error}
-          onRetry={() => void refresh()}
-          rowKey={(index) => auditLogs[index]?.id ?? index}
+        <SystemSummaryTile
+          icon={Activity}
+          label="Admin audit"
+          value={String(auditLogs.length)}
+          context={auditLogs[0] ? `Latest ${formatRelativeTime(auditLogs[0].created_at)}` : "No recent events"}
         />
-      </Card>
-      <Card title="System events" description="Teams bot activities captured by the relay service.">
-        <DataTable
-          columns={["Activity", "Scope", "Conversation", "User", "Auth", "Time"]}
-          rows={systemLogs.map((event) => [
-            <strong>{event.activity_type || "activity"}</strong>,
-            <StatusBadge label={event.scope || "unknown"} tone={event.scope === "channel" ? "success" : "neutral"} />,
-            <div className="stacked-cell">
-              <span>{systemLogConversation(event)}</span>
-              <span className="muted">{event.conversation_type || shortId(event.conversation_id)}</span>
-            </div>,
-            <div className="stacked-cell">
-              <span>{event.user_name || "-"}</span>
-              <span className="muted">{event.graph_user_id ? shortId(event.graph_user_id) : "-"}</span>
-            </div>,
-            <div className="stacked-cell">
-              <StatusBadge label={systemLogAuthLabel(event)} tone={event.auth_status === "verified" ? "success" : "neutral"} />
-              <span className="muted">{event.auth_validated_at ? formatDateTime(event.auth_validated_at) : "legacy or unavailable"}</span>
-            </div>,
-            formatDateTime(event.created_at),
-          ])}
-          emptyTitle="No system events"
-          emptyBody="Bot activity events appear after Teams sends activities to the relay bot endpoint."
-          loading={loading}
-          loadingLabel="Loading system events..."
-          error={error}
-          onRetry={() => void refresh()}
-          rowKey={(index) => systemLogs[index]?.id ?? index}
+        <SystemSummaryTile
+          icon={Bot}
+          label="Bot activity"
+          value={String(systemLogs.length)}
+          context={unknownAuthCount ? `${unknownAuthCount} legacy auth events` : "Auth verified where available"}
+          tone={unknownAuthCount ? "neutral" : "success"}
         />
+        <SystemSummaryTile
+          icon={FileClock}
+          label="Last activity"
+          value={lastActivityAt ? formatRelativeTime(lastActivityAt) : "None"}
+          context={lastActivityAt ? formatDateTime(lastActivityAt) : "Waiting for events"}
+        />
+      </section>
+
+      <section className={classNames("system-attention-panel", activeBlockCount > 0 && "system-attention-panel--warn")}>
+        <div className="system-attention-copy">
+          <span className="system-attention-icon" aria-hidden="true">
+            {activeBlockCount ? <AlertTriangle className="button-icon" focusable="false" /> : <Check className="button-icon" focusable="false" />}
+          </span>
+          <div>
+            <h2>{activeBlockCount ? "Ingress needs attention" : "Ingress is quiet"}</h2>
+            <p>
+              {activeBlockCount
+                ? "Blocked webhook clients are listed first so they can be reviewed or reset quickly."
+                : "No active webhook blocks. Watched clients are still visible for early signal detection."}
+            </p>
+          </div>
+        </div>
+        <div className="attention-client-list">
+          {(attentionClients.length ? attentionClients : watchedClients).map((client) => (
+            <AbuseClientCompactRow
+              key={client.key}
+              client={client}
+              resetting={resettingClientKey === client.key}
+              onReset={() => void resetAbuseClient(client)}
+            />
+          ))}
+          {!attentionClients.length && !watchedClients.length ? (
+            <div className="attention-empty">
+              <strong>No tracked clients</strong>
+              <span>Repeated failed webhook attempts will appear here.</span>
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      <Card
+        title="Activity explorer"
+        description="Switch between security, audit and bot activity without losing the operational context above."
+        headerActions={
+          <div className="segmented-control" aria-label="System log sections">
+            {SYSTEM_LOG_TABS.map((tab) => (
+              <button
+                key={tab.value}
+                className={classNames("segmented-control-button", activeTab === tab.value && "is-active")}
+                type="button"
+                onClick={() => setActiveTab(tab.value)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        }
+      >
+        {activeTab === "security" ? (
+          <SystemLogState loading={loading} error={error} empty={!abuseClients.length} emptyTitle="No webhook abuse clients" emptyBody="Failed webhook attempts will appear here when a client starts being watched." onRetry={() => void refresh()}>
+            <div className="activity-list">
+              {abuseClients.map((client) => (
+                <AbuseClientActivityRow
+                  key={client.key}
+                  client={client}
+                  resetting={resettingClientKey === client.key}
+                  onReset={() => void resetAbuseClient(client)}
+                />
+              ))}
+            </div>
+          </SystemLogState>
+        ) : null}
+        {activeTab === "audit" ? (
+          <SystemLogState loading={loading} error={error} empty={!auditLogs.length} emptyTitle="No audit events" emptyBody="Sign-ins, route changes and administration activity will appear here." onRetry={() => void refresh()}>
+            <div className="activity-list">
+              {auditLogs.map((event) => (
+                <AuditActivityRow key={event.id} event={event} />
+              ))}
+            </div>
+          </SystemLogState>
+        ) : null}
+        {activeTab === "bot" ? (
+          <SystemLogState loading={loading} error={error} empty={!systemLogs.length} emptyTitle="No bot activity" emptyBody="Teams bot endpoint events will appear after Teams sends activities to the relay service." onRetry={() => void refresh()}>
+            <div className="activity-list">
+              {systemLogs.map((event) => (
+                <BotActivityRow key={event.id} event={event} />
+              ))}
+            </div>
+          </SystemLogState>
+        ) : null}
       </Card>
     </>
   );
+}
+
+const SYSTEM_LOG_TABS: Array<{ value: SystemLogTab; label: string }> = [
+  { value: "security", label: "Security" },
+  { value: "audit", label: "Audit" },
+  { value: "bot", label: "Bot activity" },
+];
+
+function SystemSummaryTile({
+  icon: Icon,
+  label,
+  value,
+  context,
+  tone = "neutral",
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: string;
+  context: string;
+  tone?: "neutral" | "success" | "warn";
+}) {
+  return (
+    <div className={classNames("system-summary-tile", `system-summary-tile--${tone}`)}>
+      <span className="system-summary-icon" aria-hidden="true">
+        <Icon className="button-icon" focusable="false" />
+      </span>
+      <div>
+        <span className="system-summary-label">{label}</span>
+        <strong>{value}</strong>
+        <span>{context}</span>
+      </div>
+    </div>
+  );
+}
+
+function SystemLogState({
+  loading,
+  error,
+  empty,
+  emptyTitle,
+  emptyBody,
+  onRetry,
+  children,
+}: {
+  loading: boolean;
+  error: string;
+  empty: boolean;
+  emptyTitle: string;
+  emptyBody: string;
+  onRetry: () => void;
+  children: ReactNode;
+}) {
+  if (loading) {
+    return (
+      <div className="table-state" role="status" aria-live="polite">
+        <div className="spinner spinner--small" aria-hidden="true" />
+        <p>Loading activity...</p>
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="table-state table-state--error" role="alert">
+        <h3>Could not load activity</h3>
+        <p>{error}</p>
+        <button className="secondary-button secondary-button--small" type="button" onClick={onRetry}>
+          Retry
+        </button>
+      </div>
+    );
+  }
+  if (empty) return <EmptyState title={emptyTitle} body={emptyBody} />;
+  return <>{children}</>;
+}
+
+function AbuseClientCompactRow({
+  client,
+  resetting,
+  onReset,
+}: {
+  client: WebhookAbuseClientRow;
+  resetting: boolean;
+  onReset: () => void;
+}) {
+  return (
+    <div className="attention-client-row">
+      <div>
+        <strong>{client.clientHost || "Unknown client"}</strong>
+        <span>{abuseReasonLabel(client.lastReason)} · {formatRelativeTime(client.lastSeen)}</span>
+      </div>
+      <StatusBadge label={client.status === "blocked" ? "Blocked" : "Watching"} tone={client.status === "blocked" ? "warn" : "neutral"} />
+      <button className="secondary-button secondary-button--small" type="button" disabled={resetting} onClick={onReset}>
+        {resetting ? "Resetting..." : "Reset"}
+      </button>
+    </div>
+  );
+}
+
+function AbuseClientActivityRow({
+  client,
+  resetting,
+  onReset,
+}: {
+  client: WebhookAbuseClientRow;
+  resetting: boolean;
+  onReset: () => void;
+}) {
+  return (
+    <article className="activity-row">
+      <div className="activity-row-main">
+        <StatusBadge label={client.status === "blocked" ? "Blocked" : "Watching"} tone={client.status === "blocked" ? "warn" : "neutral"} />
+        <div className="activity-row-copy">
+          <strong>{client.clientHost || "Unknown webhook client"}</strong>
+          <span>{abuseReasonLabel(client.lastReason)} · {client.failureCount} failures · {client.bucketCount} {client.bucketCount === 1 ? "bucket" : "buckets"}</span>
+        </div>
+      </div>
+      <div className="activity-row-meta">
+        <span>{formatRelativeTime(client.lastSeen)}</span>
+        <button className="secondary-button secondary-button--small" type="button" disabled={resetting} onClick={onReset}>
+          {resetting ? "Resetting..." : "Reset"}
+        </button>
+      </div>
+      <details className="activity-row-details">
+        <summary>Details</summary>
+        <dl className="definition-list definition-list--compact">
+          <dt>Fingerprint</dt>
+          <dd><code>{client.clientFingerprint || "-"}</code></dd>
+          <dt>Activity</dt>
+          <dd>{client.activityLabel}</dd>
+          <dt>Routes</dt>
+          <dd>{client.routeFingerprints.length ? client.routeFingerprints.map((value) => `route ${value}`).join(", ") : "all routes"}</dd>
+          <dt>Blocked until</dt>
+          <dd>{client.blockedUntil ? formatDateTime(client.blockedUntil) : "-"}</dd>
+          <dt>Blocks</dt>
+          <dd>{client.blockCount}</dd>
+        </dl>
+      </details>
+    </article>
+  );
+}
+
+function AuditActivityRow({ event }: { event: AuditEventOut }) {
+  return (
+    <article className="activity-row">
+      <div className="activity-row-main">
+        <span className="activity-dot" aria-hidden="true" />
+        <div className="activity-row-copy">
+          <strong>{humanizeLogToken(event.action)}</strong>
+          <span><code>{event.action}</code> by {formatAuditActor(event)}</span>
+        </div>
+      </div>
+      <div className="activity-row-meta">
+        <span>{formatRelativeTime(event.created_at)}</span>
+        <span>{formatDateTime(event.created_at)}</span>
+      </div>
+      <details className="activity-row-details">
+        <summary>Metadata</summary>
+        <pre className="json-block">{compactJson(event.metadata)}</pre>
+      </details>
+    </article>
+  );
+}
+
+function BotActivityRow({ event }: { event: SystemLogEventOut }) {
+  return (
+    <article className="activity-row">
+      <div className="activity-row-main">
+        <StatusBadge label={event.scope || "unknown"} tone={event.scope === "channel" ? "success" : "neutral"} />
+        <div className="activity-row-copy">
+          <strong>{humanizeLogToken(event.activity_type || "activity")}</strong>
+          <span>{systemLogConversation(event)} · {event.user_name || "Unknown user"}</span>
+        </div>
+      </div>
+      <div className="activity-row-meta">
+        <StatusBadge label={systemLogAuthLabel(event)} tone={event.auth_status === "verified" ? "success" : "neutral"} />
+        <span>{formatRelativeTime(event.created_at)}</span>
+      </div>
+      <details className="activity-row-details">
+        <summary>Bot payload context</summary>
+        <dl className="definition-list definition-list--compact">
+          <dt>Conversation</dt>
+          <dd><code>{event.conversation_id || "-"}</code></dd>
+          <dt>Conversation type</dt>
+          <dd>{event.conversation_type || "-"}</dd>
+          <dt>Graph user</dt>
+          <dd><code>{event.graph_user_id || "-"}</code></dd>
+          <dt>Tenant</dt>
+          <dd><code>{event.tenant_id || "-"}</code></dd>
+          <dt>Auth validated</dt>
+          <dd>{event.auth_validated_at ? formatDateTime(event.auth_validated_at) : "legacy or unavailable"}</dd>
+          <dt>Service URL</dt>
+          <dd><code>{event.service_url || "-"}</code></dd>
+        </dl>
+      </details>
+    </article>
+  );
+}
+
+function humanizeLogToken(value: string): string {
+  return value
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .split(/[._\s-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function formatAuditActor(event: AuditEventOut): string {
+  return `${event.actor_type}${event.actor_id ? `:${event.actor_id.slice(0, 8)}` : ""}`;
 }
 
 function systemLogConversation(event: SystemLogEventOut): string {
