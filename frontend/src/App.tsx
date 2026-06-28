@@ -5656,7 +5656,7 @@ function SystemLogsPage() {
   const [loading, setLoading] = useState(true);
   const [cleanupBusy, setCleanupBusy] = useState(false);
   const [abuseCleanupBusy, setAbuseCleanupBusy] = useState(false);
-  const [resettingBucketId, setResettingBucketId] = useState("");
+  const [resettingClientKey, setResettingClientKey] = useState("");
   const [error, setError] = useState("");
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
 
@@ -5710,39 +5710,44 @@ function SystemLogsPage() {
       const result = await api.cleanupWebhookAbuseBuckets(csrfToken);
       notify({
         tone: "info",
-        title: "Abuse buckets cleaned up",
-        description: `${result.deleted} inactive buckets removed. Retention is ${result.cleanup_days} days.`,
+        title: "Abuse clients cleaned up",
+        description: `${result.deleted} inactive entries removed. Retention is ${result.cleanup_days} days.`,
       });
       await refresh();
     } catch (err) {
       notify({
         tone: "error",
         title: "Cleanup failed",
-        description: isApiError(err) ? err.message : "Abuse buckets could not be cleaned up.",
+        description: isApiError(err) ? err.message : "Abuse clients could not be cleaned up.",
       });
     } finally {
       setAbuseCleanupBusy(false);
     }
   }
 
-  async function resetAbuseBucket(bucket: WebhookAbuseBucketOut) {
-    setResettingBucketId(bucket.id);
+  async function resetAbuseClient(client: WebhookAbuseClientRow) {
+    setResettingClientKey(client.key);
     try {
-      await api.resetWebhookAbuseBucket(csrfToken, bucket.id);
-      notify({ tone: "success", title: "Webhook block reset", description: `${abuseScopeLabel(bucket)} bucket is watching again.` });
+      await Promise.all(client.buckets.map((bucket) => api.resetWebhookAbuseBucket(csrfToken, bucket.id)));
+      notify({
+        tone: "success",
+        title: "Webhook client reset",
+        description: `${client.clientHost || client.clientFingerprint} is watching again.`,
+      });
       await refresh();
     } catch (err) {
       notify({
         tone: "error",
         title: "Reset failed",
-        description: isApiError(err) ? err.message : "Webhook abuse bucket could not be reset.",
+        description: isApiError(err) ? err.message : "Webhook abuse client could not be reset.",
       });
     } finally {
-      setResettingBucketId("");
+      setResettingClientKey("");
     }
   }
 
-  const activeBlockCount = abuseBuckets.filter((bucket) => bucket.status === "blocked").length;
+  const abuseClients = useMemo(() => buildWebhookAbuseClients(abuseBuckets), [abuseBuckets]);
+  const activeBlockCount = abuseClients.filter((client) => client.status === "blocked").length;
 
   return (
     <>
@@ -5766,40 +5771,42 @@ function SystemLogsPage() {
       />
       <Card title="Webhook abuse" description="Temporary blocks and watched clients for public webhook ingress.">
         <DataTable
-          columns={["Status", "Scope", "Client IP", "Failures", "Reason", "Blocked until", "Last seen", "Action"]}
-          rows={abuseBuckets.map((bucket) => [
-            <StatusBadge label={bucket.status === "blocked" ? "Blocked" : "Watching"} tone={bucket.status === "blocked" ? "warn" : "neutral"} />,
-            abuseScopeLabel(bucket),
+          columns={["Status", "Client IP", "Failures", "Reason", "Blocked until", "Activity", "Last seen", "Action"]}
+          rows={abuseClients.map((client) => [
+            <StatusBadge label={client.status === "blocked" ? "Blocked" : "Watching"} tone={client.status === "blocked" ? "warn" : "neutral"} />,
             <div className="stacked-cell">
-              <code>{bucket.client_host || "-"}</code>
+              <code>{client.clientHost || "-"}</code>
+              <span className="muted">{client.clientFingerprint}</span>
+            </div>,
+            <div className="stacked-cell">
+              <span>{client.failureCount}</span>
+              <span className="muted">{client.bucketCount} {client.bucketCount === 1 ? "bucket" : "buckets"} / {client.blockCount} blocks</span>
+            </div>,
+            abuseReasonLabel(client.lastReason),
+            client.blockedUntil ? formatDateTime(client.blockedUntil) : "-",
+            <div className="stacked-cell">
+              <span>{client.activityLabel}</span>
               <span className="muted">
-                {bucket.client_fingerprint}
-                {bucket.route_token_fingerprint ? ` / route ${bucket.route_token_fingerprint}` : " / all routes"}
+                {client.routeFingerprints.length ? client.routeFingerprints.map((value) => `route ${value}`).join(", ") : "all routes"}
               </span>
             </div>,
-            <div className="stacked-cell">
-              <span>{bucket.failure_count}</span>
-              <span className="muted">{bucket.block_count} blocks</span>
-            </div>,
-            abuseReasonLabel(bucket.last_reason),
-            bucket.blocked_until ? formatDateTime(bucket.blocked_until) : "-",
-            formatRelativeTime(bucket.last_seen_at),
+            formatRelativeTime(client.lastSeen),
             <button
               className="secondary-button secondary-button--small"
               type="button"
-              disabled={resettingBucketId === bucket.id}
-              onClick={() => void resetAbuseBucket(bucket)}
+              disabled={resettingClientKey === client.key}
+              onClick={() => void resetAbuseClient(client)}
             >
-              {resettingBucketId === bucket.id ? "Resetting..." : "Reset"}
+              {resettingClientKey === client.key ? "Resetting..." : "Reset"}
             </button>,
           ])}
-          emptyTitle="No webhook abuse buckets"
+          emptyTitle="No webhook abuse clients"
           emptyBody="Repeated failed webhook attempts will appear here once blocking starts tracking a client."
           loading={loading}
-          loadingLabel="Loading webhook abuse buckets..."
+          loadingLabel="Loading webhook abuse clients..."
           error={error}
           onRetry={() => void refresh()}
-          rowKey={(index) => abuseBuckets[index]?.id ?? index}
+          rowKey={(index) => abuseClients[index]?.key ?? index}
         />
       </Card>
       <Card title="Audit logs" description="Recent sign-ins, route changes and administration activity.">
@@ -5854,10 +5861,6 @@ function systemLogConversation(event: SystemLogEventOut): string {
   return event.channel_name || event.team_name || shortId(event.conversation_id) || "-";
 }
 
-function abuseScopeLabel(bucket: WebhookAbuseBucketOut): string {
-  return bucket.scope === "ip_route" ? "Client + route" : "Client";
-}
-
 function abuseReasonLabel(reason: string): string {
   switch (reason) {
     case "delivery_backend_disabled":
@@ -5873,6 +5876,76 @@ function abuseReasonLabel(reason: string): string {
     default:
       return reason || "-";
   }
+}
+
+type WebhookAbuseClientRow = {
+  key: string;
+  buckets: WebhookAbuseBucketOut[];
+  status: "watching" | "blocked";
+  clientHost: string;
+  clientFingerprint: string;
+  routeFingerprints: string[];
+  failureCount: number;
+  blockCount: number;
+  bucketCount: number;
+  lastReason: string;
+  blockedUntil: string | null;
+  lastSeen: string;
+  activityLabel: string;
+};
+
+function buildWebhookAbuseClients(buckets: WebhookAbuseBucketOut[]): WebhookAbuseClientRow[] {
+  const grouped = new Map<string, WebhookAbuseBucketOut[]>();
+  for (const bucket of buckets) {
+    const key = `${bucket.client_host || ""}:${bucket.client_fingerprint}`;
+    grouped.set(key, [...(grouped.get(key) ?? []), bucket]);
+  }
+
+  return Array.from(grouped.entries())
+    .map(([key, rows]) => {
+      const sortedBySeen = [...rows].sort((a, b) => timestampMs(b.last_seen_at) - timestampMs(a.last_seen_at));
+      const blockedBuckets = rows.filter((bucket) => bucket.status === "blocked" && bucket.blocked_until);
+      const blockedUntil = latestDate(blockedBuckets.map((bucket) => bucket.blocked_until).filter((value): value is string => Boolean(value)));
+      const routeFingerprints = Array.from(new Set(rows.map((bucket) => bucket.route_token_fingerprint).filter(Boolean)));
+      const hasAllRoutes = rows.some((bucket) => !bucket.route_token_fingerprint);
+      return {
+        key,
+        buckets: rows,
+        status: blockedBuckets.length ? "blocked" : "watching",
+        clientHost: sortedBySeen[0]?.client_host ?? "",
+        clientFingerprint: sortedBySeen[0]?.client_fingerprint ?? "",
+        routeFingerprints,
+        failureCount: rows.reduce((sum, bucket) => sum + bucket.failure_count, 0),
+        blockCount: rows.reduce((sum, bucket) => sum + bucket.block_count, 0),
+        bucketCount: rows.length,
+        lastReason: sortedBySeen.find((bucket) => bucket.last_reason)?.last_reason ?? "",
+        blockedUntil,
+        lastSeen: sortedBySeen[0]?.last_seen_at ?? "",
+        activityLabel: abuseActivityLabel(hasAllRoutes, routeFingerprints.length),
+      } satisfies WebhookAbuseClientRow;
+    })
+    .sort((a, b) => {
+      if (a.status !== b.status) return a.status === "blocked" ? -1 : 1;
+      return timestampMs(b.lastSeen) - timestampMs(a.lastSeen);
+    });
+}
+
+function abuseActivityLabel(hasAllRoutes: boolean, routeCount: number): string {
+  const parts: string[] = [];
+  if (hasAllRoutes) parts.push("All routes");
+  if (routeCount === 1) parts.push("1 route");
+  if (routeCount > 1) parts.push(`${routeCount} routes`);
+  return parts.join(" + ") || "-";
+}
+
+function latestDate(values: string[]): string | null {
+  if (!values.length) return null;
+  return values.reduce((latest, value) => (timestampMs(value) > timestampMs(latest) ? value : latest));
+}
+
+function timestampMs(value: string): number {
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
 }
 
 function InnerApp() {
