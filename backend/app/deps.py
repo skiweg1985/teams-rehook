@@ -7,9 +7,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.settings_overrides import get_effective_settings
 from app.database import get_db
 from app.models import AuditEvent, Session as SessionModel, User
 from app.security import dumps_json, hash_secret, issue_plain_secret, lookup_secret_hash, utcnow, verify_secret
+from app.services.event_log import emit_event
 
 
 def _ensure_live(value: datetime) -> datetime:
@@ -23,13 +25,38 @@ def get_current_session(
     session_token: str | None = Cookie(default=None, alias=get_settings().session_cookie_name),
 ) -> SessionModel:
     if not session_token:
+        emit_event(
+            level="warning",
+            category="auth",
+            event_type="auth.session.missing",
+            message="Request was rejected because no session cookie was present.",
+            security={"severity": "low", "reason": "missing_session"},
+            domain="system",
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing session")
 
     token_hash = lookup_secret_hash(session_token)
     current_session = db.scalar(select(SessionModel).where(SessionModel.session_token_hash == token_hash))
     if not current_session:
+        emit_event(
+            level="warning",
+            category="auth",
+            event_type="auth.session.invalid",
+            message="Request was rejected because the session token was invalid.",
+            security={"severity": "medium", "reason": "invalid_session"},
+            domain="system",
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
     if current_session.revoked_at is not None or _ensure_live(current_session.expires_at) <= utcnow():
+        emit_event(
+            level="warning",
+            category="auth",
+            event_type="auth.session.expired",
+            message="Request was rejected because the session is expired or revoked.",
+            actor={"type": "user", "id": current_session.user_id},
+            security={"severity": "low", "reason": "expired_session"},
+            domain="system",
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Expired session")
     return current_session
 
@@ -40,12 +67,30 @@ def get_current_user(
 ) -> User:
     user = db.get(User, current_session.user_id)
     if not user or not user.is_active:
+        emit_event(
+            level="warning",
+            category="auth",
+            event_type="auth.user.inactive",
+            message="Request was rejected because the user is inactive.",
+            actor={"type": "user", "id": current_session.user_id},
+            security={"severity": "medium", "reason": "inactive_user"},
+            domain="system",
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User inactive")
     return user
 
 
 def require_admin(user: User = Depends(get_current_user)) -> User:
     if not user.is_admin:
+        emit_event(
+            level="warning",
+            category="security",
+            event_type="auth.permission.denied",
+            message="Admin-only request was rejected for a non-admin user.",
+            actor={"type": "user", "id": user.id, "displayName": user.display_name},
+            security={"severity": "medium", "reason": "admin_required"},
+            domain="system",
+        )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
     return user
 
@@ -55,17 +100,26 @@ def require_csrf(
     x_csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
 ) -> str:
     if not x_csrf_token or not verify_secret(x_csrf_token, current_session.csrf_token_hash):
+        emit_event(
+            level="warning",
+            category="security",
+            event_type="auth.csrf.invalid",
+            message="Authenticated write was rejected because the CSRF token was missing or invalid.",
+            actor={"type": "user", "id": current_session.user_id},
+            security={"severity": "medium", "reason": "invalid_csrf"},
+            domain="system",
+        )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid CSRF token")
     return x_csrf_token
 
 
 def clear_session_cookie(response: Response) -> None:
-    settings = get_settings()
+    settings = get_effective_settings()
     response.delete_cookie(settings.session_cookie_name, httponly=True, samesite="lax", path="/")
 
 
 def set_session_cookie(response: Response, session_token: str) -> None:
-    settings = get_settings()
+    settings = get_effective_settings()
     response.set_cookie(
         key=settings.session_cookie_name,
         value=session_token,
@@ -102,4 +156,16 @@ def record_audit(
     )
     db.add(event)
     db.flush()
+    emit_event(
+        db,
+        level="info",
+        category="audit",
+        event_type=action,
+        message=action.replace(".", " ").replace("_", " ").title(),
+        actor={"type": actor_type, "id": actor_id or ""},
+        target={"type": "audit", "organization_id": organization_id or ""},
+        raw={"metadata": metadata},
+        domain="audit",
+        domain_event_id=event.id,
+    )
     return event

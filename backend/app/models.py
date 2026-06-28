@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -213,6 +213,32 @@ class AuditEvent(Base):
     action: Mapped[str] = mapped_column(String(255), index=True)
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
+
+
+class EventLogEntry(Base):
+    __tablename__ = "event_log_entries"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    level: Mapped[str] = mapped_column(String(20), index=True)
+    category: Mapped[str] = mapped_column(String(40), index=True)
+    event_type: Mapped[str] = mapped_column(String(120), index=True)
+    message: Mapped[str] = mapped_column(Text)
+    user_message: Mapped[str] = mapped_column(Text, default="")
+    correlation_id: Mapped[str] = mapped_column(String(80), default="", index=True)
+    request_id: Mapped[str] = mapped_column(String(80), default="", index=True)
+    actor_json: Mapped[str] = mapped_column(Text, default="{}")
+    target_json: Mapped[str] = mapped_column(Text, default="{}")
+    source_json: Mapped[str] = mapped_column(Text, default="{}")
+    http_json: Mapped[str] = mapped_column(Text, default="{}")
+    security_json: Mapped[str] = mapped_column(Text, default="{}")
+    raw_json: Mapped[str] = mapped_column(Text, default="{}")
+    domain: Mapped[str] = mapped_column(String(40), default="", index=True)
+    domain_event_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
+
+    __table_args__ = (
+        Index("ix_event_log_entries_domain_domain_event_id", "domain", "domain_event_id"),
+    )
 
 
 class AppSetting(Base):

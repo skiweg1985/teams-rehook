@@ -27,9 +27,6 @@ class SettingDefinition:
 
 
 OVERRIDABLE_SETTINGS: dict[str, SettingDefinition] = {
-    "bot_delivery_mode": SettingDefinition(
-        "bot_delivery_mode", "Bot delivery mode", "enum", False, ("mock", "real")
-    ),
     "bot_framework_enabled": SettingDefinition(
         "bot_framework_enabled", "Bot Framework enabled", "bool", False
     ),
@@ -67,10 +64,17 @@ OVERRIDABLE_SETTINGS: dict[str, SettingDefinition] = {
     "log_cleanup_interval_minutes": SettingDefinition(
         "log_cleanup_interval_minutes", "Log cleanup interval", "int", False
     ),
+    "event_debug_previews_enabled": SettingDefinition(
+        "event_debug_previews_enabled", "Event debug previews", "bool", False
+    ),
     "trust_x_forwarded_for": SettingDefinition(
         "trust_x_forwarded_for", "Trust X-Forwarded-For", "bool", False
     ),
+    "session_secure_cookie": SettingDefinition(
+        "session_secure_cookie", "Secure session cookie", "bool", False
+    ),
     "trusted_proxy_ips": SettingDefinition("trusted_proxy_ips", "Trusted proxy IPs", "string", False),
+    "cors_origins": SettingDefinition("cors_origins", "CORS origins", "string", False),
     "app_public_base_url": SettingDefinition("app_public_base_url", "Public URL", "url", False),
     "frontend_base_url": SettingDefinition("frontend_base_url", "Frontend URL", "url", False),
     "ms_app_tenant_id": SettingDefinition("ms_app_tenant_id", "Microsoft tenant ID", "string", False),
@@ -180,6 +184,8 @@ def _validate_and_normalize(key: str, value: str) -> str:
 
     if key == "trusted_proxy_ips":
         return _normalize_trusted_proxy_ips(raw)
+    if key == "cors_origins":
+        return _normalize_cors_origins(raw)
 
     return raw
 
@@ -200,6 +206,34 @@ def _normalize_trusted_proxy_ips(value: str) -> str:
                 detail="Trusted proxy IPs must be comma-separated IP addresses or CIDR ranges",
             ) from exc
     return ",".join(networks)
+
+
+def _normalize_cors_origins(value: str) -> str:
+    origins: list[str] = []
+    for part in value.split(","):
+        candidate = part.strip()
+        if not candidate:
+            continue
+        parsed = urlparse(candidate)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="CORS origins must be comma-separated HTTP or HTTPS origins",
+            )
+        if parsed.params or parsed.query or parsed.fragment or parsed.path not in {"", "/"}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="CORS origins must contain scheme, host, and optional port only",
+            )
+        origin = f"{parsed.scheme.lower()}://{parsed.netloc}"
+        if origin not in origins:
+            origins.append(origin)
+    if not origins:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="CORS origins must list at least one HTTP or HTTPS origin",
+        )
+    return ",".join(origins)
 
 
 def _coerce_for_settings(key: str, value: str) -> Any:
@@ -265,9 +299,11 @@ def set_override(db: Session, *, key: str, value: str, updated_by_id: str | None
     if key not in OVERRIDABLE_SETTINGS:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown setting")
 
+    previous_frontend_url = get_effective_settings().frontend_base_url.rstrip("/") if key == "frontend_base_url" else ""
     definition = OVERRIDABLE_SETTINGS[key]
-    stored = _serialize_for_storage(key, value)
-    _validate_feature_dependency(_hypothetical_overrides(key, _validate_and_normalize(key, value)))
+    normalized = _validate_and_normalize(key, value)
+    stored = _serialize_for_storage(key, normalized)
+    _validate_feature_dependency(_hypothetical_overrides(key, normalized))
     row = db.get(AppSetting, key)
     if row is None:
         row = AppSetting(key=key, value=stored, is_secret=definition.is_secret, updated_by_id=updated_by_id)
@@ -278,6 +314,25 @@ def set_override(db: Session, *, key: str, value: str, updated_by_id: str | None
         row.updated_by_id = updated_by_id
         row.updated_at = utc_now()
         db.add(row)
+
+    if key == "frontend_base_url":
+        cors_row = db.get(AppSetting, "cors_origins")
+        cors_stored = _stored_value(cors_row) if cors_row is not None else ""
+        if cors_row is None:
+            db.add(
+                AppSetting(
+                    key="cors_origins",
+                    value=_serialize_for_storage("cors_origins", normalized),
+                    is_secret=False,
+                    updated_by_id=updated_by_id,
+                )
+            )
+        elif cors_stored == previous_frontend_url:
+            cors_row.value = _serialize_for_storage("cors_origins", normalized)
+            cors_row.updated_by_id = updated_by_id
+            cors_row.updated_at = utc_now()
+            db.add(cors_row)
+
     db.flush()
     load_overrides(db)
     _on_change()

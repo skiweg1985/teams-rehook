@@ -14,17 +14,20 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
-from sqlalchemy import and_, delete, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.settings_overrides import clear_override, get_effective_settings, list_setting_items, set_override
 from app.database import get_db
 from app.deps import get_current_session, record_audit, require_admin, require_csrf
-from app.models import AuditEvent, BotActivityEvent, GraphDelegatedCredential, Session as UserSession, User, WebhookAbuseBucket
+from app.models import AuditEvent, BotActivityEvent, EventLogEntry, GraphDelegatedCredential, Session as UserSession, User, WebhookAbuseBucket
 from app.schemas import (
     AdminReadinessOut,
     AuditEventOut,
     BotReadinessOut,
+    ClientEventIn,
+    EventLogEntryOut,
+    EventLogEntryPageOut,
     GraphDeliveryOAuthStartOut,
     GraphDeliveryReadinessOut,
     GraphReadinessOut,
@@ -45,6 +48,7 @@ from app.schemas import (
     WebhookAbuseCleanupOut,
 )
 from app.security import ensure_utc, hash_secret, loads_json, utcnow
+from app.services.event_log import emit_event, event_from_entry
 from app.services.graph_delegated_auth import (
     DEFAULT_DELEGATED_GRAPH_SCOPES,
     GraphDelegatedAuthError,
@@ -413,6 +417,7 @@ def readiness(admin: User = Depends(require_admin), db: Session = Depends(get_db
             webhook_max_payload_bytes=settings.webhook_max_payload_bytes,
             log_retention_days=settings.log_retention_days,
             log_cleanup_interval_minutes=settings.log_cleanup_interval_minutes,
+            event_debug_previews_enabled=settings.event_debug_previews_enabled,
             session_secure_cookie=settings.session_secure_cookie,
             settings_encryption_key_source=settings.settings_enc_key_source,
             settings_encryption_ready=bool(settings.settings_enc_key.strip()),
@@ -1236,6 +1241,94 @@ def list_logs(
     ]
 
 
+@router.get("/event-logs", response_model=EventLogEntryPageOut, dependencies=[Depends(require_csrf)])
+def list_event_logs(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=250),
+    level: str = Query(default=""),
+    category: str = Query(default=""),
+    event_type: str = Query(default=""),
+    correlation_id: str = Query(default=""),
+    request_id: str = Query(default=""),
+    q: str = Query(default=""),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    _ = admin
+    cleanup_result = cleanup_log_events(db)
+    if not cleanup_result.skipped:
+        db.commit()
+
+    filters = []
+    if level.strip():
+        filters.append(EventLogEntry.level == level.strip())
+    if category.strip():
+        filters.append(EventLogEntry.category == category.strip())
+    if event_type.strip():
+        filters.append(EventLogEntry.event_type == event_type.strip())
+    if correlation_id.strip():
+        filters.append(EventLogEntry.correlation_id == correlation_id.strip())
+    if request_id.strip():
+        filters.append(EventLogEntry.request_id == request_id.strip())
+    if q.strip():
+        pattern = f"%{q.strip()}%"
+        filters.append(
+            or_(
+                EventLogEntry.message.ilike(pattern),
+                EventLogEntry.event_type.ilike(pattern),
+                EventLogEntry.category.ilike(pattern),
+                EventLogEntry.actor_json.ilike(pattern),
+                EventLogEntry.target_json.ilike(pattern),
+                EventLogEntry.source_json.ilike(pattern),
+                EventLogEntry.http_json.ilike(pattern),
+                EventLogEntry.security_json.ilike(pattern),
+            )
+        )
+
+    total_query = select(func.count()).select_from(EventLogEntry)
+    rows_query = select(EventLogEntry).order_by(EventLogEntry.created_at.desc())
+    if filters:
+        total_query = total_query.where(*filters)
+        rows_query = rows_query.where(*filters)
+    total = db.scalar(total_query) or 0
+    rows = db.scalars(rows_query.offset((page - 1) * page_size).limit(page_size)).all()
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    settings = get_effective_settings()
+    return EventLogEntryPageOut(
+        items=[EventLogEntryOut(**event_from_entry(row)) for row in rows],
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+        retention_days=max(0, settings.log_retention_days),
+    )
+
+
+@router.post("/client-events", response_model=EventLogEntryOut, dependencies=[Depends(require_csrf)])
+def create_client_event(
+    payload: ClientEventIn,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    event = emit_event(
+        db,
+        level=payload.level,
+        category="frontend",
+        event_type=payload.event_type,
+        message=payload.message,
+        correlation_id=payload.correlation_id or payload.request_id,
+        request_id=payload.request_id,
+        actor={"type": "admin", "id": admin.id, "displayName": admin.display_name},
+        target={"type": "admin_ui", "path": payload.path, "action": payload.action},
+        raw={"detail": payload.detail},
+        domain="frontend",
+    )
+    db.commit()
+    if event is None:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Client event could not be recorded")
+    return EventLogEntryOut(**event_from_entry(event))
+
+
 @router.get("/system-logs", response_model=list[SystemLogEventOut], dependencies=[Depends(require_csrf)])
 def list_system_logs(
     limit: int = Query(default=100, ge=1, le=250),
@@ -1285,6 +1378,7 @@ def cleanup_logs(admin: User = Depends(require_admin), db: Session = Depends(get
         deleted_webhook_delivery_events=cleanup_result.deleted_webhook_delivery_events,
         deleted_audit_events=cleanup_result.deleted_audit_events,
         deleted_bot_activity_events=cleanup_result.deleted_bot_activity_events,
+        deleted_event_log_entries=cleanup_result.deleted_event_log_entries,
         retention_days=cleanup_result.retention_days,
         cutoff=cleanup_result.cutoff,
     )

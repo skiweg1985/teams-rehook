@@ -13,10 +13,11 @@ usage() {
 Usage: ./manage.sh <command> [args]
 
 Commands:
+  setup                       Create or replace .env with guided defaults and optionally start the stack
   init-env                    Create .env from .env.example if missing
   check-env                   Check .env keys and warn about unsafe defaults
   sync-env                    Add missing active keys from .env.example to .env
-  start                       Build and start the Compose stack
+  start                       Build and start the Compose stack (runs setup first if .env is missing)
   stop                        Stop the Compose stack
   restart                     Restart the Compose stack
   status                      Show Compose service status
@@ -52,8 +53,15 @@ run_compose() {
   (cd "${ROOT_DIR}" && $COMPOSE "$@")
 }
 
+stack_is_running() {
+  if ! command -v docker >/dev/null 2>&1; then
+    return 1
+  fi
+  [ -n "$(run_compose ps --status running -q 2>/dev/null)" ]
+}
+
 ensure_env() {
-  [ -f "${ENV_FILE}" ] || die ".env not found. Run ./manage.sh init-env first."
+  [ -f "${ENV_FILE}" ] || die ".env not found. Run ./manage.sh setup first."
 }
 
 backup_env() {
@@ -132,6 +140,127 @@ confirm() {
     y|Y|yes|YES) return 0 ;;
     *) die "Aborted" ;;
   esac
+}
+
+confirm_default_yes() {
+  prompt=$1
+  printf '%s [Y/n] ' "${prompt}"
+  read answer
+  case "${answer}" in
+    ""|y|Y|yes|YES) return 0 ;;
+    n|N|no|NO) return 1 ;;
+    *) die "Aborted" ;;
+  esac
+}
+
+prompt_value() {
+  prompt=$1
+  default_value=${2:-}
+  if [ -n "${default_value}" ]; then
+    printf '%s [%s] ' "${prompt}" "${default_value}"
+  else
+    printf '%s ' "${prompt}"
+  fi
+  read answer
+  if [ -n "${answer}" ]; then
+    printf '%s' "${answer}"
+  else
+    printf '%s' "${default_value}"
+  fi
+}
+
+require_positive_port() {
+  value=$1
+  case "${value}" in
+    ''|*[!0-9]*) die "Port must be a number" ;;
+  esac
+  if [ "${value}" -lt 1 ] || [ "${value}" -gt 65535 ]; then
+    die "Port must be between 1 and 65535"
+  fi
+}
+
+write_minimal_env() {
+  http_port=$1
+  https_port=$2
+  app_url=$3
+  postgres_password=$4
+  secure_cookie=$5
+  tmp="${ENV_FILE}.tmp-$$"
+  cat > "${tmp}" <<EOF
+# Proxy listener ports (host -> HAProxy container 80/443)
+PROXY_HTTP_PORT=${http_port}
+PROXY_HTTPS_PORT=${https_port}
+
+# Public app URLs exposed by the proxy / load balancer
+APP_PUBLIC_BASE_URL=${app_url}
+FRONTEND_BASE_URL=${app_url}
+CORS_ORIGINS=${app_url}
+
+# Database
+POSTGRES_DB=app
+POSTGRES_USER=app
+POSTGRES_PASSWORD=${postgres_password}
+
+# Teams delivery
+BOT_DELIVERY_MODE=real
+
+# Session cookies
+SESSION_SECURE_COOKIE=${secure_cookie}
+EOF
+  mv "${tmp}" "${ENV_FILE}"
+}
+
+setup_env() {
+  http_port=8080
+  https_port=8443
+  secure_cookie=false
+  app_url="http://localhost:8080"
+  using_default_postgres_password=true
+
+  if [ -f "${ENV_FILE}" ]; then
+    confirm "Replace existing .env with guided defaults?"
+    backup_env
+  fi
+
+  if ! confirm_default_yes "Use HTTP port 8080?"; then
+    http_port=$(prompt_value "HTTP port")
+    require_positive_port "${http_port}"
+  fi
+
+  if confirm_default_yes "Use HTTPS with the local development certificate on port 8443?"; then
+    secure_cookie=true
+    if ! confirm_default_yes "Use HTTPS port 8443?"; then
+      https_port=$(prompt_value "HTTPS port")
+      require_positive_port "${https_port}"
+    fi
+    app_url="https://localhost:${https_port}"
+  else
+    app_url="http://localhost:${http_port}"
+  fi
+
+  if confirm_default_yes "Use the bundled Postgres development password (app)?"; then
+    postgres_password=app
+  else
+    postgres_password=$(generate_password)
+    using_default_postgres_password=false
+  fi
+
+  write_minimal_env "${http_port}" "${https_port}" "${app_url}" "${postgres_password}" "${secure_cookie}"
+  info "Wrote guided .env configuration"
+  if [ "${using_default_postgres_password}" = false ]; then
+    info "A random bundled Postgres password was written to .env."
+  fi
+  print_urls
+  info "Open the UI, create the first admin, then configure Microsoft identity in Settings."
+  if stack_is_running; then
+    info "Stack is already running."
+    return 0
+  fi
+  if confirm_default_yes "Start the stack now?"; then
+    run_start_compose
+  else
+    info "Run ./manage.sh start when you are ready."
+  fi
 }
 
 init_env() {
@@ -219,10 +348,28 @@ sync_env() {
   info "Added ${added} missing key(s) to .env"
 }
 
-start_stack() {
-  ensure_env
+run_start_compose() {
   require_command docker
   run_compose up -d --build
+}
+
+maybe_start_stack() {
+  ensure_env
+  if stack_is_running; then
+    info "Stack is already running."
+    print_urls
+    return 0
+  fi
+  run_start_compose
+}
+
+start_stack() {
+  if [ ! -f "${ENV_FILE}" ]; then
+    info ".env not found; running guided setup."
+    setup_env
+    return 0
+  fi
+  maybe_start_stack
 }
 
 stop_stack() {
@@ -368,6 +515,7 @@ fi
 shift || true
 
 case "${cmd}" in
+  setup) setup_env "$@" ;;
   init-env) init_env "$@" ;;
   check-env) check_env "$@" ;;
   sync-env) sync_env "$@" ;;

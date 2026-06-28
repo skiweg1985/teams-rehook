@@ -74,6 +74,10 @@ def make_client(db_session: Session, monkeypatch: pytest.MonkeyPatch, **env: str
         "MS_APP_CLIENT_ID": "",
         "MS_APP_CLIENT_SECRET": "",
         "BOT_DEFAULT_SERVICE_URL": "",
+        "APP_PUBLIC_BASE_URL": "http://localhost:5173",
+        "FRONTEND_BASE_URL": "http://localhost:5173",
+        "CORS_ORIGINS": "http://localhost:5173,http://localhost",
+        "SESSION_SECURE_COOKIE": "false",
     }
     defaults.update(env)
     for key, value in defaults.items():

@@ -26,13 +26,13 @@ For local development without Docker:
 Create local configuration:
 
 ```bash
-cp .env.example .env
+./manage.sh setup
 ```
 
 Start the stack:
 
 ```bash
-docker compose up -d --build
+./manage.sh start
 ```
 
 Open:
@@ -74,13 +74,7 @@ Important security-sensitive settings include:
 
 Use a real secret manager for production-like deployments. Do not commit populated `.env` files.
 
-## Delivery Modes
-
-Real Teams delivery is the default:
-
-```text
-BOT_DELIVERY_MODE=real
-```
+## Microsoft Delivery Setup
 
 Real Bot Framework delivery requires:
 
@@ -90,14 +84,6 @@ MS_APP_CLIENT_ID=
 MS_APP_CLIENT_SECRET=
 BOT_DEFAULT_SERVICE_URL=
 ```
-
-For credential-free local validation:
-
-```text
-BOT_DELIVERY_MODE=mock
-```
-
-Mock mode records successful delivery attempts without contacting Bot Framework.
 
 Delivery feature policy is controlled separately:
 

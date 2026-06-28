@@ -29,6 +29,7 @@ from app.services.bot_framework_auth import (
     validate_bot_framework_activity,
 )
 from app.services.graph_name_resolution import try_resolve_reference_graph_names, try_resolve_route_graph_names
+from app.services.event_log import emit_event
 from app.services.teams_bot import BotDeliveryError, send_bot_activity
 from app.services.webhook_payloads import NormalizedMessage
 
@@ -50,8 +51,28 @@ async def require_bot_framework_auth(
     try:
         return validate_bot_framework_activity(authorization, activity)
     except BotFrameworkAuthConfigError as exc:
+        emit_event(
+            level="error",
+            category="integration",
+            event_type="bot.auth.configuration_error",
+            message="Bot Framework authentication is not configured correctly.",
+            source={"ip": request.client.host if request.client else "", "user_agent": request.headers.get("user-agent", "")},
+            security={"severity": "high", "reason": "bot_auth_config_error"},
+            raw={"exception_type": exc.__class__.__name__, "exception": str(exc)},
+            domain="system",
+        )
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except BotFrameworkAuthError as exc:
+        emit_event(
+            level="warning",
+            category="security",
+            event_type="bot.auth.rejected",
+            message="Bot Framework activity was rejected by authentication validation.",
+            source={"ip": request.client.host if request.client else "", "user_agent": request.headers.get("user-agent", "")},
+            security={"severity": "high", "reason": "bot_auth_rejected"},
+            raw={"exception_type": exc.__class__.__name__, "exception": str(exc)},
+            domain="system",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(exc),
@@ -100,6 +121,25 @@ async def receive_bot_activity(
     )
     db.add(event)
     db.flush()
+    emit_event(
+        db,
+        level="info",
+        category="integration",
+        event_type="bot.activity.received",
+        message=f"Teams bot activity received: {event.activity_type or 'activity'}",
+        user_message="Teams activity received",
+        actor={"type": "external", "id": event.graph_user_id or event.from_id, "displayName": event.user_name},
+        target={
+            "type": "team" if event.team_id else "message",
+            "id": event.channel_id or event.conversation_id,
+            "team_id": event.team_id,
+            "channel_id": event.channel_id,
+        },
+        security={"severity": "low", "reason": event.auth_status},
+        raw={"conversation_type": event.conversation_type, "service_url": event.service_url},
+        domain="bot_activity",
+        domain_event_id=event.id,
+    )
     reference = _upsert_reference(db, captured)
     command_result = _handle_command(db, activity, captured, reference)
     db.commit()

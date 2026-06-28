@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     webhook_abuse_cleanup_days: int = 30
     log_retention_days: int = 7
     log_cleanup_interval_minutes: int = 60
+    event_debug_previews_enabled: bool = False
     trust_x_forwarded_for: bool = False
     trusted_proxy_ips: str = ""
     settings_enc_key: str = ""

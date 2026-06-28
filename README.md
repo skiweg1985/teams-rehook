@@ -26,15 +26,14 @@ See the [feature matrix](docs/feature-matrix.md) for the current capability over
 Prerequisites:
 
 - Docker and Docker Compose.
-- A Microsoft Teams bot/app registration for real Teams delivery.
-- Entra app credentials for Bot Framework delivery and Microsoft Graph features.
 
 Start the local Docker stack:
 
 ```bash
-./manage.sh init-env
 ./manage.sh start
 ```
+
+On first run, `./manage.sh start` launches the guided `.env` setup if the file is missing, then asks whether the stack should start immediately.
 
 Open the application:
 
@@ -49,6 +48,8 @@ http://localhost:8080/api/v1/docs
 ```
 
 On first startup, open the application and complete the first-run setup screen. The setup flow creates the first admin with the email, display name, and password you provide.
+
+After signing in, open `Settings` to add Microsoft Entra values, adjust URLs, and review delivery readiness. The app starts without Microsoft credentials; real Teams delivery becomes available after those settings are configured.
 
 `SESSION_SECRET` is optional. If it is omitted, the backend generates and stores an instance secret during first startup. Backend replicas that share the same database reuse that generated secret; production deployments can still provide one shared value through a secret manager.
 
@@ -68,7 +69,7 @@ Treat relay URLs as secrets. Anyone with a valid relay URL can send messages to 
 
 ## Configuration
 
-Copy `.env.example` to `.env` for local configuration. The Docker stack uses the bundled Postgres service by default. Set `DATABASE_URL` only when the backend should use an external Postgres database.
+`./manage.sh setup` writes a small `.env` with local infrastructure defaults and can start the stack afterward. `./manage.sh start` runs that guided setup automatically when `.env` is missing. The Docker stack uses the bundled Postgres service by default. Set `DATABASE_URL` only when the backend should use an external Postgres database.
 
 `./manage.sh` provides common single-host Compose operations:
 

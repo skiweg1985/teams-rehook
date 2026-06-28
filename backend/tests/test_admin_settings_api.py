@@ -54,6 +54,10 @@ def make_client(db_session: Session, monkeypatch: pytest.MonkeyPatch, **env: str
         "LOG_RETENTION_DAYS": "7",
         "WEBHOOK_MAX_PAYLOAD_BYTES": "64000",
         "SETTINGS_ENC_KEY": "test-settings-encryption-key",
+        "APP_PUBLIC_BASE_URL": "http://localhost:5173",
+        "FRONTEND_BASE_URL": "http://localhost:5173",
+        "CORS_ORIGINS": "http://localhost:5173,http://localhost",
+        "SESSION_SECURE_COOKIE": "false",
     }
     defaults.update(env)
     for key, value in defaults.items():
@@ -91,14 +95,18 @@ def test_list_settings_returns_env_defaults(db_session: Session, monkeypatch: py
         response = client.get("/api/v1/admin/settings", headers={"X-CSRF-Token": csrf})
         assert response.status_code == 200
         payload = response.json()
-        delivery = next(item for item in payload if item["key"] == "bot_delivery_mode")
-        assert delivery["env_default"] == "mock"
-        assert delivery["effective_value"] == "mock"
-        assert delivery["is_overridden"] is False
         bot_enabled = next(item for item in payload if item["key"] == "bot_framework_enabled")
         assert bot_enabled["type"] == "bool"
         assert bot_enabled["env_default"] == "true"
         assert bot_enabled["effective_value"] == "true"
+        cors_origins = next(item for item in payload if item["key"] == "cors_origins")
+        assert cors_origins["type"] == "string"
+        assert cors_origins["env_default"] == "http://localhost:5173,http://localhost"
+        assert cors_origins["effective_value"] == "http://localhost:5173,http://localhost"
+        session_cookie = next(item for item in payload if item["key"] == "session_secure_cookie")
+        assert session_cookie["type"] == "bool"
+        assert session_cookie["env_default"] == "false"
+        assert session_cookie["effective_value"] == "false"
         trust_xff = next(item for item in payload if item["key"] == "trust_x_forwarded_for")
         assert trust_xff["type"] == "bool"
         assert trust_xff["env_default"] == "false"
@@ -176,6 +184,110 @@ def test_trusted_proxy_settings_can_be_overridden_and_validated(
         )
         assert rejected.status_code == 400
         assert rejected.json()["detail"] == "Trusted proxy IPs must be comma-separated IP addresses or CIDR ranges"
+
+
+def test_browser_runtime_settings_can_be_overridden_and_validated(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with make_client(db_session, monkeypatch) as client:
+        csrf = login_admin(client)
+        secure_cookie = client.put(
+            "/api/v1/admin/settings/session_secure_cookie",
+            headers={"X-CSRF-Token": csrf},
+            json={"value": "true"},
+        )
+        assert secure_cookie.status_code == 200
+        assert secure_cookie.json()["effective_value"] == "true"
+
+        cors = client.put(
+            "/api/v1/admin/settings/cors_origins",
+            headers={"X-CSRF-Token": csrf},
+            json={"value": "https://ops.example.com, http://localhost:8080/"},
+        )
+        assert cors.status_code == 200
+        assert cors.json()["effective_value"] == "https://ops.example.com,http://localhost:8080"
+
+        invalid_cors = client.put(
+            "/api/v1/admin/settings/cors_origins",
+            headers={"X-CSRF-Token": csrf},
+            json={"value": "https://ops.example.com/app"},
+        )
+        assert invalid_cors.status_code == 400
+        assert invalid_cors.json()["detail"] == "CORS origins must contain scheme, host, and optional port only"
+
+
+def test_frontend_url_override_keeps_cors_origins_in_sync(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with make_client(db_session, monkeypatch) as client:
+        csrf = login_admin(client)
+        first = client.put(
+            "/api/v1/admin/settings/frontend_base_url",
+            headers={"X-CSRF-Token": csrf},
+            json={"value": "https://ops.example.com"},
+        )
+        assert first.status_code == 200
+
+        second = client.put(
+            "/api/v1/admin/settings/frontend_base_url",
+            headers={"X-CSRF-Token": csrf},
+            json={"value": "https://portal.example.com"},
+        )
+        assert second.status_code == 200
+
+        settings = client.get("/api/v1/admin/settings", headers={"X-CSRF-Token": csrf})
+        assert settings.status_code == 200
+        items = {item["key"]: item for item in settings.json()}
+        assert items["frontend_base_url"]["effective_value"] == "https://portal.example.com"
+        assert items["cors_origins"]["effective_value"] == "https://portal.example.com"
+        assert items["cors_origins"]["is_overridden"] is True
+
+
+def test_overridden_cors_origins_drive_preflight_responses(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with make_client(db_session, monkeypatch) as client:
+        csrf = login_admin(client)
+        updated = client.put(
+            "/api/v1/admin/settings/cors_origins",
+            headers={"X-CSRF-Token": csrf},
+            json={"value": "https://ops.example.com"},
+        )
+        assert updated.status_code == 200
+
+        preflight = client.options(
+            "/api/v1/admin/settings",
+            headers={
+                "Origin": "https://ops.example.com",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "X-CSRF-Token",
+            },
+        )
+        assert preflight.status_code == 204
+        assert preflight.headers["access-control-allow-origin"] == "https://ops.example.com"
+        assert preflight.headers["access-control-allow-credentials"] == "true"
+        assert preflight.headers["access-control-allow-methods"] == "GET"
+        assert preflight.headers["access-control-allow-headers"] == "X-CSRF-Token"
+
+
+def test_session_cookie_uses_effective_secure_flag(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with make_client(db_session, monkeypatch) as client:
+        csrf = login_admin(client)
+        updated = client.put(
+            "/api/v1/admin/settings/session_secure_cookie",
+            headers={"X-CSRF-Token": csrf},
+            json={"value": "true"},
+        )
+        assert updated.status_code == 200
+
+        response = client.post(
+            "/api/v1/auth/login",
+            json={"email": "admin@example.com", "password": "change-me-admin-password"},
+        )
+        assert response.status_code == 200
+        assert "Secure" in response.headers["set-cookie"]
 
 
 def test_graph_delivery_requires_graph_lookup_enabled(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:

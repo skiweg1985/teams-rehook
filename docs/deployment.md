@@ -14,11 +14,10 @@ No Kubernetes manifests, Terraform, Helm chart, hosted image registry, or produc
 Start:
 
 ```bash
-./manage.sh init-env
 ./manage.sh start
 ```
 
-The root-level `./manage.sh` script is a thin operator wrapper around Docker Compose, `.env`, and bundled Postgres maintenance. It does not replace the in-app admin UI for normal users, runtime settings, or Microsoft integration setup.
+On first run, `./manage.sh start` launches the guided `.env` setup if the file is missing. `./manage.sh setup` still writes a local `.env` with ports, URLs, bundled Postgres credentials, `BOT_DELIVERY_MODE=real`, and the session cookie flag, then offers to start the stack. The root-level `./manage.sh` script is a thin operator wrapper around Docker Compose, `.env`, and bundled Postgres maintenance. It does not replace the in-app admin UI for normal users, runtime settings, or Microsoft integration setup.
 
 Common commands:
 
@@ -63,7 +62,7 @@ Default local URLs:
 - HTTPS UI with local cert: `https://localhost:8443`
 - API docs through proxy: `http://localhost:8080/api/v1/docs`
 
-If a port is already in use, change `PROXY_HTTP_PORT` or `PROXY_HTTPS_PORT` in `.env`.
+If a port is already in use, rerun `./manage.sh setup` and choose a different port.
 
 ## Persistent Data
 

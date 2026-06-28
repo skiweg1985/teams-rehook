@@ -53,6 +53,8 @@ import type {
   BotConversationReferenceOut,
   ClientIpAccessMode,
   DeliveryBackend,
+  EventLogEntryOut,
+  EventLogEntryPageOut,
   GraphTargetKind,
   OAuthDiagnosticsOut,
   SettingItemOut,
@@ -76,7 +78,7 @@ type PayloadAccent = "neutral" | "success" | "warning" | "critical";
 type PayloadImageSize = "Auto" | "Stretch";
 type PayloadTitleSize = "Default" | "Medium" | "Large";
 type PayloadTitleWeight = "Default" | "Bolder";
-type SystemLogTab = "security" | "audit" | "bot";
+type SystemLogTab = "timeline" | "security" | "audit" | "bot";
 
 type PayloadFact = {
   id: string;
@@ -3826,12 +3828,6 @@ const SETTING_META: Record<string, SettingMeta> = {
     help: "Requires Graph lookup to stay enabled.",
     display: "switch",
   },
-  bot_delivery_mode: {
-    section: "delivery",
-    label: "Delivery mode",
-    description: "Choose whether webhook tests send real Teams messages.",
-    display: "segmented",
-  },
   bot_default_service_url: {
     section: "runtime",
     label: "Default service URL",
@@ -3913,6 +3909,18 @@ const SETTING_META: Record<string, SettingMeta> = {
     description: "Comma-separated proxy IPs or CIDR ranges allowed to supply forwarded client IPs.",
     display: "technical",
   },
+  session_secure_cookie: {
+    section: "runtime",
+    label: "Secure session cookie",
+    description: "Require HTTPS before browsers send the session cookie.",
+    display: "switch",
+  },
+  cors_origins: {
+    section: "runtime",
+    label: "CORS origins",
+    description: "Comma-separated browser origins allowed to send authenticated requests.",
+    display: "technical",
+  },
   app_public_base_url: {
     section: "runtime",
     label: "Public URL",
@@ -3961,12 +3969,13 @@ const DELIVERY_SETTING_KEYS = [
   "bot_framework_enabled",
   "graph_lookup_enabled",
   "graph_delivery_enabled",
-  "bot_delivery_mode",
 ] as const;
 
 const RUNTIME_SETTING_KEYS = [
   "app_public_base_url",
   "frontend_base_url",
+  "cors_origins",
+  "session_secure_cookie",
   "bot_default_service_url",
   "webhook_max_payload_bytes",
   "webhook_abuse_blocking_enabled",
@@ -4207,7 +4216,6 @@ function SettingsOverviewStrip({
   overrideCount: number;
   settingsByKey: Map<string, SettingItemOut>;
 }) {
-  const deliveryMode = settingValue(settingsByKey, "bot_delivery_mode") || "mock";
   const tenantConfigured = Boolean(settingValue(settingsByKey, "ms_app_tenant_id"));
   const clientConfigured = Boolean(settingValue(settingsByKey, "ms_app_client_id"));
   const secretConfigured = settingValue(settingsByKey, "ms_app_client_secret") === "configured";
@@ -4219,12 +4227,6 @@ function SettingsOverviewStrip({
         label="Source"
         value={overrideCount > 0 ? `${overrideCount} active` : "Environment"}
         detail={overrideCount > 0 ? "Runtime overrides are applied immediately." : "All values inherit from environment defaults."}
-      />
-      <OverviewMetric
-        label="Delivery"
-        value={deliveryMode === "real" ? "Real sends" : "Mock mode"}
-        detail={deliveryMode === "real" ? "Messages can reach Teams." : "Delivery is simulated for checks."}
-        tone={deliveryMode === "real" ? "success" : "neutral"}
       />
       <OverviewMetric
         label="Features"
@@ -4294,6 +4296,7 @@ function RuntimeDefaultsCard({
   settingsByKey,
 }: SettingsCardProps) {
   const urlSettings = settings.filter((item) => item.type === "url" && item.key !== "bot_default_service_url");
+  const browserSettings = settings.filter((item) => item.key === "cors_origins" || item.key === "session_secure_cookie");
   const limitSettings = settings.filter((item) => item.type === "int" && !item.key.startsWith("webhook_abuse_"));
   const abuseSettings = settings.filter((item) => item.key.startsWith("webhook_abuse_"));
   const fallbackSettings = settings.filter((item) => item.key === "bot_default_service_url");
@@ -4307,7 +4310,7 @@ function RuntimeDefaultsCard({
             <h3>URLs</h3>
             <p>Copied into generated links and fallback delivery paths.</p>
           </div>
-          {[...urlSettings, ...fallbackSettings].map((item) => (
+          {[...urlSettings, ...browserSettings, ...fallbackSettings].map((item) => (
             <RuntimeSettingControl
               key={item.key}
               item={item}
@@ -4410,6 +4413,9 @@ function AdvancedIdentityCard({
         </button>
         {open ? (
           <div className="settings-advanced-list" id="advanced-identity-settings">
+            <p className="settings-advanced-intro">
+              Microsoft Entra app registration used for Bot Framework and Graph. These values apply immediately after saving.
+            </p>
             {settings.map((item) => (
               <RuntimeSettingControl
                 key={item.key}
@@ -4736,7 +4742,6 @@ function buildBotIntegrationView(readiness: AdminReadinessOut, onCopy: (value: s
     lastCheckedLabel: oauth.token.checked ? "Checked this request" : "Not checked",
     badges: [
       { label: readiness.bot.enabled ? "Enabled" : "Disabled", tone: readiness.bot.enabled ? "success" : "neutral" },
-      { label: readiness.delivery_mode, tone: readiness.delivery_mode === "real" ? "success" : "neutral" },
       {
         label: readiness.bot.default_service_url_configured ? "Service URL set" : "No service URL",
         tone: readiness.bot.default_service_url_configured ? "success" : "warn",
@@ -4754,7 +4759,6 @@ function buildBotIntegrationView(readiness: AdminReadinessOut, onCopy: (value: s
       },
     ],
     capabilities: [
-      { label: "Delivery mode", value: readiness.delivery_mode === "real" ? "Real sends" : "Mock mode", tone: readiness.delivery_mode === "real" ? "success" : "neutral" },
       { label: "Message path", value: "Bot conversation" },
       { label: "Scope", value: compactScope(oauth.scope || oauth.token.audience) },
     ],
@@ -4865,7 +4869,7 @@ function buildGraphDeliveryIntegrationView(
       },
     ],
     capabilities: [
-      { label: "Delivery mode", value: readiness.enabled ? "Available" : "Disabled", tone: readiness.enabled ? "success" : "neutral" },
+      { label: "Availability", value: readiness.enabled ? "Available" : "Disabled", tone: readiness.enabled ? "success" : "neutral" },
       { label: "Sender", value: serviceUser },
       { label: "Token expires", value: readiness.access_token_expires_at ? formatRelativeTime(readiness.access_token_expires_at) : "-" },
     ],
@@ -4980,12 +4984,6 @@ function RelayHealthHero({
       </div>
       <div className="status-relay-metrics">
         <StatusOverviewMetric label="Overall" value={overallLabel} detail={overallTone === "success" ? "No active blockers." : "Review pipeline details."} tone={overallTone} />
-        <StatusOverviewMetric
-          label="Delivery"
-          value={readiness.delivery_mode === "real" ? "Real sends" : "Mock mode"}
-          detail={readiness.delivery_mode === "real" ? "Messages can reach Teams." : "Delivery is simulated."}
-          tone={readiness.delivery_mode === "real" ? "success" : "neutral"}
-        />
         <StatusOverviewMetric
           label="Tokens"
           value={`${tokenCount}/${integrations.length} valid`}
@@ -5342,7 +5340,7 @@ function readinessSummary(authStatus: string, message: string, oauth: OAuthDiagn
   if (authStatus === "disabled") return message || "This integration is disabled by feature policy.";
   if (authStatus === "ready") return "Token checks passed, required credentials are present and the integration is ready for production traffic.";
   if (authStatus === "permission_warning") return "Core token checks passed, but optional directory metadata is limited by Microsoft Graph permissions.";
-  if (authStatus === "mock") return "Delivery is running in mock mode, so Teams messages are validated without being sent.";
+  if (authStatus === "mock") return "Token checks are skipped in this environment, but local delivery checks remain available.";
   if (authStatus === "token_error") return message || "Token verification failed, so runtime delivery cannot be trusted yet.";
   if (authStatus === "incomplete") return message || "Required credentials are missing for this integration.";
   if (oauth.token.succeeded) return "Token checks passed, but the readiness state needs review.";
@@ -5770,7 +5768,12 @@ function SystemLogsPage() {
   const [auditLogs, setAuditLogs] = useState<AuditEventOut[]>([]);
   const [systemLogs, setSystemLogs] = useState<SystemLogEventOut[]>([]);
   const [abuseBuckets, setAbuseBuckets] = useState<WebhookAbuseBucketOut[]>([]);
-  const [activeTab, setActiveTab] = useState<SystemLogTab>("security");
+  const [eventLogPage, setEventLogPage] = useState<EventLogEntryPageOut | null>(null);
+  const [activeTab, setActiveTab] = useState<SystemLogTab>("timeline");
+  const [eventLevelFilter, setEventLevelFilter] = useState("");
+  const [eventCategoryFilter, setEventCategoryFilter] = useState("");
+  const [eventSearch, setEventSearch] = useState("");
+  const [eventCorrelationId, setEventCorrelationId] = useState("");
   const [loading, setLoading] = useState(true);
   const [cleanupBusy, setCleanupBusy] = useState(false);
   const [abuseCleanupBusy, setAbuseCleanupBusy] = useState(false);
@@ -5782,11 +5785,19 @@ function SystemLogsPage() {
     setLoading(true);
     setError("");
     try {
-      const [nextAuditLogs, nextSystemLogs, nextAbuseBuckets] = await Promise.all([
+      const [nextEventLogs, nextAuditLogs, nextSystemLogs, nextAbuseBuckets] = await Promise.all([
+        api.adminEventLogs(csrfToken, {
+          pageSize: 80,
+          level: eventLevelFilter,
+          category: eventCategoryFilter,
+          correlationId: eventCorrelationId.trim(),
+          query: eventSearch.trim(),
+        }),
         api.adminLogs(csrfToken),
         api.adminSystemLogs(csrfToken),
         api.adminWebhookAbuseBuckets(csrfToken),
       ]);
+      setEventLogPage(nextEventLogs);
       setAuditLogs(nextAuditLogs);
       setSystemLogs(nextSystemLogs);
       setAbuseBuckets(nextAbuseBuckets);
@@ -5795,7 +5806,7 @@ function SystemLogsPage() {
     } finally {
       setLoading(false);
     }
-  }, [csrfToken]);
+  }, [csrfToken, eventCategoryFilter, eventCorrelationId, eventLevelFilter, eventSearch]);
 
   useEffect(() => {
     void refresh();
@@ -5865,12 +5876,15 @@ function SystemLogsPage() {
   }
 
   const abuseClients = useMemo(() => buildWebhookAbuseClients(abuseBuckets), [abuseBuckets]);
+  const eventLogs = eventLogPage?.items ?? [];
+  const errorEventCount = eventLogs.filter((event) => ["error", "critical"].includes(event.level)).length;
   const activeBlockCount = abuseClients.filter((client) => client.status === "blocked").length;
   const observedClientCount = abuseClients.filter((client) => client.status === "watching").length;
   const unknownAuthCount = systemLogs.filter((event) => event.auth_status !== "verified").length;
   const lastActivityAt = latestDate(
     [
       ...abuseClients.map((client) => client.lastSeen),
+      ...eventLogs.map((event) => event.created_at),
       ...auditLogs.map((event) => event.created_at),
       ...systemLogs.map((event) => event.created_at),
     ].filter(Boolean),
@@ -5925,9 +5939,10 @@ function SystemLogsPage() {
         />
         <SystemSummaryTile
           icon={Activity}
-          label="Admin audit"
-          value={String(auditLogs.length)}
-          context={auditLogs[0] ? `Latest ${formatRelativeTime(auditLogs[0].created_at)}` : "No recent events"}
+          label="Event ledger"
+          value={String(eventLogPage?.total ?? eventLogs.length)}
+          context={errorEventCount ? `${errorEventCount} errors in view` : "Unified timeline"}
+          tone={errorEventCount ? "warn" : "neutral"}
         />
         <SystemSummaryTile
           icon={Bot}
@@ -5978,7 +5993,7 @@ function SystemLogsPage() {
 
       <Card
         title="Activity explorer"
-        description="Switch between security, audit and bot activity without losing the operational context above."
+        description="Start with the unified event timeline, then jump into specialized security, audit or bot views when needed."
         headerActions={
           <div className="segmented-control" aria-label="System log sections">
             {SYSTEM_LOG_TABS.map((tab) => (
@@ -5994,6 +6009,56 @@ function SystemLogsPage() {
           </div>
         }
       >
+        {activeTab === "timeline" ? (
+          <SystemLogState
+            loading={loading}
+            error={error}
+            empty={!eventLogs.length}
+            emptyTitle="No event ledger entries"
+            emptyBody="Structured request, audit, webhook, integration and system events will appear here."
+            onRetry={() => void refresh()}
+          >
+            <div className="event-log-filters">
+              <label className="compact-filter">
+                <span>Level</span>
+                <select value={eventLevelFilter} onChange={(event) => setEventLevelFilter(event.target.value)}>
+                  <option value="">All levels</option>
+                  <option value="info">Info</option>
+                  <option value="warning">Warning</option>
+                  <option value="error">Error</option>
+                  <option value="critical">Critical</option>
+                </select>
+              </label>
+              <label className="compact-filter">
+                <span>Category</span>
+                <select value={eventCategoryFilter} onChange={(event) => setEventCategoryFilter(event.target.value)}>
+                  <option value="">All categories</option>
+                  <option value="request">Request</option>
+                  <option value="auth">Auth</option>
+                  <option value="audit">Audit</option>
+                  <option value="security">Security</option>
+                  <option value="webhook">Webhook</option>
+                  <option value="integration">Integration</option>
+                  <option value="system">System</option>
+                  <option value="frontend">Frontend</option>
+                </select>
+              </label>
+              <label className="compact-filter">
+                <span>Correlation</span>
+                <input value={eventCorrelationId} placeholder="Correlation ID" onChange={(event) => setEventCorrelationId(event.target.value)} />
+              </label>
+              <label className="compact-filter">
+                <span>Search</span>
+                <input value={eventSearch} placeholder="Message, type, actor, source" onChange={(event) => setEventSearch(event.target.value)} />
+              </label>
+            </div>
+            <div className="activity-list">
+              {eventLogs.map((event) => (
+                <EventLogActivityRow key={event.id} event={event} />
+              ))}
+            </div>
+          </SystemLogState>
+        ) : null}
         {activeTab === "security" ? (
           <SystemLogState loading={loading} error={error} empty={!abuseClients.length} emptyTitle="No webhook abuse clients" emptyBody="Failed webhook attempts will appear here when a client starts being observed." onRetry={() => void refresh()}>
             <div className="activity-list">
@@ -6032,6 +6097,7 @@ function SystemLogsPage() {
 }
 
 const SYSTEM_LOG_TABS: Array<{ value: SystemLogTab; label: string }> = [
+  { value: "timeline", label: "Timeline" },
   { value: "security", label: "Security" },
   { value: "audit", label: "Audit" },
   { value: "bot", label: "Bot activity" },
@@ -6136,6 +6202,57 @@ function AbuseClientCompactRow({
         </button>
       ) : null}
     </div>
+  );
+}
+
+function EventLogActivityRow({ event }: { event: EventLogEntryOut }) {
+  const statusCode = stringField(event.http, "status_code");
+  const duration = stringField(event.http, "duration_ms");
+  const sourceIp = stringField(event.source, "ip");
+  const actorLabel = eventActorLabel(event);
+  const targetLabel = eventTargetLabel(event);
+  return (
+    <article className="activity-row event-log-row">
+      <div className="activity-row-main">
+        <StatusBadge label={event.level || "info"} tone={eventLevelTone(event.level)} />
+        <div className="activity-row-copy">
+          <strong>{event.message || humanizeLogToken(event.event_type)}</strong>
+          <span>
+            <code>{event.event_type}</code>
+            {actorLabel ? ` · ${actorLabel}` : ""}
+            {targetLabel ? ` · ${targetLabel}` : ""}
+          </span>
+        </div>
+      </div>
+      <div className="activity-row-meta">
+        <StatusBadge label={event.category || "event"} tone={eventCategoryTone(event.category)} />
+        {statusCode !== "-" ? <span>HTTP {statusCode}{duration !== "-" ? ` · ${duration}ms` : ""}</span> : null}
+        <span>{formatRelativeTime(event.created_at)}</span>
+      </div>
+      <details className="activity-row-details">
+        <summary>Structured event</summary>
+        <dl className="definition-list definition-list--compact">
+          <dt>Request ID</dt>
+          <dd><code>{event.request_id || "-"}</code></dd>
+          <dt>Correlation ID</dt>
+          <dd><code>{event.correlation_id || "-"}</code></dd>
+          <dt>Source</dt>
+          <dd>{sourceIp || "-"}</dd>
+          <dt>Domain</dt>
+          <dd>{event.domain || "-"}{event.domain_event_id ? ` / ${event.domain_event_id}` : ""}</dd>
+          <dt>Time</dt>
+          <dd>{formatDateTime(event.created_at)}</dd>
+        </dl>
+        <pre className="json-block">{compactJson({
+          actor: event.actor,
+          target: event.target,
+          source: event.source,
+          http: event.http,
+          security: event.security,
+          raw: event.raw,
+        })}</pre>
+      </details>
+    </article>
   );
 }
 
@@ -6263,6 +6380,37 @@ function humanizeLogToken(value: string): string {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function eventLevelTone(level: string): "neutral" | "success" | "warn" | "danger" {
+  if (level === "critical" || level === "error") return "danger";
+  if (level === "warning") return "warn";
+  if (level === "info") return "success";
+  return "neutral";
+}
+
+function eventCategoryTone(category: string): "neutral" | "success" | "warn" | "danger" {
+  if (category === "security" || category === "system") return "warn";
+  if (category === "webhook" || category === "integration") return "success";
+  return "neutral";
+}
+
+function eventActorLabel(event: EventLogEntryOut): string {
+  const type = stringField(event.actor, "type");
+  const name = stringField(event.actor, "displayName");
+  const id = stringField(event.actor, "id");
+  if (name !== "-") return `${type !== "-" ? type : "actor"} ${name}`;
+  if (id !== "-") return `${type !== "-" ? type : "actor"} ${id.slice(0, 8)}`;
+  return "";
+}
+
+function eventTargetLabel(event: EventLogEntryOut): string {
+  const type = stringField(event.target, "type");
+  const name = stringField(event.target, "name");
+  const id = stringField(event.target, "id");
+  if (name !== "-") return `${type !== "-" ? type : "target"} ${name}`;
+  if (id !== "-") return `${type !== "-" ? type : "target"} ${id.slice(0, 12)}`;
+  return "";
 }
 
 function formatAuditActor(event: AuditEventOut): string {

@@ -12,6 +12,7 @@ from typing import Callable
 from app.core.config import Settings
 from app.core.settings_overrides import get_effective_settings
 from app.security import utcnow
+from app.services.event_log import emit_event
 from app.services.webhook_payloads import NormalizedMessage
 
 
@@ -140,6 +141,15 @@ def send_bot_activity(
     mode = settings.bot_delivery_mode_normalized
     activity = build_activity(message)
     if mode == "mock":
+        emit_event(
+            level="info",
+            category="integration",
+            event_type="bot_framework.delivery.mock",
+            message="Bot Framework delivery was simulated in mock mode.",
+            target={"type": "message", "conversation_id": conversation_id},
+            raw={"activity_type": activity.get("type", "")},
+            domain="integration",
+        )
         return BotDeliveryResult(mode="mock", activity_id="mock-activity", status_code=202, activity=activity)
 
     service_url = service_url.strip().rstrip("/")
@@ -165,6 +175,16 @@ def send_bot_activity(
             response_body = response.read().decode("utf-8")
             parsed = json.loads(response_body) if response_body else {}
             activity_id = parsed.get("id") if isinstance(parsed, dict) else None
+            emit_event(
+                level="info",
+                category="integration",
+                event_type="bot_framework.delivery.sent",
+                message=f"Bot Framework delivery completed with HTTP {response.status}.",
+                target={"type": "message", "conversation_id": conversation_id, "service_url": service_url},
+                http={"method": "POST", "status_code": response.status},
+                raw={"activity_id": str(activity_id) if activity_id else ""},
+                domain="integration",
+            )
             return BotDeliveryResult(
                 mode="real",
                 activity_id=str(activity_id) if activity_id else None,
@@ -173,6 +193,25 @@ def send_bot_activity(
             )
     except urllib.error.HTTPError as exc:
         safe_body = exc.read().decode("utf-8", errors="replace")[:500]
+        emit_event(
+            level="error",
+            category="integration",
+            event_type="bot_framework.delivery.http_error",
+            message=f"Bot Framework delivery failed with HTTP {exc.code}.",
+            target={"type": "message", "conversation_id": conversation_id, "service_url": service_url},
+            http={"method": "POST", "status_code": exc.code},
+            raw={"provider_preview": safe_body},
+            domain="integration",
+        )
         raise BotDeliveryError(f"Bot Framework delivery failed with HTTP {exc.code}: {safe_body}") from exc
     except urllib.error.URLError as exc:
+        emit_event(
+            level="error",
+            category="integration",
+            event_type="bot_framework.delivery.request_error",
+            message="Bot Framework delivery request failed.",
+            target={"type": "message", "conversation_id": conversation_id, "service_url": service_url},
+            raw={"exception_type": exc.__class__.__name__, "exception": str(exc)},
+            domain="integration",
+        )
         raise BotDeliveryError("Bot Framework delivery failed") from exc

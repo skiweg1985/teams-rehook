@@ -112,6 +112,46 @@ class SystemLogEventOut(BaseModel):
     created_at: datetime
 
 
+class EventLogEntryOut(BaseModel):
+    id: str
+    level: str
+    category: str
+    event_type: str
+    message: str
+    user_message: str = ""
+    correlation_id: str = ""
+    request_id: str = ""
+    actor: dict[str, Any] = Field(default_factory=dict)
+    target: dict[str, Any] = Field(default_factory=dict)
+    source: dict[str, Any] = Field(default_factory=dict)
+    http: dict[str, Any] = Field(default_factory=dict)
+    security: dict[str, Any] = Field(default_factory=dict)
+    raw: dict[str, Any] = Field(default_factory=dict)
+    domain: str = ""
+    domain_event_id: str | None = None
+    created_at: datetime
+
+
+class EventLogEntryPageOut(BaseModel):
+    items: list[EventLogEntryOut]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    retention_days: int
+
+
+class ClientEventIn(BaseModel):
+    level: Literal["warning", "error"] = "error"
+    event_type: str = Field(default="frontend.admin_ui_error", min_length=1, max_length=120)
+    message: str = Field(min_length=1, max_length=1000)
+    path: str = Field(default="", max_length=600)
+    action: str = Field(default="", max_length=200)
+    request_id: str = Field(default="", max_length=80)
+    correlation_id: str = Field(default="", max_length=80)
+    detail: dict[str, Any] = Field(default_factory=dict)
+
+
 class WebhookAbuseBucketOut(BaseModel):
     id: str
     scope: Literal["ip", "ip_route"]
@@ -338,6 +378,7 @@ class LogCleanupOut(BaseModel):
     deleted_webhook_delivery_events: int
     deleted_audit_events: int
     deleted_bot_activity_events: int
+    deleted_event_log_entries: int
     retention_days: int
     cutoff: datetime
 
@@ -427,6 +468,7 @@ class RuntimeReadinessOut(BaseModel):
     webhook_max_payload_bytes: int
     log_retention_days: int
     log_cleanup_interval_minutes: int
+    event_debug_previews_enabled: bool
     session_secure_cookie: bool
     settings_encryption_key_source: str
     settings_encryption_ready: bool

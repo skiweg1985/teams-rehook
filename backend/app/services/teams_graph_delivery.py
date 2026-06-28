@@ -14,6 +14,7 @@ from app.core.config import Settings
 from app.core.settings_overrides import get_effective_settings
 from app.models import WebhookRoute
 from app.services.graph_delegated_auth import GraphDelegatedAuthError, refresh_delegated_access_token
+from app.services.event_log import emit_event
 from app.services.webhook_payloads import NormalizedMessage
 
 
@@ -79,6 +80,7 @@ def send_graph_message(
         if not _should_retry_without_attachments(exc, payload):
             _apply_operator_guidance(exc, target, token.diagnostics)
             exc.result = _error_result(exc, target)
+            _emit_graph_delivery_error(db, route=route, target=target, exc=exc)
             raise
         fallback_payload = build_chat_message_payload(message, include_attachments=False)
         try:
@@ -86,9 +88,25 @@ def send_graph_message(
         except GraphDeliveryError as retry_exc:
             _apply_operator_guidance(retry_exc, target, token.diagnostics)
             retry_exc.result = _error_result(retry_exc, target)
+            _emit_graph_delivery_error(db, route=route, target=target, exc=retry_exc)
             raise
         payload = fallback_payload
 
+    emit_event(
+        db,
+        level="info",
+        category="integration",
+        event_type="graph.delivery.sent",
+        message=f"Microsoft Graph delivery completed with HTTP {response['status_code']}.",
+        target={
+            "type": target.get("kind", "message"),
+            "id": target.get("channel_id") or target.get("chat_id") or "",
+            "route_id": getattr(route, "id", "") or "",
+        },
+        http={"method": "POST", "path": endpoint, "status_code": response["status_code"]},
+        raw={"message_id": response["body"].get("id", "") if isinstance(response["body"], dict) else ""},
+        domain="integration",
+    )
     return GraphDeliveryResult(
         mode="real",
         status_code=response["status_code"],
@@ -116,6 +134,17 @@ def _delegated_token(db: Session, *, organization_id: str, settings: Settings):
     try:
         return refresh_delegated_access_token(db, organization_id=organization_id, settings=settings)
     except GraphDelegatedAuthError as exc:
+        emit_event(
+            db,
+            level="error",
+            category="integration",
+            event_type="graph.delivery.auth_error",
+            message="Delegated Graph delivery token refresh failed.",
+            target={"type": "app", "organization_id": organization_id},
+            security={"severity": "high", "reason": "graph_delegated_auth_error"},
+            raw={"exception_type": exc.__class__.__name__, "exception": str(exc)},
+            domain="integration",
+        )
         raise GraphDeliveryError(
             "Delegated Graph delivery is not ready. Reconnect the service user in Settings.",
             error_type="auth_error",
@@ -257,6 +286,29 @@ def _safe_graph_error_details(exc: urllib.error.HTTPError) -> tuple[str, str]:
         code = str(error.get("code") or "").strip()
         return code, f"{code}: {message}" if code else message
     return "", "Microsoft Graph returned an error."
+
+
+def _emit_graph_delivery_error(db: Session, *, route: WebhookRoute, target: dict[str, str], exc: GraphDeliveryError) -> None:
+    emit_event(
+        db,
+        level="error",
+        category="integration",
+        event_type=f"graph.delivery.{exc.error_type}",
+        message=str(exc),
+        target={
+            "type": target.get("kind", "message"),
+            "id": target.get("channel_id") or target.get("chat_id") or "",
+            "route_id": getattr(route, "id", "") or "",
+        },
+        http={"method": "POST", "status_code": exc.status_code},
+        security={"severity": "medium", "reason": exc.error_type},
+        raw={
+            "graph_error_code": exc.graph_error_code,
+            "graph_error_message": exc.graph_error_message,
+            "result": exc.result,
+        },
+        domain="integration",
+    )
 
 
 def _apply_operator_guidance(exc: GraphDeliveryError, target: dict[str, str], diagnostics: Any) -> None:

@@ -20,14 +20,21 @@
 ## Local Setup With Docker
 
 ```bash
-cp .env.example .env
-docker compose up -d --build
+./manage.sh start
 ```
+
+On first run, `./manage.sh start` launches the guided `.env` setup if needed. Running `./manage.sh setup` explicitly still writes the local `.env` first and then offers to start the stack.
 
 Open:
 
 ```text
 http://localhost:8080
+```
+
+For local credential-free delivery checks while developing integration code, set this explicitly in `.env` and restart the backend:
+
+```text
+BOT_DELIVERY_MODE=mock
 ```
 
 ## Local Setup Without Docker

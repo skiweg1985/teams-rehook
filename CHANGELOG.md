@@ -8,6 +8,7 @@ This project follows the structure of [Keep a Changelog](https://keepachangelog.
 
 ### Added
 
+- Guided `./manage.sh setup` flow that writes a small local `.env` with ports, URLs, bundled Postgres credentials, real delivery defaults, and the session cookie flag.
 - Repository documentation restructure with a short README and detailed `/docs` guides for users, administrators, developers, APIs, architecture, configuration, deployment, troubleshooting, and data models.
 - Documentation audit report covering updated files, obsolete content, remaining gaps, and manual-review items.
 - README coverage for the Payload Generator, Teams bot commands, Users page limitations, and local Vite proxy behavior.
@@ -18,6 +19,11 @@ This project follows the structure of [Keep a Changelog](https://keepachangelog.
 
 ### Changed
 
+- `./manage.sh start` now launches the guided setup when `.env` is missing, avoids rebuilding when the Compose stack is already running, and prints the known URLs instead.
+- `./manage.sh setup` now offers to start the stack after writing `.env`, but skips that prompt when the Compose stack is already running.
+- `.env.example` now keeps only the core infrastructure defaults active; Microsoft identity and most runtime overrides stay commented and are intended to be configured through the Settings UI.
+- `bot_delivery_mode` is now an environment-only developer override instead of a runtime setting exposed in the admin UI.
+- Runtime overrides can now update `cors_origins` and `session_secure_cookie`, and CORS/session behavior follows effective settings without restarting the backend.
 - README is now a concise repository landing page instead of a full user guide.
 - Detailed operational, user, API, and architecture content moved under `/docs`.
 - Known Teams conversations modal condensed into compact single-row entries showing the channel or user, the involved user, and a relative last-seen time; technical conversation ID, service URL, and Graph IDs removed.
