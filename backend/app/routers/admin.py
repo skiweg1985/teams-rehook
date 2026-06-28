@@ -1268,6 +1268,7 @@ def _webhook_abuse_bucket_out(bucket: WebhookAbuseBucket) -> WebhookAbuseBucketO
         id=bucket.id,
         scope=bucket.scope if bucket.scope in {"ip", "ip_route"} else "ip",
         status="blocked" if blocked_until and blocked_until > utcnow() else "watching",
+        client_host=bucket.last_client_host,
         client_fingerprint=bucket.client_hash[:12],
         route_token_fingerprint=(bucket.route_token_hash or "")[:12],
         failure_count=bucket.failure_count,

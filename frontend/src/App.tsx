@@ -5766,13 +5766,16 @@ function SystemLogsPage() {
       />
       <Card title="Webhook abuse" description="Temporary blocks and watched clients for public webhook ingress.">
         <DataTable
-          columns={["Status", "Scope", "Client", "Failures", "Reason", "Blocked until", "Last seen", "Action"]}
+          columns={["Status", "Scope", "Client IP", "Failures", "Reason", "Blocked until", "Last seen", "Action"]}
           rows={abuseBuckets.map((bucket) => [
             <StatusBadge label={bucket.status === "blocked" ? "Blocked" : "Watching"} tone={bucket.status === "blocked" ? "warn" : "neutral"} />,
             abuseScopeLabel(bucket),
             <div className="stacked-cell">
-              <code>{bucket.client_fingerprint}</code>
-              <span className="muted">{bucket.route_token_fingerprint ? `route ${bucket.route_token_fingerprint}` : "all routes"}</span>
+              <code>{bucket.client_host || "-"}</code>
+              <span className="muted">
+                {bucket.client_fingerprint}
+                {bucket.route_token_fingerprint ? ` / route ${bucket.route_token_fingerprint}` : " / all routes"}
+              </span>
             </div>,
             <div className="stacked-cell">
               <span>{bucket.failure_count}</span>

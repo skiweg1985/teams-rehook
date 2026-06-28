@@ -270,6 +270,9 @@ def _ensure_additive_schema() -> None:
             "user_name": "VARCHAR(200) DEFAULT '' NOT NULL",
             "graph_user_id": "TEXT DEFAULT '' NOT NULL",
         },
+        "webhook_abuse_buckets": {
+            "last_client_host": "TEXT DEFAULT '' NOT NULL",
+        },
     }
     with engine.begin() as connection:
         dialect = engine.dialect.name

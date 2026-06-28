@@ -84,6 +84,7 @@ export type WebhookAbuseBucketOut = {
   id: string;
   scope: "ip" | "ip_route";
   status: "watching" | "blocked";
+  client_host: string;
   client_fingerprint: string;
   route_token_fingerprint: string;
   failure_count: number;

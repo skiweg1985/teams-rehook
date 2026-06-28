@@ -492,7 +492,7 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
 
     route = db.scalar(select(WebhookRoute).where(WebhookRoute.route_token_hash == token_hash))
     if not route:
-        record_failure(db, client_host=client_host, route_token_hash=token_hash, reason=ABUSE_REASON_UNKNOWN_ROUTE)
+        record_failure(db, client_host=client_host, route_token_hash=None, reason=ABUSE_REASON_UNKNOWN_ROUTE)
         _record_event(
             db,
             route=None,

@@ -98,6 +98,7 @@ class WebhookAbuseBucketOut(BaseModel):
     id: str
     scope: Literal["ip", "ip_route"]
     status: Literal["watching", "blocked"]
+    client_host: str = ""
     client_fingerprint: str
     route_token_fingerprint: str = ""
     failure_count: int

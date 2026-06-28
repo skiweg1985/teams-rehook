@@ -41,6 +41,8 @@ def check_block(db: Session, *, client_host: str, route_token_hash: str | None) 
     blocked_bucket: WebhookAbuseBucket | None = None
     expired: list[WebhookAbuseBucket] = []
     for bucket in _load_buckets(db, client_host=client_host, route_token_hash=route_token_hash):
+        bucket.last_client_host = _stored_client_host(client_host)
+        bucket.last_seen_at = now
         blocked_until = ensure_utc(bucket.blocked_until)
         if blocked_until is None:
             continue
@@ -84,6 +86,7 @@ def record_failure(db: Session, *, client_host: str, route_token_hash: str | Non
 
         bucket.failure_count += 1
         bucket.last_reason = reason[:120]
+        bucket.last_client_host = _stored_client_host(client_host)
         bucket.last_seen_at = now
         if bucket.failure_count >= settings.webhook_abuse_failure_limit:
             bucket.block_count += 1
@@ -108,6 +111,7 @@ def record_success(db: Session, *, client_host: str, route_token_hash: str | Non
     bucket.failure_count = 0
     bucket.window_started_at = now
     bucket.blocked_until = None
+    bucket.last_client_host = _stored_client_host(client_host)
     bucket.last_seen_at = now
     db.flush()
 
@@ -160,6 +164,7 @@ def _get_or_create_bucket(
         bucket_key=_bucket_key(scope, client_hash, route_token_hash),
         scope=scope,
         client_hash=client_hash,
+        last_client_host=_stored_client_host(client_host),
         route_token_hash=route_token_hash,
         window_started_at=now,
         last_seen_at=now,
@@ -196,6 +201,10 @@ def _client_hash(client_host: str) -> str:
 
 def _bucket_key(scope: str, client_hash: str, route_token_hash: str | None) -> str:
     return hashlib.sha256(f"{scope}:{client_hash}:{route_token_hash or ''}".encode("utf-8")).hexdigest()
+
+
+def _stored_client_host(client_host: str) -> str:
+    return client_host.strip()[:255]
 
 
 def _block_duration(block_count: int) -> timedelta:

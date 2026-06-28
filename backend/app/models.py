@@ -115,6 +115,7 @@ class WebhookAbuseBucket(Base):
     bucket_key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     scope: Mapped[str] = mapped_column(String(32), index=True)
     client_hash: Mapped[str] = mapped_column(String(64), index=True)
+    last_client_host: Mapped[str] = mapped_column(Text, default="")
     route_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     failure_count: Mapped[int] = mapped_column(default=0)
     block_count: Mapped[int] = mapped_column(default=0)

@@ -359,9 +359,12 @@ def test_unknown_webhook_route_blocks_after_failure_limit(client: TestClient, db
     assert blocked.status_code == 429
     assert blocked.json()["detail"] == "Too many failed webhook attempts"
     buckets = db_session.scalars(select(WebhookAbuseBucket)).all()
-    assert {bucket.scope for bucket in buckets} == {"ip", "ip_route"}
+    assert len(buckets) == 1
+    assert buckets[0].scope == "ip"
+    assert buckets[0].route_token_hash is None
     assert all(bucket.blocked_until is not None for bucket in buckets)
     assert {bucket.last_reason for bucket in buckets} == {"unknown_route"}
+    assert {bucket.last_client_host for bucket in buckets} == {"testclient"}
 
 
 def test_invalid_payload_counts_route_bucket_and_success_resets_it(client: TestClient, db_session: Session):
@@ -442,6 +445,10 @@ def test_webhook_abuse_uses_resolved_forwarded_client(
     assert proxied.status_code == 404
     assert same_forwarded_blocked.status_code == 429
     assert different_forwarded.status_code == 404
+    assert {bucket.last_client_host for bucket in db_session.scalars(select(WebhookAbuseBucket)).all()} == {
+        "203.0.113.10",
+        "203.0.113.11",
+    }
 
 
 def test_admin_can_list_reset_and_cleanup_webhook_abuse_buckets(client: TestClient, db_session: Session):
@@ -459,6 +466,7 @@ def test_admin_can_list_reset_and_cleanup_webhook_abuse_buckets(client: TestClie
     buckets = list_response.json()
     assert buckets
     assert buckets[0]["status"] == "blocked"
+    assert buckets[0]["client_host"] == "testclient"
     assert buckets[0]["client_fingerprint"]
 
     reset_without_csrf = client.delete(f"/api/v1/admin/webhook-abuse-buckets/{buckets[0]['id']}")
