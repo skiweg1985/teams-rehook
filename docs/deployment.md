@@ -14,8 +14,22 @@ No Kubernetes manifests, Terraform, Helm chart, hosted image registry, or produc
 Start:
 
 ```bash
-cp .env.example .env
-docker compose up -d --build
+./manage.sh init-env
+./manage.sh start
+```
+
+The root-level `./manage.sh` script is a thin operator wrapper around Docker Compose, `.env`, and bundled Postgres maintenance. It does not replace the in-app admin UI for normal users, runtime settings, or Microsoft integration setup.
+
+Common commands:
+
+```bash
+./manage.sh check-env
+./manage.sh sync-env
+./manage.sh status
+./manage.sh logs backend
+./manage.sh doctor
+./manage.sh backup-db
+./manage.sh update
 ```
 
 Services:
@@ -146,7 +160,7 @@ No formal release process is visible in the repository. Until one exists:
 
 ```bash
 npm run test
-docker compose up -d --build
+./manage.sh update
 ```
 
 ## Rollback

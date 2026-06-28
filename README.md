@@ -32,8 +32,8 @@ Prerequisites:
 Start the local Docker stack:
 
 ```bash
-cp .env.example .env
-docker compose up -d --build
+./manage.sh init-env
+./manage.sh start
 ```
 
 Open the application:
@@ -69,6 +69,16 @@ Treat relay URLs as secrets. Anyone with a valid relay URL can send messages to 
 ## Configuration
 
 Copy `.env.example` to `.env` for local configuration. The Docker stack uses the bundled Postgres service by default. Set `DATABASE_URL` only when the backend should use an external Postgres database.
+
+`./manage.sh` provides common single-host Compose operations:
+
+```bash
+./manage.sh check-env
+./manage.sh sync-env
+./manage.sh status
+./manage.sh backup-db
+./manage.sh update
+```
 
 Full configuration reference:
 
