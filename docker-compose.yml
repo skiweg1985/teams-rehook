@@ -14,6 +14,9 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      app_net:
+        ipv4_address: 172.30.0.20
     restart: unless-stopped
 
   proxy:
@@ -28,12 +31,18 @@ services:
       - "${PROXY_HTTPS_PORT:-8443}:443"
     volumes:
       - ./devcert:/certs
+    networks:
+      app_net:
+        ipv4_address: 172.30.0.10
     restart: unless-stopped
 
   frontend:
     build:
       context: ./frontend
     container_name: teams-rehook-frontend
+    networks:
+      app_net:
+        ipv4_address: 172.30.0.30
     restart: unless-stopped
 
   backend:
@@ -45,12 +54,24 @@ services:
     environment:
       # Override the SQLite default with the bundled Postgres service in containers
       DATABASE_URL: postgresql+psycopg2://app:app@postgres:5432/app
+      # Trust X-Forwarded-For only when the direct client is the bundled HAProxy.
+      TRUST_X_FORWARDED_FOR: "true"
+      TRUSTED_PROXY_IPS: "172.30.0.10"
     volumes:
       - /etc/localtime:/etc/localtime:ro
     depends_on:
       postgres:
         condition: service_healthy
+    networks:
+      app_net:
+        ipv4_address: 172.30.0.40
     restart: unless-stopped
 
 volumes:
   postgres_data:
+
+networks:
+  app_net:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

@@ -189,6 +189,30 @@ Authorization: Bearer <MONITORING_API_KEY>
 
 If `MONITORING_API_KEY` is empty, the endpoint returns `503` and does not expose status data. The response excludes relay URLs, route tokens, Bot service URLs, conversation IDs, OAuth tokens, secrets, and raw auth responses.
 
+## Automatic Abuse Blocking
+
+Teams Rehook watches failed public webhook calls and can temporarily block a noisy client. In this context, "client" means the resolved client IP address. If the app is behind HAProxy or another reverse proxy, correct client detection depends on the trusted proxy settings described in [Deployment](deployment.md).
+
+The app counts failures for cases such as unknown webhook URLs, disabled routes, payloads that are too large, invalid payload bodies, disabled delivery backends, and route IP allowlist rejects. By default, 10 failures in 10 minutes trigger a temporary block. The first block lasts 10 minutes, and repeated blocks get longer up to the configured maximum.
+
+The Security tab in System logs keeps the normal view simple:
+
+- `Blocked` means the client is currently receiving `429 Too Many Requests`.
+- `Observed` means failed attempts were seen inside the current abuse window, but the client is not currently blocked.
+- `Unblock` removes the active block and clears the current failure count.
+- Observed clients disappear from the normal view after the abuse window expires unless another failure happens.
+- Previous block history stays in place, so repeated future abuse can still escalate more quickly.
+
+Technical details such as client fingerprints, route fingerprints, and tracked records are kept behind the details expander for debugging. They are not needed for normal operations.
+
+Common situations:
+
+| Symptom | Likely cause | What to check |
+|---|---|---|
+| Many real clients appear as one client. | The backend is seeing the proxy IP instead of the original client IP. | Confirm `TRUST_X_FORWARDED_FOR=true` and `TRUSTED_PROXY_IPS` contains only the trusted reverse proxy. |
+| `Unblock` worked, but previous block count is still visible. | Unblock is not a full forgiveness reset. | This is expected. It clears the active block and current failures, but keeps escalation history. |
+| A client is `Observed` but not `Blocked`. | The client has current failed attempts but is below the block threshold. | Review last reason, failure count, and last activity. |
+
 ## Backup And Restore
 
 The Docker stack stores Postgres data in the `postgres_data` volume.

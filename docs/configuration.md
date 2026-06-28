@@ -25,6 +25,8 @@ Use `.env.example` as the safe template. Do not commit a populated `.env`.
 | `WEBHOOK_MAX_PAYLOAD_BYTES` | Maximum accepted webhook request body size. | No | `64000` | `64000` | No |
 | `LOG_RETENTION_DAYS` | Retention window for delivery, audit, and bot activity logs. `0` means cleanup can remove events older than now. | No | `7` | `7` | No |
 | `LOG_CLEANUP_INTERVAL_MINUTES` | Minimum interval between automatic cleanup runs. | No | `60` | `60` | No |
+| `TRUST_X_FORWARDED_FOR` | Allows the backend to use `X-Forwarded-For` as the webhook client IP, but only when the direct client is trusted. Docker Compose overrides this to `true` for the bundled HAProxy. | No | `false` in `.env.example`; Docker backend uses `true` | `true` | Yes |
+| `TRUSTED_PROXY_IPS` | Comma-separated trusted proxy IP addresses or CIDR ranges. Docker Compose sets this to the fixed HAProxy IP `172.30.0.10`. | Required if `TRUST_X_FORWARDED_FOR=true` | Empty in `.env.example`; Docker backend uses `172.30.0.10` | `172.30.0.10` | Yes |
 | `MS_APP_TENANT_ID` | Entra tenant ID for Bot Framework and Microsoft Graph token requests. | Required for real Microsoft integrations | Empty | `00000000-0000-0000-0000-000000000000` | No |
 | `MS_APP_CLIENT_ID` | Entra app client ID for Bot Framework and Microsoft Graph token requests. | Required for real Microsoft integrations | Empty | `00000000-0000-0000-0000-000000000000` | No |
 | `MS_APP_CLIENT_SECRET` | Entra app client secret. | Required for real Microsoft integrations | Empty | `change-me` | Yes |
@@ -48,11 +50,15 @@ When the default organization has no admin users, the frontend shows the first-r
 
 ## Docker Compose Overrides
 
-`docker-compose.yml` loads `.env` into the backend and overrides only:
+`docker-compose.yml` loads `.env` into the backend and overrides:
 
 ```text
 DATABASE_URL=postgresql+psycopg2://app:app@postgres:5432/app
+TRUST_X_FORWARDED_FOR=true
+TRUSTED_PROXY_IPS=172.30.0.10
 ```
+
+The fixed trusted proxy IP belongs to the bundled HAProxy service on the internal Compose network. This makes webhook abuse blocking use the real caller from `X-Forwarded-For` instead of grouping all callers under the proxy IP.
 
 The bundled Postgres service uses local development credentials:
 
@@ -74,8 +80,16 @@ These settings are defined in `backend/app/core/settings_overrides.py` and can b
 | `graph_delivery_enabled` | bool | No | Requires `graph_lookup_enabled=true`. |
 | `bot_default_service_url` | url | No | Empty or valid `http`/`https` URL. |
 | `webhook_max_payload_bytes` | int | No | Minimum `1024`. |
+| `webhook_abuse_blocking_enabled` | bool | No | Enables temporary blocking for repeated failed webhook attempts. |
+| `webhook_abuse_failure_limit` | int | No | Minimum `1`; default code value is `10`. |
+| `webhook_abuse_window_minutes` | int | No | Minimum `1`; default code value is `10`. |
+| `webhook_abuse_initial_block_minutes` | int | No | Minimum `1`; default code value is `10`. |
+| `webhook_abuse_max_block_minutes` | int | No | Minimum `1`; default code value is `1440`. |
+| `webhook_abuse_cleanup_days` | int | No | Minimum `1`; controls cleanup of inactive abuse tracking records. |
 | `log_retention_days` | int | No | Minimum `0`. |
 | `log_cleanup_interval_minutes` | int | No | Minimum `1`. |
+| `trust_x_forwarded_for` | bool | No | Runtime override for trusting `X-Forwarded-For` from trusted proxies. |
+| `trusted_proxy_ips` | string | No | Comma-separated IP addresses or CIDR ranges for trusted reverse proxies. |
 | `app_public_base_url` | url | No | Valid `http`/`https` URL. |
 | `frontend_base_url` | url | No | Valid `http`/`https` URL. |
 | `ms_app_tenant_id` | string | No | Shared Microsoft tenant ID. |
