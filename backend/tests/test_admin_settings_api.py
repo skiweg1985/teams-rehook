@@ -53,6 +53,7 @@ def make_client(db_session: Session, monkeypatch: pytest.MonkeyPatch, **env: str
         "BOT_DELIVERY_MODE": "mock",
         "LOG_RETENTION_DAYS": "7",
         "WEBHOOK_MAX_PAYLOAD_BYTES": "64000",
+        "SETTINGS_ENC_KEY": "test-settings-encryption-key",
     }
     defaults.update(env)
     for key, value in defaults.items():

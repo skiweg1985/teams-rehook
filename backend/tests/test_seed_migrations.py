@@ -7,10 +7,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base
-from app.models import Organization, User
-from app.security import hash_secret, verify_secret
-from app.seed import DEFAULT_BOOTSTRAP_ADMIN_EMAIL, DEFAULT_BOOTSTRAP_ADMIN_PASSWORD, init_db
-from app.seed import _ensure_webhook_route_name_backend_uniqueness
+from app.models import AppSetting, Organization, User
+from app.security import hash_secret
+from app.seed import INSTANCE_SESSION_SECRET_KEY, INSTANCE_SETTINGS_ENC_KEY, init_db
+from app.seed import _ensure_additive_schema, _ensure_webhook_route_name_backend_uniqueness
 
 
 def test_sqlite_route_name_migration_replaces_old_name_unique_constraint(monkeypatch: pytest.MonkeyPatch):
@@ -243,7 +243,7 @@ def test_sqlite_route_name_migration_replaces_old_name_unique_constraint(monkeyp
             )
 
 
-def test_init_db_bootstraps_default_admin_for_empty_org(monkeypatch: pytest.MonkeyPatch):
+def test_init_db_creates_default_org_and_instance_secret_without_bootstrap_admin(monkeypatch: pytest.MonkeyPatch):
     from app.core.config import get_settings
 
     engine = create_engine(
@@ -253,15 +253,172 @@ def test_init_db_bootstraps_default_admin_for_empty_org(monkeypatch: pytest.Monk
         future=True,
     )
     monkeypatch.setattr("app.seed.engine", engine)
+    monkeypatch.setenv("SESSION_SECRET", "")
+    monkeypatch.setenv("SETTINGS_ENC_KEY", "")
     get_settings.cache_clear()
     try:
         init_db()
         with Session(engine) as db:
-            user = db.scalar(select(User).where(User.email == DEFAULT_BOOTSTRAP_ADMIN_EMAIL))
-            assert user is not None
-            assert user.is_admin is True
-            assert user.is_active is True
-            assert verify_secret(DEFAULT_BOOTSTRAP_ADMIN_PASSWORD, user.password_hash)
+            org = db.scalar(select(Organization).where(Organization.slug == "default"))
+            users = db.scalars(select(User)).all()
+            instance_secret = db.get(AppSetting, INSTANCE_SESSION_SECRET_KEY)
+            settings_enc_key = db.get(AppSetting, INSTANCE_SETTINGS_ENC_KEY)
+            assert org is not None
+            assert users == []
+            assert instance_secret is not None
+            assert len(instance_secret.value) >= 40
+            assert get_settings().session_secret == instance_secret.value
+            assert settings_enc_key is not None
+            assert len(settings_enc_key.value) >= 40
+            assert get_settings().settings_enc_key == settings_enc_key.value
+            assert get_settings().settings_enc_key_source == "generated"
+    finally:
+        get_settings.cache_clear()
+
+
+def test_additive_schema_backfills_bot_activity_auth_metadata_columns(monkeypatch: pytest.MonkeyPatch):
+    engine = create_engine("sqlite://", future=True)
+    monkeypatch.setattr("app.seed.engine", engine)
+    Base.metadata.create_all(bind=engine)
+    with engine.begin() as connection:
+        connection.execute(text("DROP TABLE bot_activity_events"))
+        connection.execute(
+            text(
+                """
+                CREATE TABLE bot_activity_events (
+                    id VARCHAR(36) NOT NULL,
+                    activity_type VARCHAR(80) NOT NULL,
+                    service_url TEXT NOT NULL,
+                    conversation_id TEXT NOT NULL,
+                    tenant_id TEXT NOT NULL,
+                    team_id TEXT NOT NULL,
+                    graph_team_id TEXT NOT NULL,
+                    channel_id TEXT NOT NULL,
+                    conversation_type VARCHAR(40) NOT NULL,
+                    team_name VARCHAR(200) NOT NULL,
+                    channel_name VARCHAR(200) NOT NULL,
+                    from_id TEXT NOT NULL,
+                    user_name VARCHAR(200) NOT NULL,
+                    graph_user_id TEXT NOT NULL,
+                    recipient_id TEXT NOT NULL,
+                    raw_activity_json TEXT NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    PRIMARY KEY (id)
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO bot_activity_events (
+                    id,
+                    activity_type,
+                    service_url,
+                    conversation_id,
+                    tenant_id,
+                    team_id,
+                    graph_team_id,
+                    channel_id,
+                    conversation_type,
+                    team_name,
+                    channel_name,
+                    from_id,
+                    user_name,
+                    graph_user_id,
+                    recipient_id,
+                    raw_activity_json,
+                    created_at
+                )
+                VALUES (
+                    'event-1',
+                    'message',
+                    'https://smba.trafficmanager.net/emea/',
+                    'conversation-id',
+                    'tenant-id',
+                    'team-id',
+                    '',
+                    'channel-id',
+                    'channel',
+                    'Team',
+                    'Alerts',
+                    'user-id',
+                    'Ada',
+                    'aad-user-id',
+                    'bot-id',
+                    '{}',
+                    CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+
+    _ensure_additive_schema()
+
+    with engine.connect() as connection:
+        columns = {row[1] for row in connection.execute(text("PRAGMA table_info(bot_activity_events)")).all()}
+        assert {
+            "auth_status",
+            "auth_issuer",
+            "auth_audience",
+            "auth_service_url",
+            "auth_service_url_matched",
+            "auth_validated_at",
+        } <= columns
+        row = connection.execute(
+            text(
+                """
+                SELECT auth_status, auth_issuer, auth_audience, auth_service_url,
+                       auth_service_url_matched, auth_validated_at
+                FROM bot_activity_events
+                WHERE id = 'event-1'
+                """
+            )
+        ).one()
+        assert row[0] == "unknown"
+        assert row[1] == ""
+        assert row[2] == ""
+        assert row[3] == ""
+        assert row[4] == 0
+        assert row[5] is None
+
+
+def test_init_db_rejects_placeholder_session_secret(monkeypatch: pytest.MonkeyPatch):
+    from app.core.config import get_settings
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
+    monkeypatch.setattr("app.seed.engine", engine)
+    monkeypatch.setenv("SESSION_SECRET", "change-me-session-secret")
+    monkeypatch.setenv("SETTINGS_ENC_KEY", "test-settings-encryption-key")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="SESSION_SECRET"):
+            init_db()
+    finally:
+        get_settings.cache_clear()
+
+
+def test_init_db_rejects_placeholder_settings_enc_key(monkeypatch: pytest.MonkeyPatch):
+    from app.core.config import get_settings
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
+    monkeypatch.setattr("app.seed.engine", engine)
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SETTINGS_ENC_KEY", "change-me-settings-enc-key")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="SETTINGS_ENC_KEY"):
+            init_db()
     finally:
         get_settings.cache_clear()
 
@@ -293,6 +450,8 @@ def test_init_db_does_not_bootstrap_default_admin_when_org_has_user(monkeypatch:
         db.commit()
 
     monkeypatch.setattr("app.seed.engine", engine)
+    monkeypatch.setenv("SESSION_SECRET", "")
+    monkeypatch.setenv("SETTINGS_ENC_KEY", "")
     get_settings.cache_clear()
     try:
         init_db()

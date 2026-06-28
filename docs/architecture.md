@@ -46,7 +46,7 @@ Admin APIs use session-cookie authentication. Authenticated write requests requi
 Public or machine endpoints:
 
 - `POST /api/v1/webhooks/{route_token}` uses the route token embedded in the relay URL.
-- `POST /api/v1/bot/messages` receives Teams bot activities.
+- `POST /api/v1/bot/messages` receives Teams bot activities and requires a valid Bot Framework bearer token for the configured `MS_APP_CLIENT_ID`.
 - `GET /api/v1/monitoring/status` requires `Authorization: Bearer <MONITORING_API_KEY>`.
 - `GET /api/v1/health` and `GET /api/v1/readyz` are health endpoints.
 
@@ -71,6 +71,10 @@ Bot Framework delivery requires:
 - A valid `conversation_id`
 
 Teams Rehook captures conversation references from inbound bot activities at `/api/v1/bot/messages`.
+
+Inbound Bot Framework activities are authenticated before any activity event, conversation reference, or bot command is processed. The backend requires `Authorization: Bearer <token>`, validates the JWT against Bot Framework OpenID signing keys, and enforces the expected issuer, audience, token lifetime, and `serviceUrl` claim. Bot Framework signing keys are cached and refreshed periodically. Outbound Bot Framework delivery tokens are separate from this inbound request validation path.
+
+Accepted Bot Framework activities store only non-sensitive authentication metadata on the activity event, such as validated issuer, audience, service URL match status and validation time. Raw bearer tokens, JWT signatures and full claims are not persisted. Historical events created before auth metadata existed may show `unknown` auth status.
 
 ### Microsoft Graph Lookup
 

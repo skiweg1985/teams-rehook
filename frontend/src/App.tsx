@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
+  Activity,
   AlertTriangle,
+  Bot,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -22,7 +24,9 @@ import {
   RotateCcwKey,
   Search,
   Send,
+  ShieldAlert,
   Trash2,
+  Wrench,
   Webhook,
   type LucideIcon,
 } from "lucide-react";
@@ -47,6 +51,7 @@ import type {
   AdminReadinessOut,
   AuditEventOut,
   BotConversationReferenceOut,
+  ClientIpAccessMode,
   DeliveryBackend,
   GraphTargetKind,
   OAuthDiagnosticsOut,
@@ -54,6 +59,7 @@ import type {
   SystemLogEventOut,
   TeamsTargetSearchResult,
   UserOut,
+  WebhookAbuseBucketOut,
   WebhookDeliveryEventDetailOut,
   WebhookDeliveryEventOut,
   WebhookDeliveryEventPageOut,
@@ -70,6 +76,7 @@ type PayloadAccent = "neutral" | "success" | "warning" | "critical";
 type PayloadImageSize = "Auto" | "Stretch";
 type PayloadTitleSize = "Default" | "Medium" | "Large";
 type PayloadTitleWeight = "Default" | "Bolder";
+type SystemLogTab = "security" | "audit" | "bot";
 
 type PayloadFact = {
   id: string;
@@ -303,7 +310,7 @@ function LoginScreen() {
             <input
               value={email}
               autoComplete="email"
-              placeholder="admin@example.local"
+              placeholder="admin@example.com"
               required
               onChange={(event) => setEmail(event.target.value)}
             />
@@ -321,6 +328,99 @@ function LoginScreen() {
           {error ? <p className="form-error">{error}</p> : null}
           <button className="primary-button" type="submit" disabled={busy}>
             {busy ? "Signing in..." : "Sign in"}
+          </button>
+        </form>
+      </section>
+    </main>
+  );
+}
+
+function FirstAdminSetupScreen() {
+  const { createFirstAdmin } = useAppContext();
+  const [email, setEmail] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (password !== confirmPassword) {
+      setError("Passwords do not match");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await createFirstAdmin(email, displayName, password);
+      window.history.replaceState(null, "", "/dashboard");
+    } catch (err) {
+      setError(isApiError(err) ? err.message : err instanceof Error ? err.message : "Setup failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="login-screen">
+      <section className="login-panel setup-panel">
+        <div className="login-panel-header">
+          <div className="app-mark">T</div>
+          <ThemeToggle />
+        </div>
+        <div>
+          <p className="eyebrow">First-run setup</p>
+          <h1>Create the first admin</h1>
+          <p className="lede">This account controls Teams Rehook administration for the default workspace.</p>
+        </div>
+        <form className="compact-form" onSubmit={submit}>
+          <Field label="Email">
+            <input
+              value={email}
+              autoComplete="email"
+              placeholder="admin@example.com"
+              required
+              onChange={(event) => setEmail(event.target.value)}
+            />
+          </Field>
+          <Field label="Display name">
+            <input
+              value={displayName}
+              autoComplete="name"
+              placeholder="Operations Admin"
+              required
+              maxLength={255}
+              onChange={(event) => setDisplayName(event.target.value)}
+            />
+          </Field>
+          <Field label="Password">
+            <input
+              value={password}
+              type="password"
+              autoComplete="new-password"
+              placeholder="Set a password"
+              required
+              minLength={8}
+              maxLength={200}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+          </Field>
+          <Field label="Confirm password">
+            <input
+              value={confirmPassword}
+              type="password"
+              autoComplete="new-password"
+              placeholder="Repeat the password"
+              required
+              minLength={8}
+              maxLength={200}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+            />
+          </Field>
+          {error ? <p className="form-error">{error}</p> : null}
+          <button className="primary-button" type="submit" disabled={busy}>
+            {busy ? "Creating admin..." : "Create admin"}
           </button>
         </form>
       </section>
@@ -1362,12 +1462,14 @@ function buildWebhookRouteView(route: WebhookRouteOut, policy: DeliveryFeaturePo
     facts: [
       { label: "State", value: route.is_active ? "Active" : "Disabled", tone: route.is_active ? "success" : "warn" },
       { label: "Backend", value: deliveryBackendLabel(route.delivery_backend) },
+      { label: "Client IP access", value: clientIpAccessLabel(route) },
       { label: "Delivery", value: deliveryLabel, tone: webhookDeliveryTone(route) },
       { label: "Last activity", value: lastActivityLabel },
     ],
     technicalRows: [
       { label: "Route ID", value: route.id },
       { label: "Webhook URL", value: route.webhook_url ? <code>{route.webhook_url}</code> : "-" },
+      { label: "Client IP allowlist", value: route.client_ip_allowlist ? <code>{route.client_ip_allowlist}</code> : "All clients" },
       { label: "Target type", value: route.target_type },
       { label: "Bot conversation", value: route.bot_conversation_id ? <code>{shortId(route.bot_conversation_id)}</code> : "-" },
       { label: "Bot service URL", value: route.bot_service_url || "-" },
@@ -1427,6 +1529,14 @@ function webhookTargetSummary(route: WebhookRouteOut): string {
     return `${type} · ${route.target_name || route.graph_target_id || "No target name"}`;
   }
   return route.target_name || "Bot conversation";
+}
+
+function clientIpAccessLabel(route: WebhookRouteOut): string {
+  if (route.client_ip_access_mode === "restricted") {
+    const count = route.client_ip_allowlist.split(/\s+/).filter(Boolean).length;
+    return `Restricted (${count} allowed)`;
+  }
+  return "Public";
 }
 
 function capitalize(value: string): string {
@@ -2331,6 +2441,8 @@ function emptyWebhookRoute(botDefaultServiceUrl = ""): WebhookRouteOut {
     name: "",
     is_active: true,
     delivery_backend: "bot_framework",
+    client_ip_access_mode: "public",
+    client_ip_allowlist: "",
     target_type: "bot_conversation",
     target_name: "",
     bot_service_url: botDefaultServiceUrl,
@@ -2392,6 +2504,8 @@ function WebhookRouteModal({
   const [name, setName] = useState(initial.name);
   const [isActive, setIsActive] = useState(initial.is_active);
   const [deliveryBackend, setDeliveryBackend] = useState<DeliveryBackend>(initial.delivery_backend);
+  const [clientIpAccessMode, setClientIpAccessMode] = useState<ClientIpAccessMode>(initial.client_ip_access_mode);
+  const [clientIpAllowlist, setClientIpAllowlist] = useState(initial.client_ip_allowlist);
   const [targetName, setTargetName] = useState(initial.target_name);
   const [botServiceUrl, setBotServiceUrl] = useState(initial.bot_service_url);
   const [botConversationId, setBotConversationId] = useState(initial.bot_conversation_id);
@@ -2644,6 +2758,8 @@ function WebhookRouteModal({
       name: name.trim(),
       is_active: isActive,
       delivery_backend: deliveryBackend,
+      client_ip_access_mode: clientIpAccessMode,
+      client_ip_allowlist: clientIpAccessMode === "restricted" ? clientIpAllowlist.trim() : "",
       target_type: "bot_conversation" as const,
       target_name: targetName.trim(),
       bot_service_url: botServiceUrl.trim(),
@@ -2744,7 +2860,38 @@ function WebhookRouteModal({
             </div>
             {!selectedBackendEnabled ? <p className="form-error">{deliveryBackend === "graph" ? "Microsoft Graph delivery is disabled." : "Bot Framework delivery is disabled."}</p> : null}
           </div>
+          <div className="field">
+            <span>Client IP access</span>
+            <div className="segmented-control" aria-label="Client IP access">
+              <button
+                type="button"
+                className={classNames("segmented-control-button", clientIpAccessMode === "public" && "is-active")}
+                aria-pressed={clientIpAccessMode === "public"}
+                onClick={() => setClientIpAccessMode("public")}
+              >
+                Public
+              </button>
+              <button
+                type="button"
+                className={classNames("segmented-control-button", clientIpAccessMode === "restricted" && "is-active")}
+                aria-pressed={clientIpAccessMode === "restricted"}
+                onClick={() => setClientIpAccessMode("restricted")}
+              >
+                Restricted
+              </button>
+            </div>
+          </div>
         </div>
+        {clientIpAccessMode === "restricted" ? (
+          <Field label="Allowed client IPs" hint="Enter IPv4/IPv6 addresses or CIDR ranges, separated by commas or new lines.">
+            <textarea
+              value={clientIpAllowlist}
+              required
+              placeholder={"203.0.113.10\n10.0.0.0/24"}
+              onChange={(event) => setClientIpAllowlist(event.target.value)}
+            />
+          </Field>
+        ) : null}
         {deliveryBackend === "bot_framework" && botBackendEnabled ? (
         <div className="graph-target-picker">
           <div className="graph-target-picker-header">
@@ -3699,6 +3846,47 @@ const SETTING_META: Record<string, SettingMeta> = {
     unit: "bytes",
     display: "number",
   },
+  webhook_abuse_blocking_enabled: {
+    section: "runtime",
+    label: "Abuse blocking",
+    description: "Temporarily block clients after repeated failed webhook attempts.",
+    display: "switch",
+  },
+  webhook_abuse_failure_limit: {
+    section: "runtime",
+    label: "Failure limit",
+    description: "Failed attempts allowed inside the abuse window.",
+    unit: "failures",
+    display: "number",
+  },
+  webhook_abuse_window_minutes: {
+    section: "runtime",
+    label: "Abuse window",
+    description: "Rolling window used for webhook failure counting.",
+    unit: "minutes",
+    display: "number",
+  },
+  webhook_abuse_initial_block_minutes: {
+    section: "runtime",
+    label: "Initial block",
+    description: "First temporary block duration.",
+    unit: "minutes",
+    display: "number",
+  },
+  webhook_abuse_max_block_minutes: {
+    section: "runtime",
+    label: "Max block",
+    description: "Longest escalated block duration.",
+    unit: "minutes",
+    display: "number",
+  },
+  webhook_abuse_cleanup_days: {
+    section: "runtime",
+    label: "Abuse cleanup",
+    description: "How long inactive abuse buckets are kept.",
+    unit: "days",
+    display: "number",
+  },
   log_retention_days: {
     section: "runtime",
     label: "Log retention",
@@ -3781,6 +3969,12 @@ const RUNTIME_SETTING_KEYS = [
   "frontend_base_url",
   "bot_default_service_url",
   "webhook_max_payload_bytes",
+  "webhook_abuse_blocking_enabled",
+  "webhook_abuse_failure_limit",
+  "webhook_abuse_window_minutes",
+  "webhook_abuse_initial_block_minutes",
+  "webhook_abuse_max_block_minutes",
+  "webhook_abuse_cleanup_days",
   "log_retention_days",
   "log_cleanup_interval_minutes",
   "trust_x_forwarded_for",
@@ -4100,7 +4294,8 @@ function RuntimeDefaultsCard({
   settingsByKey,
 }: SettingsCardProps) {
   const urlSettings = settings.filter((item) => item.type === "url" && item.key !== "bot_default_service_url");
-  const limitSettings = settings.filter((item) => item.type === "int");
+  const limitSettings = settings.filter((item) => item.type === "int" && !item.key.startsWith("webhook_abuse_"));
+  const abuseSettings = settings.filter((item) => item.key.startsWith("webhook_abuse_"));
   const fallbackSettings = settings.filter((item) => item.key === "bot_default_service_url");
   const proxySettings = settings.filter((item) => item.key === "trust_x_forwarded_for" || item.key === "trusted_proxy_ips");
 
@@ -4129,6 +4324,23 @@ function RuntimeDefaultsCard({
             <p>Small operational values should be fast to scan and adjust.</p>
           </div>
           {limitSettings.map((item) => (
+            <RuntimeSettingControl
+              key={item.key}
+              item={item}
+              csrfToken={csrfToken}
+              onChanged={onChanged}
+              notify={notify}
+              settingsByKey={settingsByKey}
+              compact
+            />
+          ))}
+        </div>
+        <div className="settings-card-block">
+          <div className="settings-card-block-header">
+            <h3>Abuse blocking</h3>
+            <p>Controls temporary webhook blocks after repeated failed attempts.</p>
+          </div>
+          {abuseSettings.map((item) => (
             <RuntimeSettingControl
               key={item.key}
               item={item}
@@ -5063,9 +5275,18 @@ function RuntimeSnapshotCard({ onCopy, readiness }: { onCopy: (value: string, la
         <dd>{readiness.runtime.log_cleanup_interval_minutes} minutes</dd>
         <dt>Secure session cookie</dt>
         <dd>{yesNo(readiness.runtime.session_secure_cookie)}</dd>
+        <dt>Settings encryption</dt>
+        <dd>{settingsEncryptionLabel(readiness.runtime.settings_encryption_key_source, readiness.runtime.settings_encryption_ready)}</dd>
       </dl>
     </Card>
   );
+}
+
+function settingsEncryptionLabel(source: string, ready: boolean) {
+  if (!ready) return "Missing";
+  if (source === "configured") return "Configured";
+  if (source === "generated") return "Generated";
+  return "Configured";
 }
 
 function CopyInlineValue({ label, onCopy, value }: { label: string; onCopy: (value: string, label: string) => void; value: string }) {
@@ -5135,6 +5356,7 @@ function graphDeliverySummary(readiness: AdminReadinessOut["graph_delivery"]): s
   if (readiness.auth_status === "expired") return readiness.message || "The delegated service-user connection has expired or was revoked.";
   if (readiness.auth_status === "permission_warning") return readiness.message || "The delegated token is valid, but required Graph delivery scopes are missing.";
   if (readiness.auth_status === "token_error") return readiness.message || "Delegated token verification failed.";
+  if (readiness.auth_status === "configuration_error") return readiness.message || "Delegated Graph delivery has a configuration error.";
   if (readiness.auth_status === "incomplete") return readiness.message || "Required app registration settings are missing.";
   return readiness.message || "Graph delivery readiness could not be fully determined.";
 }
@@ -5188,6 +5410,7 @@ function authStatusTone(status: string): "neutral" | "success" | "warn" | "dange
   if (status === "ready") return "success";
   if (status === "permission_warning") return "warn";
   if (status === "token_error") return "danger";
+  if (status === "configuration_error") return "danger";
   if (status === "expired") return "danger";
   if (status === "missing") return "warn";
   if (status === "incomplete") return "warn";
@@ -5197,7 +5420,7 @@ function authStatusTone(status: string): "neutral" | "success" | "warn" | "dange
 function healthStateLabel(status: string): string {
   if (status === "disabled") return "Disabled";
   if (status === "ready" || status === "mock") return "Ready";
-  if (status === "token_error" || status === "expired") return "Error";
+  if (status === "token_error" || status === "expired" || status === "configuration_error") return "Error";
   return "Warning";
 }
 
@@ -5272,6 +5495,14 @@ function graphDeliveryAttentionItems(readiness: AdminReadinessOut["graph_deliver
     items.push({
       title: "Delegated token check failed",
       description: readiness.message || "Required: verify the service-user connection and tenant access.",
+      tone: "danger",
+    });
+  }
+
+  if (readiness.auth_status === "configuration_error") {
+    items.push({
+      title: "Settings encryption key error",
+      description: readiness.message || "Required: restore the previous SETTINGS_ENC_KEY or reconnect the delegated Graph service user.",
       tone: "danger",
     });
   }
@@ -5538,8 +5769,12 @@ function SystemLogsPage() {
   const { session, notify } = useAppContext();
   const [auditLogs, setAuditLogs] = useState<AuditEventOut[]>([]);
   const [systemLogs, setSystemLogs] = useState<SystemLogEventOut[]>([]);
+  const [abuseBuckets, setAbuseBuckets] = useState<WebhookAbuseBucketOut[]>([]);
+  const [activeTab, setActiveTab] = useState<SystemLogTab>("security");
   const [loading, setLoading] = useState(true);
   const [cleanupBusy, setCleanupBusy] = useState(false);
+  const [abuseCleanupBusy, setAbuseCleanupBusy] = useState(false);
+  const [resettingClientKey, setResettingClientKey] = useState("");
   const [error, setError] = useState("");
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
 
@@ -5547,12 +5782,14 @@ function SystemLogsPage() {
     setLoading(true);
     setError("");
     try {
-      const [nextAuditLogs, nextSystemLogs] = await Promise.all([
+      const [nextAuditLogs, nextSystemLogs, nextAbuseBuckets] = await Promise.all([
         api.adminLogs(csrfToken),
         api.adminSystemLogs(csrfToken),
+        api.adminWebhookAbuseBuckets(csrfToken),
       ]);
       setAuditLogs(nextAuditLogs);
       setSystemLogs(nextSystemLogs);
+      setAbuseBuckets(nextAbuseBuckets);
     } catch (err) {
       setError(isApiError(err) ? err.message : "System logs could not be loaded.");
     } finally {
@@ -5585,64 +5822,418 @@ function SystemLogsPage() {
     }
   }
 
+  async function cleanupAbuseBuckets() {
+    setAbuseCleanupBusy(true);
+    try {
+      const result = await api.cleanupWebhookAbuseBuckets(csrfToken);
+      notify({
+        tone: "info",
+        title: "Abuse clients cleaned up",
+        description: `${result.deleted} inactive entries removed. Retention is ${result.cleanup_days} days.`,
+      });
+      await refresh();
+    } catch (err) {
+      notify({
+        tone: "error",
+        title: "Cleanup failed",
+        description: isApiError(err) ? err.message : "Abuse clients could not be cleaned up.",
+      });
+    } finally {
+      setAbuseCleanupBusy(false);
+    }
+  }
+
+  async function resetAbuseClient(client: WebhookAbuseClientRow) {
+    setResettingClientKey(client.key);
+    try {
+      await Promise.all(client.buckets.map((bucket) => api.resetWebhookAbuseBucket(csrfToken, bucket.id)));
+      notify({
+        tone: "success",
+        title: "Webhook client reset",
+        description: `${client.clientHost || client.clientFingerprint} is watching again.`,
+      });
+      await refresh();
+    } catch (err) {
+      notify({
+        tone: "error",
+        title: "Reset failed",
+        description: isApiError(err) ? err.message : "Webhook abuse client could not be reset.",
+      });
+    } finally {
+      setResettingClientKey("");
+    }
+  }
+
+  const abuseClients = useMemo(() => buildWebhookAbuseClients(abuseBuckets), [abuseBuckets]);
+  const activeBlockCount = abuseClients.filter((client) => client.status === "blocked").length;
+  const watchedClientCount = abuseClients.filter((client) => client.status === "watching").length;
+  const unknownAuthCount = systemLogs.filter((event) => event.auth_status !== "verified").length;
+  const lastActivityAt = latestDate(
+    [
+      ...abuseClients.map((client) => client.lastSeen),
+      ...auditLogs.map((event) => event.created_at),
+      ...systemLogs.map((event) => event.created_at),
+    ].filter(Boolean),
+  );
+  const attentionClients = abuseClients.filter((client) => client.status === "blocked").slice(0, 3);
+  const watchedClients = abuseClients.filter((client) => client.status === "watching").slice(0, 3);
+
   return (
     <>
       <PageIntro
         eyebrow="Administration"
         title="System logs"
-        description="Review audit events and Teams bot activity separately from webhook message delivery."
+        description="Monitor ingress protection, admin actions and Teams bot activity from one operational view."
         actions={
-          <button className="secondary-button button-with-icon" type="button" disabled={cleanupBusy} onClick={() => void cleanupLogs()}>
-            <Trash2 aria-hidden="true" className="button-icon" focusable="false" />
-            {cleanupBusy ? "Cleaning..." : "Clean up"}
-          </button>
+          <div className="system-logs-actions">
+            <StatusBadge label={activeBlockCount ? `${activeBlockCount} blocked` : "No active blocks"} tone={activeBlockCount ? "warn" : "success"} />
+            <button className="secondary-button button-with-icon" type="button" disabled={loading} onClick={() => void refresh()}>
+              <RefreshCw aria-hidden="true" className={classNames("button-icon", loading && "button-icon--spin")} focusable="false" />
+              Refresh
+            </button>
+            <details className="maintenance-menu">
+              <summary>
+                <Wrench aria-hidden="true" className="button-icon" focusable="false" />
+                Maintenance
+              </summary>
+              <div className="maintenance-menu-popover">
+                <button className="secondary-button button-with-icon" type="button" disabled={abuseCleanupBusy} onClick={() => void cleanupAbuseBuckets()}>
+                  <Trash2 aria-hidden="true" className="button-icon" focusable="false" />
+                  {abuseCleanupBusy ? "Cleaning..." : "Clean abuse clients"}
+                </button>
+                <button className="secondary-button button-with-icon" type="button" disabled={cleanupBusy} onClick={() => void cleanupLogs()}>
+                  <Trash2 aria-hidden="true" className="button-icon" focusable="false" />
+                  {cleanupBusy ? "Cleaning..." : "Clean retained logs"}
+                </button>
+              </div>
+            </details>
+          </div>
         }
       />
-      <Card title="Audit logs" description="Recent sign-ins, route changes and administration activity.">
-        <DataTable
-          columns={["Action", "Actor", "Metadata", "Time"]}
-          rows={auditLogs.map((event) => [
-            <strong>{event.action}</strong>,
-            `${event.actor_type}${event.actor_id ? `:${event.actor_id.slice(0, 8)}` : ""}`,
-            <span className="muted">{compactJson(event.metadata)}</span>,
-            formatDateTime(event.created_at),
-          ])}
-          emptyTitle="No audit events"
-          emptyBody="Log entries appear after sign-in or route administration changes."
-          loading={loading}
-          loadingLabel="Loading audit logs..."
-          error={error}
-          onRetry={() => void refresh()}
-          rowKey={(index) => auditLogs[index]?.id ?? index}
+
+      <section className="system-summary-grid" aria-label="System log overview">
+        <SystemSummaryTile
+          icon={ShieldAlert}
+          label="Ingress protection"
+          value={activeBlockCount ? `${activeBlockCount} blocked` : "Clear"}
+          context={`${watchedClientCount} watched ${watchedClientCount === 1 ? "client" : "clients"}`}
+          tone={activeBlockCount ? "warn" : "success"}
         />
-      </Card>
-      <Card title="System events" description="Teams bot activities captured by the relay service.">
-        <DataTable
-          columns={["Activity", "Scope", "Conversation", "User", "Time"]}
-          rows={systemLogs.map((event) => [
-            <strong>{event.activity_type || "activity"}</strong>,
-            <StatusBadge label={event.scope || "unknown"} tone={event.scope === "channel" ? "success" : "neutral"} />,
-            <div className="stacked-cell">
-              <span>{systemLogConversation(event)}</span>
-              <span className="muted">{event.conversation_type || shortId(event.conversation_id)}</span>
-            </div>,
-            <div className="stacked-cell">
-              <span>{event.user_name || "-"}</span>
-              <span className="muted">{event.graph_user_id ? shortId(event.graph_user_id) : "-"}</span>
-            </div>,
-            formatDateTime(event.created_at),
-          ])}
-          emptyTitle="No system events"
-          emptyBody="Bot activity events appear after Teams sends activities to the relay bot endpoint."
-          loading={loading}
-          loadingLabel="Loading system events..."
-          error={error}
-          onRetry={() => void refresh()}
-          rowKey={(index) => systemLogs[index]?.id ?? index}
+        <SystemSummaryTile
+          icon={Activity}
+          label="Admin audit"
+          value={String(auditLogs.length)}
+          context={auditLogs[0] ? `Latest ${formatRelativeTime(auditLogs[0].created_at)}` : "No recent events"}
         />
+        <SystemSummaryTile
+          icon={Bot}
+          label="Bot activity"
+          value={String(systemLogs.length)}
+          context={unknownAuthCount ? `${unknownAuthCount} legacy auth events` : "Auth verified where available"}
+          tone={unknownAuthCount ? "neutral" : "success"}
+        />
+        <SystemSummaryTile
+          icon={FileClock}
+          label="Last activity"
+          value={lastActivityAt ? formatRelativeTime(lastActivityAt) : "None"}
+          context={lastActivityAt ? formatDateTime(lastActivityAt) : "Waiting for events"}
+        />
+      </section>
+
+      <section className={classNames("system-attention-panel", activeBlockCount > 0 && "system-attention-panel--warn")}>
+        <div className="system-attention-copy">
+          <span className="system-attention-icon" aria-hidden="true">
+            {activeBlockCount ? <AlertTriangle className="button-icon" focusable="false" /> : <Check className="button-icon" focusable="false" />}
+          </span>
+          <div>
+            <h2>{activeBlockCount ? "Ingress needs attention" : "Ingress is quiet"}</h2>
+            <p>
+              {activeBlockCount
+                ? "Blocked webhook clients are listed first so they can be reviewed or reset quickly."
+                : "No active webhook blocks. Watched clients are still visible for early signal detection."}
+            </p>
+          </div>
+        </div>
+        <div className="attention-client-list">
+          {(attentionClients.length ? attentionClients : watchedClients).map((client) => (
+            <AbuseClientCompactRow
+              key={client.key}
+              client={client}
+              resetting={resettingClientKey === client.key}
+              onReset={() => void resetAbuseClient(client)}
+            />
+          ))}
+          {!attentionClients.length && !watchedClients.length ? (
+            <div className="attention-empty">
+              <strong>No tracked clients</strong>
+              <span>Repeated failed webhook attempts will appear here.</span>
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      <Card
+        title="Activity explorer"
+        description="Switch between security, audit and bot activity without losing the operational context above."
+        headerActions={
+          <div className="segmented-control" aria-label="System log sections">
+            {SYSTEM_LOG_TABS.map((tab) => (
+              <button
+                key={tab.value}
+                className={classNames("segmented-control-button", activeTab === tab.value && "is-active")}
+                type="button"
+                onClick={() => setActiveTab(tab.value)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        }
+      >
+        {activeTab === "security" ? (
+          <SystemLogState loading={loading} error={error} empty={!abuseClients.length} emptyTitle="No webhook abuse clients" emptyBody="Failed webhook attempts will appear here when a client starts being watched." onRetry={() => void refresh()}>
+            <div className="activity-list">
+              {abuseClients.map((client) => (
+                <AbuseClientActivityRow
+                  key={client.key}
+                  client={client}
+                  resetting={resettingClientKey === client.key}
+                  onReset={() => void resetAbuseClient(client)}
+                />
+              ))}
+            </div>
+          </SystemLogState>
+        ) : null}
+        {activeTab === "audit" ? (
+          <SystemLogState loading={loading} error={error} empty={!auditLogs.length} emptyTitle="No audit events" emptyBody="Sign-ins, route changes and administration activity will appear here." onRetry={() => void refresh()}>
+            <div className="activity-list">
+              {auditLogs.map((event) => (
+                <AuditActivityRow key={event.id} event={event} />
+              ))}
+            </div>
+          </SystemLogState>
+        ) : null}
+        {activeTab === "bot" ? (
+          <SystemLogState loading={loading} error={error} empty={!systemLogs.length} emptyTitle="No bot activity" emptyBody="Teams bot endpoint events will appear after Teams sends activities to the relay service." onRetry={() => void refresh()}>
+            <div className="activity-list">
+              {systemLogs.map((event) => (
+                <BotActivityRow key={event.id} event={event} />
+              ))}
+            </div>
+          </SystemLogState>
+        ) : null}
       </Card>
     </>
   );
+}
+
+const SYSTEM_LOG_TABS: Array<{ value: SystemLogTab; label: string }> = [
+  { value: "security", label: "Security" },
+  { value: "audit", label: "Audit" },
+  { value: "bot", label: "Bot activity" },
+];
+
+function SystemSummaryTile({
+  icon: Icon,
+  label,
+  value,
+  context,
+  tone = "neutral",
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: string;
+  context: string;
+  tone?: "neutral" | "success" | "warn";
+}) {
+  return (
+    <div className={classNames("system-summary-tile", `system-summary-tile--${tone}`)}>
+      <span className="system-summary-icon" aria-hidden="true">
+        <Icon className="button-icon" focusable="false" />
+      </span>
+      <div>
+        <span className="system-summary-label">{label}</span>
+        <strong>{value}</strong>
+        <span>{context}</span>
+      </div>
+    </div>
+  );
+}
+
+function SystemLogState({
+  loading,
+  error,
+  empty,
+  emptyTitle,
+  emptyBody,
+  onRetry,
+  children,
+}: {
+  loading: boolean;
+  error: string;
+  empty: boolean;
+  emptyTitle: string;
+  emptyBody: string;
+  onRetry: () => void;
+  children: ReactNode;
+}) {
+  if (loading) {
+    return (
+      <div className="table-state" role="status" aria-live="polite">
+        <div className="spinner spinner--small" aria-hidden="true" />
+        <p>Loading activity...</p>
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="table-state table-state--error" role="alert">
+        <h3>Could not load activity</h3>
+        <p>{error}</p>
+        <button className="secondary-button secondary-button--small" type="button" onClick={onRetry}>
+          Retry
+        </button>
+      </div>
+    );
+  }
+  if (empty) return <EmptyState title={emptyTitle} body={emptyBody} />;
+  return <>{children}</>;
+}
+
+function AbuseClientCompactRow({
+  client,
+  resetting,
+  onReset,
+}: {
+  client: WebhookAbuseClientRow;
+  resetting: boolean;
+  onReset: () => void;
+}) {
+  return (
+    <div className="attention-client-row">
+      <div>
+        <strong>{client.clientHost || "Unknown client"}</strong>
+        <span>{abuseReasonLabel(client.lastReason)} · {formatRelativeTime(client.lastSeen)}</span>
+      </div>
+      <StatusBadge label={client.status === "blocked" ? "Blocked" : "Watching"} tone={client.status === "blocked" ? "warn" : "neutral"} />
+      <button className="secondary-button secondary-button--small" type="button" disabled={resetting} onClick={onReset}>
+        {resetting ? "Resetting..." : "Reset"}
+      </button>
+    </div>
+  );
+}
+
+function AbuseClientActivityRow({
+  client,
+  resetting,
+  onReset,
+}: {
+  client: WebhookAbuseClientRow;
+  resetting: boolean;
+  onReset: () => void;
+}) {
+  return (
+    <article className="activity-row">
+      <div className="activity-row-main">
+        <StatusBadge label={client.status === "blocked" ? "Blocked" : "Watching"} tone={client.status === "blocked" ? "warn" : "neutral"} />
+        <div className="activity-row-copy">
+          <strong>{client.clientHost || "Unknown webhook client"}</strong>
+          <span>{abuseReasonLabel(client.lastReason)} · {client.failureCount} failures · {client.bucketCount} {client.bucketCount === 1 ? "bucket" : "buckets"}</span>
+        </div>
+      </div>
+      <div className="activity-row-meta">
+        <span>{formatRelativeTime(client.lastSeen)}</span>
+        <button className="secondary-button secondary-button--small" type="button" disabled={resetting} onClick={onReset}>
+          {resetting ? "Resetting..." : "Reset"}
+        </button>
+      </div>
+      <details className="activity-row-details">
+        <summary>Details</summary>
+        <dl className="definition-list definition-list--compact">
+          <dt>Fingerprint</dt>
+          <dd><code>{client.clientFingerprint || "-"}</code></dd>
+          <dt>Activity</dt>
+          <dd>{client.activityLabel}</dd>
+          <dt>Routes</dt>
+          <dd>{client.routeFingerprints.length ? client.routeFingerprints.map((value) => `route ${value}`).join(", ") : "all routes"}</dd>
+          <dt>Blocked until</dt>
+          <dd>{client.blockedUntil ? formatDateTime(client.blockedUntil) : "-"}</dd>
+          <dt>Blocks</dt>
+          <dd>{client.blockCount}</dd>
+        </dl>
+      </details>
+    </article>
+  );
+}
+
+function AuditActivityRow({ event }: { event: AuditEventOut }) {
+  return (
+    <article className="activity-row">
+      <div className="activity-row-main">
+        <span className="activity-dot" aria-hidden="true" />
+        <div className="activity-row-copy">
+          <strong>{humanizeLogToken(event.action)}</strong>
+          <span><code>{event.action}</code> by {formatAuditActor(event)}</span>
+        </div>
+      </div>
+      <div className="activity-row-meta">
+        <span>{formatRelativeTime(event.created_at)}</span>
+        <span>{formatDateTime(event.created_at)}</span>
+      </div>
+      <details className="activity-row-details">
+        <summary>Metadata</summary>
+        <pre className="json-block">{compactJson(event.metadata)}</pre>
+      </details>
+    </article>
+  );
+}
+
+function BotActivityRow({ event }: { event: SystemLogEventOut }) {
+  return (
+    <article className="activity-row">
+      <div className="activity-row-main">
+        <StatusBadge label={event.scope || "unknown"} tone={event.scope === "channel" ? "success" : "neutral"} />
+        <div className="activity-row-copy">
+          <strong>{humanizeLogToken(event.activity_type || "activity")}</strong>
+          <span>{systemLogConversation(event)} · {event.user_name || "Unknown user"}</span>
+        </div>
+      </div>
+      <div className="activity-row-meta">
+        <StatusBadge label={systemLogAuthLabel(event)} tone={event.auth_status === "verified" ? "success" : "neutral"} />
+        <span>{formatRelativeTime(event.created_at)}</span>
+      </div>
+      <details className="activity-row-details">
+        <summary>Bot payload context</summary>
+        <dl className="definition-list definition-list--compact">
+          <dt>Conversation</dt>
+          <dd><code>{event.conversation_id || "-"}</code></dd>
+          <dt>Conversation type</dt>
+          <dd>{event.conversation_type || "-"}</dd>
+          <dt>Graph user</dt>
+          <dd><code>{event.graph_user_id || "-"}</code></dd>
+          <dt>Tenant</dt>
+          <dd><code>{event.tenant_id || "-"}</code></dd>
+          <dt>Auth validated</dt>
+          <dd>{event.auth_validated_at ? formatDateTime(event.auth_validated_at) : "legacy or unavailable"}</dd>
+          <dt>Service URL</dt>
+          <dd><code>{event.service_url || "-"}</code></dd>
+        </dl>
+      </details>
+    </article>
+  );
+}
+
+function humanizeLogToken(value: string): string {
+  return value
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .split(/[._\s-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function formatAuditActor(event: AuditEventOut): string {
+  return `${event.actor_type}${event.actor_id ? `:${event.actor_id.slice(0, 8)}` : ""}`;
 }
 
 function systemLogConversation(event: SystemLogEventOut): string {
@@ -5650,9 +6241,103 @@ function systemLogConversation(event: SystemLogEventOut): string {
   return event.channel_name || event.team_name || shortId(event.conversation_id) || "-";
 }
 
+function systemLogAuthLabel(event: SystemLogEventOut): string {
+  if (event.auth_status === "verified" && event.auth_service_url_matched) return "Verified";
+  if (event.auth_status === "verified") return "Verified";
+  return event.auth_status || "unknown";
+}
+
+function abuseReasonLabel(reason: string): string {
+  switch (reason) {
+    case "delivery_backend_disabled":
+      return "Delivery backend disabled";
+    case "invalid_payload":
+      return "Invalid payload";
+    case "payload_too_large":
+      return "Payload too large";
+    case "route_disabled":
+      return "Route disabled";
+    case "unknown_route":
+      return "Unknown route";
+    default:
+      return reason || "-";
+  }
+}
+
+type WebhookAbuseClientRow = {
+  key: string;
+  buckets: WebhookAbuseBucketOut[];
+  status: "watching" | "blocked";
+  clientHost: string;
+  clientFingerprint: string;
+  routeFingerprints: string[];
+  failureCount: number;
+  blockCount: number;
+  bucketCount: number;
+  lastReason: string;
+  blockedUntil: string | null;
+  lastSeen: string;
+  activityLabel: string;
+};
+
+function buildWebhookAbuseClients(buckets: WebhookAbuseBucketOut[]): WebhookAbuseClientRow[] {
+  const grouped = new Map<string, WebhookAbuseBucketOut[]>();
+  for (const bucket of buckets) {
+    const key = `${bucket.client_host || ""}:${bucket.client_fingerprint}`;
+    grouped.set(key, [...(grouped.get(key) ?? []), bucket]);
+  }
+
+  return Array.from(grouped.entries())
+    .map(([key, rows]) => {
+      const sortedBySeen = [...rows].sort((a, b) => timestampMs(b.last_seen_at) - timestampMs(a.last_seen_at));
+      const blockedBuckets = rows.filter((bucket) => bucket.status === "blocked" && bucket.blocked_until);
+      const blockedUntil = latestDate(blockedBuckets.map((bucket) => bucket.blocked_until).filter((value): value is string => Boolean(value)));
+      const routeFingerprints = Array.from(new Set(rows.map((bucket) => bucket.route_token_fingerprint).filter(Boolean)));
+      const hasAllRoutes = rows.some((bucket) => !bucket.route_token_fingerprint);
+      return {
+        key,
+        buckets: rows,
+        status: blockedBuckets.length ? "blocked" : "watching",
+        clientHost: sortedBySeen[0]?.client_host ?? "",
+        clientFingerprint: sortedBySeen[0]?.client_fingerprint ?? "",
+        routeFingerprints,
+        failureCount: rows.reduce((sum, bucket) => sum + bucket.failure_count, 0),
+        blockCount: rows.reduce((sum, bucket) => sum + bucket.block_count, 0),
+        bucketCount: rows.length,
+        lastReason: sortedBySeen.find((bucket) => bucket.last_reason)?.last_reason ?? "",
+        blockedUntil,
+        lastSeen: sortedBySeen[0]?.last_seen_at ?? "",
+        activityLabel: abuseActivityLabel(hasAllRoutes, routeFingerprints.length),
+      } satisfies WebhookAbuseClientRow;
+    })
+    .sort((a, b) => {
+      if (a.status !== b.status) return a.status === "blocked" ? -1 : 1;
+      return timestampMs(b.lastSeen) - timestampMs(a.lastSeen);
+    });
+}
+
+function abuseActivityLabel(hasAllRoutes: boolean, routeCount: number): string {
+  const parts: string[] = [];
+  if (hasAllRoutes) parts.push("All routes");
+  if (routeCount === 1) parts.push("1 route");
+  if (routeCount > 1) parts.push(`${routeCount} routes`);
+  return parts.join(" + ") || "-";
+}
+
+function latestDate(values: string[]): string | null {
+  if (!values.length) return null;
+  return values.reduce((latest, value) => (timestampMs(value) > timestampMs(latest) ? value : latest));
+}
+
+function timestampMs(value: string): number {
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
 function InnerApp() {
   const { session } = useAppContext();
   if (session.status === "booting") return <LoadingScreen label="Loading workspace" />;
+  if (session.status === "setup") return <FirstAdminSetupScreen />;
   if (session.status === "anonymous") return <LoginScreen />;
   return <AppShell />;
 }

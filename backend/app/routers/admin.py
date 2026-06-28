@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from app.core.settings_overrides import clear_override, get_effective_settings, list_setting_items, set_override
 from app.database import get_db
 from app.deps import get_current_session, record_audit, require_admin, require_csrf
-from app.models import AuditEvent, BotActivityEvent, GraphDelegatedCredential, Session as UserSession, User
+from app.models import AuditEvent, BotActivityEvent, GraphDelegatedCredential, Session as UserSession, User, WebhookAbuseBucket
 from app.schemas import (
     AdminReadinessOut,
     AuditEventOut,
@@ -41,8 +41,10 @@ from app.schemas import (
     UserOut,
     UserPasswordUpdateIn,
     UserUpdateIn,
+    WebhookAbuseBucketOut,
+    WebhookAbuseCleanupOut,
 )
-from app.security import hash_secret, loads_json, utcnow
+from app.security import ensure_utc, hash_secret, loads_json, utcnow
 from app.services.graph_delegated_auth import (
     DEFAULT_DELEGATED_GRAPH_SCOPES,
     GraphDelegatedAuthError,
@@ -55,6 +57,7 @@ from app.services.graph_delegated_auth import (
 from app.services.graph_targets import GraphConfigError, GraphRequestError
 from app.services.log_retention import cleanup_log_events
 from app.services.teams_bot import BotDeliveryError
+from app.services.webhook_abuse import cleanup_buckets, unblock_bucket
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 GRAPH_OAUTH_STATE_TTL_SECONDS = 600
@@ -411,6 +414,8 @@ def readiness(admin: User = Depends(require_admin), db: Session = Depends(get_db
             log_retention_days=settings.log_retention_days,
             log_cleanup_interval_minutes=settings.log_cleanup_interval_minutes,
             session_secure_cookie=settings.session_secure_cookie,
+            settings_encryption_key_source=settings.settings_enc_key_source,
+            settings_encryption_ready=bool(settings.settings_enc_key.strip()),
         ),
     )
 
@@ -752,6 +757,22 @@ def _graph_delivery_readiness(db: Session, organization_id: str, settings) -> Gr
             token_checked=False,
             token_request_succeeded=False,
             message="Delegated Graph delivery requires MS_APP_TENANT_ID, MS_APP_CLIENT_ID and MS_APP_CLIENT_SECRET.",
+        )
+    except HTTPException as exc:
+        detail = str(exc.detail)
+        if "SETTINGS_ENC_KEY" not in detail:
+            raise
+        diagnostics = diagnostics_for_organization(db, organization_id)
+        return _graph_delivery_readiness_out(
+            diagnostics=diagnostics,
+            settings=settings,
+            required_scopes=required_scopes,
+            credential_source=credential_source,
+            ready=False,
+            auth_status="configuration_error",
+            token_checked=False,
+            token_request_succeeded=False,
+            message=detail,
         )
     except GraphDelegatedAuthError:
         diagnostics = diagnostics_for_organization(db, organization_id)
@@ -1110,6 +1131,69 @@ def _odata_string(value: str) -> str:
     return value.replace("'", "''")
 
 
+@router.get("/webhook-abuse-buckets", response_model=list[WebhookAbuseBucketOut], dependencies=[Depends(require_csrf)])
+def list_webhook_abuse_buckets(
+    limit: int = Query(default=100, ge=1, le=250),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    _ = admin
+    rows = db.scalars(
+        select(WebhookAbuseBucket).order_by(WebhookAbuseBucket.last_seen_at.desc()).limit(limit)
+    ).all()
+    return [_webhook_abuse_bucket_out(row) for row in rows]
+
+
+@router.delete(
+    "/webhook-abuse-buckets/{bucket_id}",
+    response_model=WebhookAbuseBucketOut,
+    dependencies=[Depends(require_csrf)],
+)
+def reset_webhook_abuse_bucket(
+    bucket_id: str,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    bucket = unblock_bucket(db, bucket_id)
+    if bucket is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook abuse bucket not found")
+    record_audit(
+        db,
+        action="webhook_abuse_bucket.reset",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata={"bucket_id": bucket.id, "scope": bucket.scope},
+    )
+    db.commit()
+    db.refresh(bucket)
+    return _webhook_abuse_bucket_out(bucket)
+
+
+@router.post(
+    "/webhook-abuse-buckets/cleanup",
+    response_model=WebhookAbuseCleanupOut,
+    dependencies=[Depends(require_csrf)],
+)
+def cleanup_webhook_abuse_buckets(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    settings = get_effective_settings()
+    result = cleanup_buckets(db)
+    record_audit(
+        db,
+        action="webhook_abuse_bucket.cleanup",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata={"deleted": result.deleted, "cleanup_days": settings.webhook_abuse_cleanup_days},
+    )
+    db.commit()
+    return WebhookAbuseCleanupOut(
+        deleted=result.deleted,
+        cleanup_days=settings.webhook_abuse_cleanup_days,
+        cutoff=result.cutoff,
+    )
+
+
 @router.get("/logs", response_model=list[AuditEventOut], dependencies=[Depends(require_csrf)])
 def list_logs(
     limit: int = Query(default=100, ge=1, le=250),
@@ -1165,6 +1249,12 @@ def list_system_logs(
             graph_team_id=row.graph_team_id,
             channel_id=row.channel_id,
             graph_user_id=row.graph_user_id,
+            auth_status=row.auth_status,
+            auth_issuer=row.auth_issuer,
+            auth_audience=row.auth_audience,
+            auth_service_url=row.auth_service_url,
+            auth_service_url_matched=row.auth_service_url_matched,
+            auth_validated_at=row.auth_validated_at,
             created_at=row.created_at,
         )
         for row in rows
@@ -1194,3 +1284,22 @@ def _system_scope(event: BotActivityEvent) -> str:
     if event.team_id:
         return "team"
     return event.conversation_type or "unknown"
+
+
+def _webhook_abuse_bucket_out(bucket: WebhookAbuseBucket) -> WebhookAbuseBucketOut:
+    blocked_until = ensure_utc(bucket.blocked_until)
+    return WebhookAbuseBucketOut(
+        id=bucket.id,
+        scope=bucket.scope if bucket.scope in {"ip", "ip_route"} else "ip",
+        status="blocked" if blocked_until and blocked_until > utcnow() else "watching",
+        client_host=bucket.last_client_host,
+        client_fingerprint=bucket.client_hash[:12],
+        route_token_fingerprint=(bucket.route_token_hash or "")[:12],
+        failure_count=bucket.failure_count,
+        block_count=bucket.block_count,
+        window_started_at=bucket.window_started_at,
+        blocked_until=bucket.blocked_until,
+        last_reason=bucket.last_reason,
+        last_seen_at=bucket.last_seen_at,
+        created_at=bucket.created_at,
+    )

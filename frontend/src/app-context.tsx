@@ -13,6 +13,7 @@ import type { ApiError, SessionState, Toast, UserOut } from "./types";
 
 type AppContextValue = {
   session: SessionState;
+  createFirstAdmin: (email: string, displayName: string, password: string) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshSession: () => Promise<void>;
@@ -57,8 +58,21 @@ export function AppProvider({ children }: PropsWithChildren) {
       const response = await api.me();
       setAuthenticatedSession(response.user, response.csrf_token);
     } catch (error) {
+      if (isApiError(error) && error.status === 401) {
+        try {
+          const setup = await api.setupStatus();
+          setSession({ status: setup.needs_setup ? "setup" : "anonymous", user: null, csrfToken: "" });
+        } catch (setupError) {
+          setSession({ status: "anonymous", user: null, csrfToken: "" });
+          notify({
+            tone: "error",
+            title: "Setup check failed",
+            description: isApiError(setupError) ? setupError.message : "Unexpected error while checking setup state.",
+          });
+        }
+        return;
+      }
       setSession({ status: "anonymous", user: null, csrfToken: "" });
-      if (isApiError(error) && error.status === 401) return;
       notify({
         tone: "error",
         title: "Session bootstrap failed",
@@ -80,6 +94,15 @@ export function AppProvider({ children }: PropsWithChildren) {
     [notify],
   );
 
+  const createFirstAdmin = useCallback(
+    async (email: string, displayName: string, password: string) => {
+      const response = await api.createFirstAdmin({ email, display_name: displayName, password });
+      setAuthenticatedSession(response.user, response.csrf_token);
+      notify({ tone: "success", title: "Admin created", description: `Welcome, ${response.user.display_name}.` });
+    },
+    [notify],
+  );
+
   const logout = useCallback(async () => {
     const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
     try {
@@ -91,8 +114,8 @@ export function AppProvider({ children }: PropsWithChildren) {
   }, [notify, session]);
 
   const value = useMemo<AppContextValue>(
-    () => ({ session, login, logout, refreshSession, notify, dismissToast, toasts }),
-    [dismissToast, login, logout, notify, refreshSession, session, toasts],
+    () => ({ session, createFirstAdmin, login, logout, refreshSession, notify, dismissToast, toasts }),
+    [createFirstAdmin, dismissToast, login, logout, notify, refreshSession, session, toasts],
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

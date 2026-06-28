@@ -7,16 +7,15 @@ from sqlalchemy import select
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
+from app.core.config import get_settings, is_placeholder_session_secret, is_placeholder_settings_enc_key
 from app.core.settings_overrides import load_overrides
 from app.database import Base, engine
-from app.models import BotActivityEvent, BotConversationReference, Organization, User, WebhookRoute
-from app.security import hash_secret
+from app.models import AppSetting, BotActivityEvent, BotConversationReference, Organization, User, WebhookRoute
+from app.security import issue_plain_secret
 from app.services.log_retention import cleanup_log_events
 
-DEFAULT_BOOTSTRAP_ADMIN_EMAIL = "admin@example.local"
-DEFAULT_BOOTSTRAP_ADMIN_PASSWORD = "change-me-admin-password"
-DEFAULT_BOOTSTRAP_ADMIN_DISPLAY_NAME = "App Admin"
+INSTANCE_SESSION_SECRET_KEY = "__instance_session_secret"
+INSTANCE_SETTINGS_ENC_KEY = "__instance_settings_enc_key"
 
 
 def init_db() -> None:
@@ -26,6 +25,8 @@ def init_db() -> None:
     _ensure_webhook_route_name_backend_uniqueness()
     settings = get_settings()
     with Session(engine) as db:
+        _ensure_instance_session_secret(db)
+        _ensure_instance_settings_enc_key(db)
         _backfill_bot_reference_metadata(db)
         _backfill_webhook_route_targets(db)
         cleanup_log_events(db, force=True)
@@ -37,21 +38,41 @@ def init_db() -> None:
             db.add(org)
             db.flush()
 
-        user_count = len(db.scalars(select(User.id).where(User.organization_id == org.id)).all())
-        if user_count == 0:
-            db.add(
-                User(
-                    organization_id=org.id,
-                    email=DEFAULT_BOOTSTRAP_ADMIN_EMAIL,
-                    display_name=DEFAULT_BOOTSTRAP_ADMIN_DISPLAY_NAME,
-                    password_hash=hash_secret(DEFAULT_BOOTSTRAP_ADMIN_PASSWORD),
-                    is_admin=True,
-                    is_active=True,
-                )
-            )
-            db.flush()
-
         db.commit()
+
+
+def _ensure_instance_session_secret(db: Session) -> str:
+    settings = get_settings()
+    if settings.has_configured_session_secret():
+        if is_placeholder_session_secret(settings.session_secret):
+            raise RuntimeError("SESSION_SECRET must not use a placeholder value")
+        return settings.session_secret
+
+    row = db.get(AppSetting, INSTANCE_SESSION_SECRET_KEY)
+    if row is None:
+        row = AppSetting(key=INSTANCE_SESSION_SECRET_KEY, value=issue_plain_secret(48), is_secret=True)
+        db.add(row)
+        db.flush()
+
+    settings.use_generated_session_secret(row.value)
+    return row.value
+
+
+def _ensure_instance_settings_enc_key(db: Session) -> str:
+    settings = get_settings()
+    if settings.has_configured_settings_enc_key():
+        if is_placeholder_settings_enc_key(settings.settings_enc_key):
+            raise RuntimeError("SETTINGS_ENC_KEY must not use a placeholder value")
+        return settings.settings_enc_key
+
+    row = db.get(AppSetting, INSTANCE_SETTINGS_ENC_KEY)
+    if row is None:
+        row = AppSetting(key=INSTANCE_SETTINGS_ENC_KEY, value=issue_plain_secret(48), is_secret=True)
+        db.add(row)
+        db.flush()
+
+    settings.use_generated_settings_enc_key(row.value)
+    return row.value
 
 
 def _backfill_bot_reference_metadata(db: Session) -> None:
@@ -240,6 +261,8 @@ def _ensure_additive_schema() -> None:
         "webhook_routes": {
             "route_token": "TEXT DEFAULT '' NOT NULL",
             "delivery_backend": "VARCHAR(32) DEFAULT 'bot_framework' NOT NULL",
+            "client_ip_access_mode": "VARCHAR(32) DEFAULT 'public' NOT NULL",
+            "client_ip_allowlist": "TEXT DEFAULT '' NOT NULL",
             "graph_target_kind": "VARCHAR(32) DEFAULT '' NOT NULL",
             "graph_target_id": "TEXT DEFAULT '' NOT NULL",
             "graph_team_id": "TEXT DEFAULT '' NOT NULL",
@@ -259,6 +282,12 @@ def _ensure_additive_schema() -> None:
             "channel_name": "VARCHAR(200) DEFAULT '' NOT NULL",
             "user_name": "VARCHAR(200) DEFAULT '' NOT NULL",
             "graph_user_id": "TEXT DEFAULT '' NOT NULL",
+            "auth_status": "VARCHAR(32) DEFAULT 'unknown' NOT NULL",
+            "auth_issuer": "TEXT DEFAULT '' NOT NULL",
+            "auth_audience": "TEXT DEFAULT '' NOT NULL",
+            "auth_service_url": "TEXT DEFAULT '' NOT NULL",
+            "auth_service_url_matched": "BOOLEAN DEFAULT FALSE NOT NULL",
+            "auth_validated_at": "TIMESTAMP NULL",
         },
         "bot_conversation_references": {
             "graph_team_id": "TEXT DEFAULT '' NOT NULL",
@@ -267,6 +296,9 @@ def _ensure_additive_schema() -> None:
             "channel_name": "VARCHAR(200) DEFAULT '' NOT NULL",
             "user_name": "VARCHAR(200) DEFAULT '' NOT NULL",
             "graph_user_id": "TEXT DEFAULT '' NOT NULL",
+        },
+        "webhook_abuse_buckets": {
+            "last_client_host": "TEXT DEFAULT '' NOT NULL",
         },
     }
     with engine.begin() as connection:
@@ -375,6 +407,7 @@ def _sqlite_has_unique_webhook_route_index(connection, columns: list[str]) -> bo
 
 
 def _sqlite_rebuild_webhook_routes_table(connection) -> None:
+    existing_columns = {row[1] for row in connection.execute(text("PRAGMA table_info(webhook_routes)")).all()}
     columns = [
         "id",
         "organization_id",
@@ -384,6 +417,8 @@ def _sqlite_rebuild_webhook_routes_table(connection) -> None:
         "route_token_hash",
         "route_token",
         "delivery_backend",
+        "client_ip_access_mode",
+        "client_ip_allowlist",
         "target_type",
         "target_name",
         "bot_service_url",
@@ -405,6 +440,7 @@ def _sqlite_rebuild_webhook_routes_table(connection) -> None:
         "updated_at",
     ]
     column_list = ", ".join(columns)
+    select_expressions = ", ".join(_sqlite_rebuild_select_expression(column, existing_columns) for column in columns)
     connection.execute(text("DROP TABLE IF EXISTS webhook_routes_rebuild"))
     connection.execute(
         text(
@@ -418,6 +454,8 @@ def _sqlite_rebuild_webhook_routes_table(connection) -> None:
                 route_token_hash VARCHAR(64) NOT NULL,
                 route_token TEXT NOT NULL,
                 delivery_backend VARCHAR(32) NOT NULL,
+                client_ip_access_mode VARCHAR(32) DEFAULT 'public' NOT NULL,
+                client_ip_allowlist TEXT DEFAULT '' NOT NULL,
                 target_type VARCHAR(32) NOT NULL,
                 target_name VARCHAR(200) NOT NULL,
                 bot_service_url TEXT NOT NULL,
@@ -448,13 +486,23 @@ def _sqlite_rebuild_webhook_routes_table(connection) -> None:
         text(
             f"""
             INSERT INTO webhook_routes_rebuild ({column_list})
-            SELECT {column_list}
+            SELECT {select_expressions}
             FROM webhook_routes
             """
         )
     )
     connection.execute(text("DROP TABLE webhook_routes"))
     connection.execute(text("ALTER TABLE webhook_routes_rebuild RENAME TO webhook_routes"))
+
+
+def _sqlite_rebuild_select_expression(column: str, existing_columns: set[str]) -> str:
+    if column in existing_columns:
+        return column
+    if column == "client_ip_access_mode":
+        return "'public' AS client_ip_access_mode"
+    if column == "client_ip_allowlist":
+        return "'' AS client_ip_allowlist"
+    return f"NULL AS {column}"
 
 
 def _sqlite_ensure_webhook_route_indexes(connection) -> None:

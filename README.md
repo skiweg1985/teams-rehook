@@ -48,14 +48,11 @@ The API documentation is available at:
 http://localhost:8080/api/v1/docs
 ```
 
-On first startup with an empty user table, the backend creates a local bootstrap admin:
+On first startup, open the application and complete the first-run setup screen. The setup flow creates the first admin with the email, display name, and password you provide.
 
-```text
-Email: admin@example.local
-Password: change-me-admin-password
-```
+`SESSION_SECRET` is optional. If it is omitted, the backend generates and stores an instance secret during first startup. Backend replicas that share the same database reuse that generated secret; production deployments can still provide one shared value through a secret manager.
 
-Sign in and change the admin user and password before any production-like use. Also change `SESSION_SECRET`.
+`SETTINGS_ENC_KEY` protects encrypted settings and delegated refresh material. If it is omitted, first startup generates a separate database-backed key for local/simple shared-database deployments; production deployments should provide a stable value through a secret manager.
 
 ## Minimal Webhook Example
 

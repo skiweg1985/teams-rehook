@@ -20,10 +20,23 @@ export type SessionResponse = {
   csrf_token: string;
 };
 
+export type SetupStatusOut = {
+  ok: boolean;
+  needs_setup: boolean;
+  admin_exists: boolean;
+};
+
 export type SessionState =
   | { status: "booting"; user: null; csrfToken: "" }
+  | { status: "setup"; user: null; csrfToken: "" }
   | { status: "anonymous"; user: null; csrfToken: "" }
   | { status: "authenticated"; user: UserOut; csrfToken: string };
+
+export type FirstAdminCreate = {
+  email: string;
+  display_name: string;
+  password: string;
+};
 
 export type UserCreate = {
   email: string;
@@ -77,11 +90,41 @@ export type SystemLogEventOut = {
   graph_team_id: string;
   channel_id: string;
   graph_user_id: string;
+  auth_status: string;
+  auth_issuer: string;
+  auth_audience: string;
+  auth_service_url: string;
+  auth_service_url_matched: boolean;
+  auth_validated_at: string | null;
   created_at: string;
+};
+
+export type WebhookAbuseBucketOut = {
+  id: string;
+  scope: "ip" | "ip_route";
+  status: "watching" | "blocked";
+  client_host: string;
+  client_fingerprint: string;
+  route_token_fingerprint: string;
+  failure_count: number;
+  block_count: number;
+  window_started_at: string;
+  blocked_until: string | null;
+  last_reason: string;
+  last_seen_at: string;
+  created_at: string;
+};
+
+export type WebhookAbuseCleanupOut = {
+  ok: boolean;
+  deleted: number;
+  cleanup_days: number;
+  cutoff: string;
 };
 
 export type WebhookTargetType = "bot_conversation";
 export type DeliveryBackend = "bot_framework" | "graph";
+export type ClientIpAccessMode = "public" | "restricted";
 export type GraphTargetKind = "user" | "team" | "channel" | "chat";
 
 export type WebhookRouteOut = {
@@ -90,6 +133,8 @@ export type WebhookRouteOut = {
   name: string;
   is_active: boolean;
   delivery_backend: DeliveryBackend;
+  client_ip_access_mode: ClientIpAccessMode;
+  client_ip_allowlist: string;
   target_type: WebhookTargetType;
   target_name: string;
   bot_service_url: string;
@@ -117,6 +162,8 @@ export type WebhookRouteCreate = {
   name: string;
   is_active: boolean;
   delivery_backend?: DeliveryBackend;
+  client_ip_access_mode?: ClientIpAccessMode;
+  client_ip_allowlist?: string;
   target_type: WebhookTargetType;
   target_name: string;
   bot_service_url: string;
@@ -284,6 +331,8 @@ export type AdminReadinessOut = {
     log_retention_days: number;
     log_cleanup_interval_minutes: number;
     session_secure_cookie: boolean;
+    settings_encryption_key_source: "configured" | "generated" | "missing" | string;
+    settings_encryption_ready: boolean;
   };
 };
 

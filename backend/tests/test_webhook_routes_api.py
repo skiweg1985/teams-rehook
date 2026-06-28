@@ -14,9 +14,9 @@ from sqlalchemy.pool import StaticPool
 from app.core.settings_overrides import reset_override_state
 from app.database import Base, get_db
 from app.main import create_app
-from app.models import AuditEvent, BotActivityEvent, Organization, User, WebhookDeliveryEvent, WebhookRoute
+from app.models import AuditEvent, BotActivityEvent, Organization, User, WebhookAbuseBucket, WebhookDeliveryEvent, WebhookRoute
 from app.security import dumps_json, hash_secret, lookup_secret_hash
-from app.security import utcnow
+from app.security import ensure_utc, utcnow
 from app.routers.webhook_routes import _resolve_client_host
 
 
@@ -69,7 +69,14 @@ def client(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> Iterator[Tes
         reset_override_state()
 
 
-def add_route(db: Session, *, token: str = "route-token", active: bool = True) -> WebhookRoute:
+def add_route(
+    db: Session,
+    *,
+    token: str = "route-token",
+    active: bool = True,
+    client_ip_access_mode: str = "public",
+    client_ip_allowlist: str = "",
+) -> WebhookRoute:
     org = db.scalar(select(Organization).where(Organization.slug == "default"))
     assert org is not None
     route = WebhookRoute(
@@ -78,6 +85,8 @@ def add_route(db: Session, *, token: str = "route-token", active: bool = True) -
         is_active=active,
         route_token_hash=lookup_secret_hash(token),
         route_token=token,
+        client_ip_access_mode=client_ip_access_mode,
+        client_ip_allowlist=client_ip_allowlist,
         target_type="bot_conversation",
         target_name="Monitoring",
         bot_service_url="https://smba.trafficmanager.net/emea/example",
@@ -96,6 +105,15 @@ def login_admin(client: TestClient) -> str:
     )
     assert response.status_code == 200
     return response.json()["csrf_token"]
+
+
+def set_admin_setting(client: TestClient, csrf_token: str, key: str, value: str) -> None:
+    response = client.put(
+        f"/api/v1/admin/settings/{key}",
+        headers={"X-CSRF-Token": csrf_token},
+        json={"value": value},
+    )
+    assert response.status_code == 200
 
 
 def test_admin_route_api_requires_session_and_csrf(client: TestClient):
@@ -126,6 +144,108 @@ def test_public_webhook_delivers_known_active_route(client: TestClient, db_sessi
     assert request_metadata["direct_client_host"] == request_metadata["client_host"]
     assert request_metadata["client_host_source"] == "direct"
     assert json.loads(events[0].delivery_result_json)["backend"] == "bot_framework"
+
+
+def test_create_route_stores_restricted_client_ip_allowlist(client: TestClient):
+    csrf_token = login_admin(client)
+
+    response = client.post(
+        "/api/v1/webhook-routes",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "name": "Restricted route",
+            "is_active": True,
+            "client_ip_access_mode": "restricted",
+            "client_ip_allowlist": "203.0.113.10, 10.0.0.0/24\n203.0.113.10",
+            "target_type": "bot_conversation",
+            "target_name": "Monitoring",
+            "bot_service_url": "https://smba.trafficmanager.net/emea/example",
+            "bot_conversation_id": "conversation-id",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["client_ip_access_mode"] == "restricted"
+    assert body["client_ip_allowlist"] == "203.0.113.10\n10.0.0.0/24"
+
+
+def test_create_restricted_route_rejects_invalid_or_empty_allowlist(client: TestClient):
+    csrf_token = login_admin(client)
+    base_payload = {
+        "name": "Restricted route",
+        "is_active": True,
+        "client_ip_access_mode": "restricted",
+        "target_type": "bot_conversation",
+        "target_name": "Monitoring",
+        "bot_service_url": "https://smba.trafficmanager.net/emea/example",
+        "bot_conversation_id": "conversation-id",
+    }
+
+    empty_response = client.post(
+        "/api/v1/webhook-routes",
+        headers={"X-CSRF-Token": csrf_token},
+        json={**base_payload, "client_ip_allowlist": ""},
+    )
+    invalid_response = client.post(
+        "/api/v1/webhook-routes",
+        headers={"X-CSRF-Token": csrf_token},
+        json={**base_payload, "name": "Invalid route", "client_ip_allowlist": "not-an-ip"},
+    )
+
+    assert empty_response.status_code == 422
+    assert invalid_response.status_code == 422
+
+
+def test_restricted_webhook_delivers_allowed_client_ip(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    route = add_route(
+        db_session,
+        token="restricted-token",
+        client_ip_access_mode="restricted",
+        client_ip_allowlist="203.0.113.10\n10.0.0.0/24",
+    )
+    monkeypatch.setattr(
+        "app.routers.webhook_routes._resolve_client_host",
+        lambda request: ("10.0.0.42", "10.0.0.42", "", "direct"),
+    )
+
+    response = client.post("/api/v1/webhooks/restricted-token", json={"text": "allowed"})
+
+    assert response.status_code == 200
+    db_session.refresh(route)
+    assert route.last_delivery_status == "delivered"
+
+
+def test_restricted_webhook_rejects_unlisted_client_ip(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    route = add_route(
+        db_session,
+        token="restricted-token",
+        client_ip_access_mode="restricted",
+        client_ip_allowlist="203.0.113.10",
+    )
+    monkeypatch.setattr(
+        "app.routers.webhook_routes._resolve_client_host",
+        lambda request: ("198.51.100.20", "198.51.100.20", "", "direct"),
+    )
+
+    response = client.post("/api/v1/webhooks/restricted-token", json={"text": "blocked"})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Client IP is not allowed for this webhook route"
+    db_session.refresh(route)
+    assert route.last_delivery_status == "rejected"
+    event = db_session.scalar(select(WebhookDeliveryEvent).where(WebhookDeliveryEvent.route_id == route.id))
+    assert event is not None
+    assert event.status == "rejected"
+    assert event.error == "Client IP is not allowed for this webhook route"
 
 
 def test_client_host_ignores_x_forwarded_for_by_default(monkeypatch: pytest.MonkeyPatch):
@@ -224,6 +344,161 @@ def test_public_webhook_rejects_unknown_token(client: TestClient, db_session: Se
     assert len(events) == 1
     assert events[0].route_id is None
     assert events[0].status == "rejected"
+
+
+def test_unknown_webhook_route_blocks_after_failure_limit(client: TestClient, db_session: Session):
+    csrf_token = login_admin(client)
+    set_admin_setting(client, csrf_token, "webhook_abuse_failure_limit", "2")
+
+    first = client.post("/api/v1/webhooks/missing-token", json={"text": "hello"})
+    second = client.post("/api/v1/webhooks/missing-token", json={"text": "hello"})
+    blocked = client.post("/api/v1/webhooks/missing-token", json={"text": "hello"})
+
+    assert first.status_code == 404
+    assert second.status_code == 404
+    assert blocked.status_code == 429
+    assert blocked.json()["detail"] == "Too many failed webhook attempts"
+    buckets = db_session.scalars(select(WebhookAbuseBucket)).all()
+    assert len(buckets) == 1
+    assert buckets[0].scope == "ip"
+    assert buckets[0].route_token_hash is None
+    assert all(bucket.blocked_until is not None for bucket in buckets)
+    assert {bucket.last_reason for bucket in buckets} == {"unknown_route"}
+    assert {bucket.last_client_host for bucket in buckets} == {"testclient"}
+
+
+def test_invalid_payload_counts_route_bucket_and_success_resets_it(client: TestClient, db_session: Session):
+    add_route(db_session, token="reset-token")
+    csrf_token = login_admin(client)
+    set_admin_setting(client, csrf_token, "webhook_abuse_failure_limit", "3")
+
+    invalid = client.post("/api/v1/webhooks/reset-token", data=b"   ", headers={"Content-Type": "text/plain"})
+    assert invalid.status_code == 400
+    route_bucket = db_session.scalar(select(WebhookAbuseBucket).where(WebhookAbuseBucket.scope == "ip_route"))
+    assert route_bucket is not None
+    assert route_bucket.failure_count == 1
+    assert route_bucket.last_reason == "invalid_payload"
+
+    delivered = client.post("/api/v1/webhooks/reset-token", json={"text": "valid"})
+    assert delivered.status_code == 200
+    db_session.refresh(route_bucket)
+    assert route_bucket.failure_count == 0
+    assert route_bucket.blocked_until is None
+
+
+def test_webhook_abuse_block_expires_and_escalates(client: TestClient, db_session: Session):
+    csrf_token = login_admin(client)
+    set_admin_setting(client, csrf_token, "webhook_abuse_failure_limit", "1")
+
+    first = client.post("/api/v1/webhooks/escalate-token", json={"text": "hello"})
+    assert first.status_code == 404
+    first_bucket = db_session.scalar(select(WebhookAbuseBucket).where(WebhookAbuseBucket.scope == "ip"))
+    assert first_bucket is not None
+    assert first_bucket.block_count == 1
+    first_blocked_until = ensure_utc(first_bucket.blocked_until)
+    assert first_blocked_until is not None
+
+    for bucket in db_session.scalars(select(WebhookAbuseBucket)).all():
+        bucket.blocked_until = utcnow() - timedelta(minutes=1)
+    db_session.commit()
+
+    second = client.post("/api/v1/webhooks/escalate-token", json={"text": "hello"})
+    assert second.status_code == 404
+    db_session.refresh(first_bucket)
+    assert first_bucket.block_count == 2
+    second_blocked_until = ensure_utc(first_bucket.blocked_until)
+    assert second_blocked_until is not None
+    assert first_blocked_until is not None
+    assert second_blocked_until > first_blocked_until
+
+
+def test_webhook_abuse_uses_resolved_forwarded_client(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    csrf_token = login_admin(client)
+    set_admin_setting(client, csrf_token, "webhook_abuse_failure_limit", "1")
+
+    def fake_resolve_client_host(request):
+        forwarded = request.headers.get("x-forwarded-for", "")
+        return forwarded, "10.0.0.10", forwarded, "x_forwarded_for"
+
+    monkeypatch.setattr("app.routers.webhook_routes._resolve_client_host", fake_resolve_client_host)
+
+    proxied = client.post(
+        "/api/v1/webhooks/forwarded-token",
+        headers={"X-Forwarded-For": "203.0.113.10"},
+        json={"text": "hello"},
+    )
+    same_forwarded_blocked = client.post(
+        "/api/v1/webhooks/forwarded-token",
+        headers={"X-Forwarded-For": "203.0.113.10"},
+        json={"text": "hello"},
+    )
+    different_forwarded = client.post(
+        "/api/v1/webhooks/forwarded-token",
+        headers={"X-Forwarded-For": "203.0.113.11"},
+        json={"text": "hello"},
+    )
+
+    assert proxied.status_code == 404
+    assert same_forwarded_blocked.status_code == 429
+    assert different_forwarded.status_code == 404
+    assert {bucket.last_client_host for bucket in db_session.scalars(select(WebhookAbuseBucket)).all()} == {
+        "203.0.113.10",
+        "203.0.113.11",
+    }
+
+
+def test_admin_can_list_reset_and_cleanup_webhook_abuse_buckets(client: TestClient, db_session: Session):
+    csrf_token = login_admin(client)
+    set_admin_setting(client, csrf_token, "webhook_abuse_failure_limit", "1")
+
+    rejected = client.post("/api/v1/webhooks/admin-abuse-token", json={"text": "hello"})
+    assert rejected.status_code == 404
+
+    missing_csrf = client.get("/api/v1/admin/webhook-abuse-buckets")
+    assert missing_csrf.status_code == 403
+
+    list_response = client.get("/api/v1/admin/webhook-abuse-buckets", headers={"X-CSRF-Token": csrf_token})
+    assert list_response.status_code == 200
+    buckets = list_response.json()
+    assert buckets
+    assert buckets[0]["status"] == "blocked"
+    assert buckets[0]["client_host"] == "testclient"
+    assert buckets[0]["client_fingerprint"]
+
+    reset_without_csrf = client.delete(f"/api/v1/admin/webhook-abuse-buckets/{buckets[0]['id']}")
+    assert reset_without_csrf.status_code == 403
+
+    reset_response = client.delete(
+        f"/api/v1/admin/webhook-abuse-buckets/{buckets[0]['id']}",
+        headers={"X-CSRF-Token": csrf_token},
+    )
+    assert reset_response.status_code == 200
+    assert reset_response.json()["status"] == "watching"
+    assert reset_response.json()["failure_count"] == 0
+
+    old_bucket = WebhookAbuseBucket(
+        bucket_key="old-cleanup-bucket",
+        scope="ip",
+        client_hash="abc123",
+        failure_count=0,
+        block_count=0,
+        window_started_at=utcnow() - timedelta(days=40),
+        last_seen_at=utcnow() - timedelta(days=40),
+    )
+    db_session.add(old_bucket)
+    db_session.commit()
+
+    cleanup_response = client.post(
+        "/api/v1/admin/webhook-abuse-buckets/cleanup",
+        headers={"X-CSRF-Token": csrf_token},
+    )
+    assert cleanup_response.status_code == 200
+    assert cleanup_response.json()["deleted"] >= 1
+    assert db_session.get(WebhookAbuseBucket, old_bucket.id) is None
 
 
 def test_public_webhook_rejects_disabled_route(client: TestClient, db_session: Session):
@@ -1158,3 +1433,5 @@ def test_admin_system_logs_endpoint_returns_bot_activity_events(client: TestClie
     assert rows[0]["scope"] == "channel"
     assert rows[0]["team_name"] == "Operations"
     assert rows[0]["channel_name"] == "Alerts"
+    assert rows[0]["auth_status"] == "unknown"
+    assert rows[0]["auth_service_url_matched"] is False

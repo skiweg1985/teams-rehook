@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from html import unescape
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
@@ -17,6 +17,17 @@ from app.deps import record_audit, require_admin
 from app.models import BotActivityEvent, BotConversationReference, Organization, User, WebhookDeliveryEvent, WebhookRoute
 from app.schemas import BotActivityIngestOut, BotConversationReferenceOut
 from app.security import dumps_json, issue_plain_secret, lookup_secret_hash, utcnow
+from app.services.client_ip_allowlist import (
+    CLIENT_IP_ACCESS_PUBLIC,
+    CLIENT_IP_ACCESS_RESTRICTED,
+    normalize_client_ip_allowlist,
+)
+from app.services.bot_framework_auth import (
+    BotFrameworkClaims,
+    BotFrameworkAuthConfigError,
+    BotFrameworkAuthError,
+    validate_bot_framework_activity,
+)
 from app.services.graph_name_resolution import try_resolve_reference_graph_names, try_resolve_route_graph_names
 from app.services.teams_bot import BotDeliveryError, send_bot_activity
 from app.services.webhook_payloads import NormalizedMessage
@@ -25,8 +36,35 @@ router = APIRouter(tags=["bot-messages"])
 DELIVERY_BACKEND_BOT = "bot_framework"
 
 
+async def require_bot_framework_auth(
+    request: Request,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    body = await request.body()
+    try:
+        activity = json.loads(body) if body else {}
+    except json.JSONDecodeError:
+        activity = {}
+    if not isinstance(activity, dict):
+        activity = {}
+    try:
+        return validate_bot_framework_activity(authorization, activity)
+    except BotFrameworkAuthConfigError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except BotFrameworkAuthError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+
 @router.post("/bot/messages", response_model=BotActivityIngestOut)
-async def receive_bot_activity(request: Request, db: Session = Depends(get_db)):
+async def receive_bot_activity(
+    request: Request,
+    bot_auth: BotFrameworkClaims = Depends(require_bot_framework_auth),
+    db: Session = Depends(get_db),
+):
     body = await request.body()
     if not body:
         return BotActivityIngestOut(activity_event_id="", captured_reference=False)
@@ -53,6 +91,12 @@ async def receive_bot_activity(request: Request, db: Session = Depends(get_db)):
         graph_user_id=captured["graph_user_id"],
         recipient_id=captured["recipient_id"],
         raw_activity_json=dumps_json(_safe_activity(activity)),
+        auth_status="verified",
+        auth_issuer=bot_auth.issuer,
+        auth_audience=bot_auth.audience,
+        auth_service_url=bot_auth.service_url,
+        auth_service_url_matched=bot_auth.service_url_matched,
+        auth_validated_at=bot_auth.validated_at,
     )
     db.add(event)
     db.flush()
@@ -108,7 +152,7 @@ class CommandResult:
     activity: dict[str, Any] | None = None
 
 
-KNOWN_COMMANDS = {"register", "webhook", "disable", "enable", "delete", "info", "help"}
+KNOWN_COMMANDS = {"register", "webhook", "disable", "enable", "delete", "info", "allowlist", "help"}
 
 
 def _upsert_reference(db: Session, captured: dict[str, str]) -> BotConversationReference | None:
@@ -215,6 +259,8 @@ def _handle_command(
         return _delete_linked_route_command(db, captured, argument)
     if command == "info":
         return _info_command(db, captured, reference, argument)
+    if command == "allowlist":
+        return _allowlist_command(db, captured, argument)
     if command == "help":
         return _help_command()
     return CommandResult()
@@ -384,6 +430,7 @@ def _webhook_command_activity(route: WebhookRoute, webhook_url: str) -> dict[str
             ("Route", route.name),
             ("Target", route.target_name),
             ("Status", "active" if route.is_active else "inactive"),
+            ("Client IP access", _client_ip_access_summary(route)),
         ],
         long_fields=[("Webhook URL", webhook_url)],
         actions=[_copy_webhook_url_action(webhook_url)],
@@ -398,14 +445,17 @@ def _info_detail_command_activity(
     webhook_url = _build_webhook_url(linked_route.route_token) if linked_route and linked_route.route_token else ""
     long_fields = [("Webhook URL", webhook_url)] if webhook_url else []
     actions = [_copy_webhook_url_action(webhook_url)] if webhook_url else []
+    facts = [
+        *_visible_context_facts(captured, linked_route),
+        ("Reference saved", "yes" if reference else "no"),
+        ("Linked route", linked_route.name if linked_route else "none"),
+    ]
+    if linked_route:
+        facts.append(("Client IP access", _client_ip_access_summary(linked_route)))
     return _command_activity(
         "Teams conversation captured",
         "This is the Teams context currently available to the relay bot.",
-        facts=[
-            *_visible_context_facts(captured, linked_route),
-            ("Reference saved", "yes" if reference else "no"),
-            ("Linked route", linked_route.name if linked_route else "none"),
-        ],
+        facts=facts,
         long_fields=long_fields,
         technical_fields=_technical_fields(captured),
         actions=actions,
@@ -440,6 +490,7 @@ def _route_overview_text(route: WebhookRoute, captured: dict[str, str], *, link_
         webhook_label = f"[{webhook_url}]({_build_webhook_copy_url(webhook_url)})"
     lines = [
         f"Status: {'active' if route.is_active else 'inactive'}",
+        f"Client IP access: {_client_ip_access_summary(route)}",
         f"URL: {webhook_label}",
     ]
     names = _route_display_names(route, captured)
@@ -534,6 +585,7 @@ def _help_command() -> CommandResult:
         ("enable [route name]", "Enable a route linked to this Teams conversation."),
         ("delete <route name>", "Delete a route linked to this Teams conversation."),
         ("info [route name]", "Show linked routes or details for one route."),
+        ("allowlist [route name]", "Show or change the route client IP allowlist."),
         ("help", "Show this command list."),
     ]
     reply_text = "\n".join(
@@ -886,6 +938,7 @@ def _info_command(
     if linked_route and linked_route.route_token:
         lines.append(f"Linked route: `{linked_route.name}`")
         lines.append(f"Route status: `{'active' if linked_route.is_active else 'inactive'}`")
+        lines.append(f"Client IP access: `{_client_ip_access_summary(linked_route)}`")
         lines.append(f"Target: `{linked_route.target_name or '-'}`")
         lines.append(f"Webhook URL: {_build_webhook_url(linked_route.route_token)}")
     else:
@@ -896,6 +949,155 @@ def _info_command(
         reply_text="\n".join(lines),
         activity=_info_detail_command_activity(captured, reference, linked_route),
     )
+
+
+def _allowlist_command(db: Session, captured: dict[str, str], argument: str) -> CommandResult:
+    if not argument:
+        return _show_allowlist_command(db, captured, "")
+    lowered = argument.lower()
+    if lowered == "show":
+        return _show_allowlist_command(db, captured, "")
+    if lowered.startswith("show "):
+        return _show_allowlist_command(db, captured, argument[5:].strip())
+    if lowered == CLIENT_IP_ACCESS_PUBLIC or lowered.startswith(f"{CLIENT_IP_ACCESS_PUBLIC} "):
+        route_name = argument[len(CLIENT_IP_ACCESS_PUBLIC) :].strip()
+        return _set_allowlist_command(db, captured, route_name, CLIENT_IP_ACCESS_PUBLIC, "")
+    if lowered == CLIENT_IP_ACCESS_RESTRICTED or lowered.startswith(f"{CLIENT_IP_ACCESS_RESTRICTED} "):
+        route_name, allowlist = _parse_restricted_allowlist_argument(
+            argument[len(CLIENT_IP_ACCESS_RESTRICTED) :].strip()
+        )
+        return _set_allowlist_command(db, captured, route_name, CLIENT_IP_ACCESS_RESTRICTED, allowlist)
+    return _show_allowlist_command(db, captured, argument)
+
+
+def _show_allowlist_command(db: Session, captured: dict[str, str], route_name: str) -> CommandResult:
+    if len(route_name) > 200:
+        return _route_name_too_long_command("allowlist")
+    route, error = _resolve_linked_route(db, captured, route_name, "allowlist")
+    if error:
+        return error
+    assert route is not None
+    reply_text = "\n".join(
+        [
+            f"Route `{route.name}` client IP access: `{_client_ip_access_summary(route)}`",
+            *_client_ip_allowlist_reply_lines(route),
+            "",
+            "Use `allowlist public` to make the linked route public.",
+            "Use `allowlist restricted 203.0.113.10, 10.0.0.0/24` to restrict a single linked route.",
+            "For multiple linked routes, use `allowlist restricted Route Name: 203.0.113.10`.",
+        ]
+    )
+    return CommandResult(
+        handled=True,
+        command="allowlist",
+        reply_text=reply_text,
+        activity=_allowlist_command_activity(route, "Client IP allowlist"),
+    )
+
+
+def _set_allowlist_command(
+    db: Session,
+    captured: dict[str, str],
+    route_name: str,
+    mode: str,
+    allowlist: str,
+) -> CommandResult:
+    if len(route_name) > 200:
+        return _route_name_too_long_command("allowlist")
+    route, error = _resolve_linked_route(db, captured, route_name, "allowlist")
+    if error:
+        return error
+    assert route is not None
+    previous_mode = route.client_ip_access_mode
+    previous_allowlist = route.client_ip_allowlist
+    try:
+        normalized_allowlist = normalize_client_ip_allowlist(allowlist)
+    except ValueError as exc:
+        return CommandResult(
+            handled=True,
+            command="allowlist",
+            reply_text=str(exc),
+            severity="warn",
+            activity=_command_activity(
+                "Invalid allowlist",
+                str(exc),
+                facts=[("Example", "allowlist restricted 203.0.113.10, 10.0.0.0/24")],
+            ),
+        )
+    if mode == CLIENT_IP_ACCESS_RESTRICTED and not normalized_allowlist:
+        return CommandResult(
+            handled=True,
+            command="allowlist",
+            reply_text="Restricted routes require at least one client IP or CIDR range.",
+            severity="warn",
+            activity=_command_activity(
+                "Allowlist required",
+                "Restricted routes require at least one client IP or CIDR range.",
+                facts=[("Example", "allowlist restricted 203.0.113.10, 10.0.0.0/24")],
+            ),
+        )
+    route.client_ip_access_mode = mode
+    route.client_ip_allowlist = normalized_allowlist if mode == CLIENT_IP_ACCESS_RESTRICTED else ""
+    db.flush()
+    _record_bot_route_audit(
+        db,
+        "webhook_route.client_ip_access_updated",
+        route,
+        captured,
+        previous_client_ip_access_mode=previous_mode,
+        previous_client_ip_allowlist=previous_allowlist,
+    )
+    reply_text = "\n".join(
+        [
+            f"Route `{route.name}` client IP access updated to `{_client_ip_access_summary(route)}`.",
+            *_client_ip_allowlist_reply_lines(route),
+        ]
+    )
+    return CommandResult(
+        handled=True,
+        command="allowlist",
+        reply_text=reply_text,
+        activity=_allowlist_command_activity(route, "Client IP access updated"),
+    )
+
+
+def _parse_restricted_allowlist_argument(argument: str) -> tuple[str, str]:
+    if ":" not in argument:
+        return "", argument
+    route_name, allowlist = argument.split(":", 1)
+    return route_name.strip(), allowlist.strip()
+
+
+def _allowlist_command_activity(route: WebhookRoute, title: str) -> dict[str, Any]:
+    allowlist = route.client_ip_allowlist.strip()
+    long_fields = [("Allowed clients", allowlist)] if allowlist else []
+    return _command_activity(
+        title,
+        "Client IP access controls which source addresses may use this route URL.",
+        facts=[
+            ("Route", route.name),
+            ("Mode", route.client_ip_access_mode or CLIENT_IP_ACCESS_PUBLIC),
+            ("Allowed clients", str(len(allowlist.splitlines())) if allowlist else "all"),
+        ],
+        long_fields=long_fields,
+    )
+
+
+def _client_ip_access_summary(route: WebhookRoute) -> str:
+    mode = route.client_ip_access_mode or CLIENT_IP_ACCESS_PUBLIC
+    if mode == CLIENT_IP_ACCESS_RESTRICTED:
+        count = len([entry for entry in route.client_ip_allowlist.splitlines() if entry.strip()])
+        return f"restricted ({count} allowed)"
+    return "public"
+
+
+def _client_ip_allowlist_reply_lines(route: WebhookRoute) -> list[str]:
+    if (route.client_ip_access_mode or CLIENT_IP_ACCESS_PUBLIC) != CLIENT_IP_ACCESS_RESTRICTED:
+        return ["Allowed clients: `all`"]
+    entries = [entry.strip() for entry in route.client_ip_allowlist.splitlines() if entry.strip()]
+    if not entries:
+        return ["Allowed clients: `none`"]
+    return ["Allowed clients:", *[f"- `{entry}`" for entry in entries]]
 
 
 def _resolve_linked_route(

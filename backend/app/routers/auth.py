@@ -15,8 +15,8 @@ from app.deps import (
     require_csrf,
     set_session_cookie,
 )
-from app.models import Session as SessionModel, User
-from app.schemas import LoginRequest, SessionResponse, UserOut
+from app.models import Organization, Session as SessionModel, User
+from app.schemas import FirstAdminCreateIn, LoginRequest, SessionResponse, SetupStatusOut, UserOut
 from app.security import hash_secret, issue_plain_secret, lookup_secret_hash, session_expiry, utcnow, verify_secret
 
 router = APIRouter(tags=["auth"])
@@ -34,6 +34,76 @@ def _issue_session(db: Session, user: User) -> tuple[str, str]:
     )
     db.add(db_session)
     return session_token, csrf_token
+
+
+def _normalize_email(email: str) -> str:
+    value = str(email or "").strip().lower()
+    if "@" not in value:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A valid email address is required")
+    return value
+
+
+def _default_organization(db: Session) -> Organization:
+    settings = get_settings()
+    org = db.scalar(select(Organization).where(Organization.slug == settings.default_org_slug))
+    if org is None:
+        org = Organization(slug=settings.default_org_slug, name=settings.default_org_name)
+        db.add(org)
+        db.flush()
+    return org
+
+
+def _admin_exists(db: Session, organization_id: str) -> bool:
+    admin_id = db.scalar(
+        select(User.id).where(
+            User.organization_id == organization_id,
+            User.is_admin.is_(True),
+        )
+    )
+    return admin_id is not None
+
+
+@router.get("/setup/status", response_model=SetupStatusOut)
+def setup_status(db: Session = Depends(get_db)):
+    org = _default_organization(db)
+    admin_exists = _admin_exists(db, org.id)
+    db.commit()
+    return SetupStatusOut(needs_setup=not admin_exists, admin_exists=admin_exists)
+
+
+@router.post("/setup/admin", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
+def create_first_admin(payload: FirstAdminCreateIn, response: Response, db: Session = Depends(get_db)):
+    org = _default_organization(db)
+    if _admin_exists(db, org.id):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Initial setup has already been completed")
+
+    email = _normalize_email(payload.email)
+    existing = db.scalar(select(User).where(User.organization_id == org.id, User.email == email))
+    if existing is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A user with this email already exists")
+
+    user = User(
+        organization_id=org.id,
+        email=email,
+        display_name=payload.display_name.strip(),
+        password_hash=hash_secret(payload.password),
+        is_admin=True,
+        is_active=True,
+    )
+    db.add(user)
+    db.flush()
+    session_token, csrf_token = _issue_session(db, user)
+    set_session_cookie(response, session_token)
+    record_audit(
+        db,
+        action="setup.first_admin.created",
+        actor_type="user",
+        actor_id=user.id,
+        organization_id=org.id,
+        metadata={"user_id": user.id, "email": user.email},
+    )
+    db.commit()
+    return SessionResponse(user=UserOut.model_validate(user), csrf_token=csrf_token)
 
 
 @router.post("/auth/login", response_model=SessionResponse)

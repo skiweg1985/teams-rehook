@@ -25,6 +25,8 @@ The frontend receives a CSRF token from login and session refresh responses.
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
+| `GET` | `/api/v1/setup/status` | Public | Reports whether first-run admin setup is required. |
+| `POST` | `/api/v1/setup/admin` | Public until setup is complete | Creates the first admin, sets the session cookie, and returns user and CSRF token. |
 | `POST` | `/api/v1/auth/login` | Public | Authenticates by email/password, sets session cookie, returns user and CSRF token. |
 | `POST` | `/api/v1/auth/logout` | Session + CSRF | Revokes the current session and clears the session cookie. |
 | `GET` | `/api/v1/sessions/me` | Session | Returns the current user and refreshes the CSRF token. |
@@ -34,7 +36,7 @@ Example login:
 ```bash
 curl -i -X POST "http://localhost:8080/api/v1/auth/login" \
   -H "Content-Type: application/json" \
-  -d '{"email":"admin@example.local","password":"change-me-admin-password"}'
+  -d '{"email":"admin@example.com","password":"your-admin-password"}'
 ```
 
 ## Webhook Routes
@@ -114,8 +116,10 @@ The redirect URI is:
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `POST` | `/api/v1/bot/messages` | Public bot ingress | Receives Teams bot activities, captures conversation references, and handles bot commands. |
+| `POST` | `/api/v1/bot/messages` | Bot Framework bearer token | Receives Teams bot activities, captures conversation references, and handles bot commands. Invalid, missing, expired, mismatched, or incorrectly signed tokens are rejected before persistence. |
 | `GET` | `/api/v1/bot/conversation-references` | Admin session | Lists known Bot Framework conversations. |
+
+Accepted bot activities store non-sensitive authentication metadata such as validated issuer, audience, service URL match status and validation time. Raw bearer tokens and full JWTs are never stored. Historical bot activity rows created before auth metadata existed may report `auth_status` as `unknown`.
 
 ## Teams Targets
 

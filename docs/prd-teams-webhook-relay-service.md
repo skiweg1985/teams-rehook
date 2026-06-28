@@ -32,7 +32,7 @@ source webhook -> relay URL -> route -> configured Teams target -> delivery test
 
 Implemented capabilities:
 
-- FastAPI backend with SQLAlchemy, sessions, CSRF protection, and bootstrap admin.
+- FastAPI backend with SQLAlchemy, sessions, CSRF protection, and first-run admin setup.
 - Docker Compose stack with Postgres, backend, frontend, and HAProxy.
 - Authenticated admin UI with Dashboard, Webhooks, Payload Generator, Messages, Users, Settings, and System logs.
 - Stable relay URLs per webhook route.

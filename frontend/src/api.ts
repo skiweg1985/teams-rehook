@@ -3,16 +3,20 @@ import type {
   ApiError,
   AuditEventOut,
   BotConversationReferenceOut,
+  FirstAdminCreate,
   GraphDeliveryOAuthStartOut,
   LogCleanupOut,
   SessionResponse,
   SettingItemOut,
+  SetupStatusOut,
   SystemLogEventOut,
   TeamsTargetSearchResult,
   UserCreate,
   UserOut,
   UserPasswordUpdate,
   UserUpdate,
+  WebhookAbuseBucketOut,
+  WebhookAbuseCleanupOut,
   WebhookDeliveryEventDetailOut,
   WebhookDeliveryEventOut,
   WebhookDeliveryEventPageOut,
@@ -70,6 +74,15 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 }
 
 export const api = {
+  setupStatus() {
+    return request<SetupStatusOut>("/api/v1/setup/status");
+  },
+  createFirstAdmin(body: FirstAdminCreate) {
+    return request<SessionResponse>("/api/v1/setup/admin", {
+      method: "POST",
+      body,
+    });
+  },
   login(email: string, password: string) {
     return request<SessionResponse>("/api/v1/auth/login", {
       method: "POST",
@@ -117,6 +130,21 @@ export const api = {
   },
   adminSystemLogs(csrfToken: string) {
     return request<SystemLogEventOut[]>("/api/v1/admin/system-logs", { csrfToken });
+  },
+  adminWebhookAbuseBuckets(csrfToken: string) {
+    return request<WebhookAbuseBucketOut[]>("/api/v1/admin/webhook-abuse-buckets", { csrfToken });
+  },
+  resetWebhookAbuseBucket(csrfToken: string, id: string) {
+    return request<WebhookAbuseBucketOut>(`/api/v1/admin/webhook-abuse-buckets/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      csrfToken,
+    });
+  },
+  cleanupWebhookAbuseBuckets(csrfToken: string) {
+    return request<WebhookAbuseCleanupOut>("/api/v1/admin/webhook-abuse-buckets/cleanup", {
+      method: "POST",
+      csrfToken,
+    });
   },
   adminReadiness(csrfToken: string) {
     return request<AdminReadinessOut>("/api/v1/admin/readiness", { csrfToken });

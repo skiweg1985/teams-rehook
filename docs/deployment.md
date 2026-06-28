@@ -62,13 +62,16 @@ Use placeholders only in `.env.example`. For production-like deployments, move s
 
 Sensitive values include:
 
-- `SESSION_SECRET`
+- `SESSION_SECRET`, if provided instead of the generated instance secret
 - `SETTINGS_ENC_KEY`
 - `MS_APP_CLIENT_SECRET`
 - `MONITORING_API_KEY`
-- The fixed first-run bootstrap password `change-me-admin-password`
 - Generated relay URLs
 - Delegated Graph refresh material stored in the database
+
+When `SESSION_SECRET` is omitted, Teams Rehook stores a generated instance secret in the application database. This is suitable for local and simple shared-database deployments. If `SESSION_SECRET` is provided by a secret manager, every backend replica in that environment must receive the same value.
+
+`SETTINGS_ENC_KEY` is not derived from `SESSION_SECRET`. When it is omitted, startup stores a separate generated settings encryption key in the database for local/simple shared-database deployments. Production-like deployments should provide `SETTINGS_ENC_KEY` through durable secret management. Changing it without re-encrypting or re-entering stored secrets makes existing encrypted settings and delegated refresh material unreadable.
 
 ## TLS And Reverse Proxy
 
