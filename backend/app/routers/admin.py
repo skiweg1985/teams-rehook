@@ -17,6 +17,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core.proxy_trust import combined_trusted_proxy_ips
 from app.core.settings_overrides import clear_override, get_effective_settings, list_setting_items, set_override
 from app.database import get_db
 from app.deps import get_current_session, record_audit, require_admin, require_csrf
@@ -414,6 +415,9 @@ def readiness(admin: User = Depends(require_admin), db: Session = Depends(get_db
             app_public_base_url=settings.app_public_base_url,
             frontend_base_url=settings.frontend_base_url,
             cors_origins=settings.cors_origin_list,
+            compose_app_subnet=settings.compose_app_subnet,
+            trusted_proxy_ips=settings.trusted_proxy_ips,
+            trusted_proxy_chain=combined_trusted_proxy_ips(settings.compose_app_subnet, settings.trusted_proxy_ips),
             webhook_max_payload_bytes=settings.webhook_max_payload_bytes,
             log_retention_days=settings.log_retention_days,
             log_cleanup_interval_minutes=settings.log_cleanup_interval_minutes,

@@ -8,6 +8,7 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.proxy_trust import combined_trusted_proxy_ips
 from app.core.settings_overrides import get_effective_settings
 from app.database import get_db
 from app.deps import record_audit, require_admin, require_csrf
@@ -883,7 +884,9 @@ def _resolve_client_host(request: Request) -> tuple[str, str, str, str]:
     direct_client_host = request.client.host if request.client else ""
     x_forwarded_for = request.headers.get("x-forwarded-for", "")
     settings = get_effective_settings()
-    trusted_proxy_networks = _trusted_proxy_networks(settings.trusted_proxy_ips)
+    trusted_proxy_networks = _trusted_proxy_networks(
+        combined_trusted_proxy_ips(settings.compose_app_subnet, settings.trusted_proxy_ips)
+    )
     if (
         not settings.trust_x_forwarded_for
         or not x_forwarded_for.strip()

@@ -312,7 +312,7 @@ function LoginScreen() {
             <input
               value={email}
               autoComplete="email"
-              placeholder="admin@example.com"
+              placeholder="admin@example.local"
               required
               onChange={(event) => setEmail(event.target.value)}
             />
@@ -381,7 +381,7 @@ function FirstAdminSetupScreen() {
             <input
               value={email}
               autoComplete="email"
-              placeholder="admin@example.com"
+              placeholder="admin@example.local"
               required
               onChange={(event) => setEmail(event.target.value)}
             />
@@ -3862,27 +3862,6 @@ const SETTING_META: Record<string, SettingMeta> = {
     unit: "minutes",
     display: "number",
   },
-  webhook_abuse_initial_block_minutes: {
-    section: "runtime",
-    label: "Initial block",
-    description: "First temporary block duration.",
-    unit: "minutes",
-    display: "number",
-  },
-  webhook_abuse_max_block_minutes: {
-    section: "runtime",
-    label: "Max block",
-    description: "Longest escalated block duration.",
-    unit: "minutes",
-    display: "number",
-  },
-  webhook_abuse_cleanup_days: {
-    section: "runtime",
-    label: "Abuse cleanup",
-    description: "How long inactive abuse buckets are kept.",
-    unit: "days",
-    display: "number",
-  },
   log_retention_days: {
     section: "runtime",
     label: "Log retention",
@@ -3902,12 +3881,6 @@ const SETTING_META: Record<string, SettingMeta> = {
     label: "Trust X-Forwarded-For",
     description: "Use forwarded client IPs only when the direct peer is trusted.",
     display: "switch",
-  },
-  trusted_proxy_ips: {
-    section: "runtime",
-    label: "Trusted proxy IPs",
-    description: "Comma-separated proxy IPs or CIDR ranges allowed to supply forwarded client IPs.",
-    display: "technical",
   },
   session_secure_cookie: {
     section: "runtime",
@@ -3981,13 +3954,15 @@ const RUNTIME_SETTING_KEYS = [
   "webhook_abuse_blocking_enabled",
   "webhook_abuse_failure_limit",
   "webhook_abuse_window_minutes",
-  "webhook_abuse_initial_block_minutes",
-  "webhook_abuse_max_block_minutes",
-  "webhook_abuse_cleanup_days",
   "log_retention_days",
   "log_cleanup_interval_minutes",
   "trust_x_forwarded_for",
-  "trusted_proxy_ips",
+] as const;
+
+const ABUSE_SETTING_KEYS = [
+  "webhook_abuse_blocking_enabled",
+  "webhook_abuse_failure_limit",
+  "webhook_abuse_window_minutes",
 ] as const;
 
 const ADVANCED_IDENTITY_SETTING_KEYS = [
@@ -4298,9 +4273,9 @@ function RuntimeDefaultsCard({
   const urlSettings = settings.filter((item) => item.type === "url" && item.key !== "bot_default_service_url");
   const browserSettings = settings.filter((item) => item.key === "cors_origins" || item.key === "session_secure_cookie");
   const limitSettings = settings.filter((item) => item.type === "int" && !item.key.startsWith("webhook_abuse_"));
-  const abuseSettings = settings.filter((item) => item.key.startsWith("webhook_abuse_"));
+  const abuseSettings = orderedSettings(ABUSE_SETTING_KEYS, settingsByKey);
   const fallbackSettings = settings.filter((item) => item.key === "bot_default_service_url");
-  const proxySettings = settings.filter((item) => item.key === "trust_x_forwarded_for" || item.key === "trusted_proxy_ips");
+  const proxySettings = settings.filter((item) => item.key === "trust_x_forwarded_for");
 
   return (
     <Card className="settings-card" title="Runtime defaults" description="Effective URLs, limits and retention used by relay operations.">
@@ -4341,7 +4316,7 @@ function RuntimeDefaultsCard({
         <div className="settings-card-block">
           <div className="settings-card-block-header">
             <h3>Abuse blocking</h3>
-            <p>Controls temporary webhook blocks after repeated failed attempts.</p>
+            <p>Core controls for temporary webhook blocks. Advanced timings stay in environment config.</p>
           </div>
           {abuseSettings.map((item) => (
             <RuntimeSettingControl
@@ -5265,6 +5240,12 @@ function RuntimeSnapshotCard({ onCopy, readiness }: { onCopy: (value: string, la
         </dd>
         <dt>CORS origins</dt>
         <dd>{readiness.runtime.cors_origins.join(", ") || "-"}</dd>
+        <dt>Compose subnet</dt>
+        <dd>{readiness.runtime.compose_app_subnet || "-"}</dd>
+        <dt>Trusted upstream proxies</dt>
+        <dd>{readiness.runtime.trusted_proxy_ips || "-"}</dd>
+        <dt>Trusted proxy chain</dt>
+        <dd>{readiness.runtime.trusted_proxy_chain || "-"}</dd>
         <dt>Payload limit</dt>
         <dd>{formatBytes(readiness.runtime.webhook_max_payload_bytes)}</dd>
         <dt>Log retention</dt>

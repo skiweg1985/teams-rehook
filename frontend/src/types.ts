@@ -357,6 +357,9 @@ export type AdminReadinessOut = {
     app_public_base_url: string;
     frontend_base_url: string;
     cors_origins: string[];
+    compose_app_subnet: string;
+    trusted_proxy_ips: string;
+    trusted_proxy_chain: string;
     webhook_max_payload_bytes: number;
     log_retention_days: number;
     log_cleanup_interval_minutes: number;

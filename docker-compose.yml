@@ -23,6 +23,10 @@ services:
     depends_on:
       - frontend
       - backend
+    env_file:
+      - .env
+    environment:
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-}
     ports:
       - "${PROXY_HTTP_PORT:-8080}:80"
       - "${PROXY_HTTPS_PORT:-8443}:443"
@@ -52,9 +56,9 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-app}
       POSTGRES_USER: ${POSTGRES_USER:-app}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
-      # Trust X-Forwarded-For only inside the controlled Compose network.
-      TRUST_X_FORWARDED_FOR: "true"
-      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-172.30.0.0/24}
+      # Trust X-Forwarded-For only from the bundled proxy and configured upstream proxies.
+      COMPOSE_APP_SUBNET: ${COMPOSE_APP_SUBNET:-172.30.0.0/24}
+      TRUST_X_FORWARDED_FOR: ${TRUST_X_FORWARDED_FOR:-true}
     volumes:
       - /etc/localtime:/etc/localtime:ro
     depends_on:
@@ -71,4 +75,4 @@ networks:
   app_net:
     ipam:
       config:
-        - subnet: 172.30.0.0/24
+        - subnet: ${COMPOSE_APP_SUBNET:-172.30.0.0/24}

@@ -195,7 +195,7 @@ Common situations:
 
 | Symptom | Likely cause | What to check |
 |---|---|---|
-| Many real clients appear as one client. | The backend is seeing the proxy IP instead of the original client IP. | Confirm `TRUST_X_FORWARDED_FOR=true` and `TRUSTED_PROXY_IPS` contains only the trusted reverse proxy. |
+| Many real clients appear as one client. | The backend is seeing the proxy IP instead of the original client IP. | Confirm `TRUST_X_FORWARDED_FOR=true`, `COMPOSE_APP_SUBNET` matches the app stack network, and `TRUSTED_PROXY_IPS` contains only additional trusted upstream proxies. |
 | `Unblock` worked, but previous block count is still visible. | Unblock is not a full forgiveness reset. | This is expected. It clears the active block and current failures, but keeps escalation history. |
 | A client is `Observed` but not `Blocked`. | The client has current failed attempts but is below the block threshold. | Review last reason, failure count, and last activity. |
 

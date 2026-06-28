@@ -87,16 +87,18 @@ The route token is secret. Do not log or publish real relay URLs.
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/api/v1/admin/settings` | Admin session + CSRF | List overridable settings with environment, effective, and override state. |
+| `GET` | `/api/v1/admin/settings` | Admin session + CSRF | List overridable settings with environment, effective, and override state. Proxy trust ranges that must also be consumed by HAProxy remain environment-only and are not writable here. |
 | `PUT` | `/api/v1/admin/settings/{key}` | Admin session + CSRF | Set or update one override. |
 | `DELETE` | `/api/v1/admin/settings/{key}` | Admin session + CSRF | Remove one override and restore environment value. |
-| `GET` | `/api/v1/admin/readiness` | Admin session + CSRF | Return non-secret Bot, Graph, OAuth, runtime, payload, retention, and cookie diagnostics. |
+| `GET` | `/api/v1/admin/readiness` | Admin session + CSRF | Return non-secret Bot, Graph, OAuth, runtime, payload, retention, cookie, and proxy trust diagnostics. |
 | `GET` | `/api/v1/admin/users` | Admin session + CSRF | List users in the current organization. |
 | `POST` | `/api/v1/admin/users` | Admin session + CSRF | Create a user. |
 | `PATCH` | `/api/v1/admin/users/{user_id}` | Admin session + CSRF | Update a user email, display name, role, or active status. |
 | `PUT` | `/api/v1/admin/users/{user_id}/password` | Admin session + CSRF | Set a user password. |
 
 Secret setting values are write-only. Responses report configured/missing state, not plaintext.
+
+The readiness runtime payload includes the configured Compose subnet, additional trusted upstream proxies, and the combined effective trust chain used for forwarded client IP resolution.
 
 ## Graph Delivery OAuth
 

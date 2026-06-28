@@ -465,6 +465,9 @@ class RuntimeReadinessOut(BaseModel):
     app_public_base_url: str
     frontend_base_url: str
     cors_origins: list[str]
+    compose_app_subnet: str
+    trusted_proxy_ips: str
+    trusted_proxy_chain: str
     webhook_max_payload_bytes: int
     log_retention_days: int
     log_cleanup_interval_minutes: int

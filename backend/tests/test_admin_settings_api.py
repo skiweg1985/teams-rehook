@@ -111,9 +111,7 @@ def test_list_settings_returns_env_defaults(db_session: Session, monkeypatch: py
         assert trust_xff["type"] == "bool"
         assert trust_xff["env_default"] == "false"
         assert trust_xff["effective_value"] == "false"
-        trusted_proxies = next(item for item in payload if item["key"] == "trusted_proxy_ips")
-        assert trusted_proxies["type"] == "string"
-        assert trusted_proxies["effective_value"] == ""
+        assert all(item["key"] != "trusted_proxy_ips" for item in payload)
 
 
 def test_override_and_reset_setting(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -156,9 +154,7 @@ def test_secret_override_is_masked(db_session: Session, monkeypatch: pytest.Monk
         assert "example-secret-value" not in str(updated)
 
 
-def test_trusted_proxy_settings_can_be_overridden_and_validated(
-    db_session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_trust_x_forwarded_for_can_be_overridden(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
     with make_client(db_session, monkeypatch) as client:
         csrf = login_admin(client)
         enabled = client.put(
@@ -169,21 +165,29 @@ def test_trusted_proxy_settings_can_be_overridden_and_validated(
         assert enabled.status_code == 200
         assert enabled.json()["effective_value"] == "true"
 
-        proxies = client.put(
-            "/api/v1/admin/settings/trusted_proxy_ips",
-            headers={"X-CSRF-Token": csrf},
-            json={"value": "127.0.0.1, 10.0.0.0/24"},
-        )
-        assert proxies.status_code == 200
-        assert proxies.json()["effective_value"] == "127.0.0.1/32,10.0.0.0/24"
-
         rejected = client.put(
             "/api/v1/admin/settings/trusted_proxy_ips",
             headers={"X-CSRF-Token": csrf},
-            json={"value": "127.0.0.1, not-an-ip"},
+            json={"value": "127.0.0.1"},
         )
-        assert rejected.status_code == 400
-        assert rejected.json()["detail"] == "Trusted proxy IPs must be comma-separated IP addresses or CIDR ranges"
+        assert rejected.status_code == 404
+        assert rejected.json()["detail"] == "Unknown setting"
+
+
+def test_readiness_reports_proxy_trust_chain(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    with make_client(
+        db_session,
+        monkeypatch,
+        COMPOSE_APP_SUBNET="172.30.0.0/24",
+        TRUSTED_PROXY_IPS="10.0.0.10, 10.0.0.0/24",
+    ) as client:
+        csrf = login_admin(client)
+        response = client.get("/api/v1/admin/readiness", headers={"X-CSRF-Token": csrf})
+        assert response.status_code == 200
+        runtime = response.json()["runtime"]
+        assert runtime["compose_app_subnet"] == "172.30.0.0/24"
+        assert runtime["trusted_proxy_ips"] == "10.0.0.10, 10.0.0.0/24"
+        assert runtime["trusted_proxy_chain"] == "172.30.0.0/24,10.0.0.10/32,10.0.0.0/24"
 
 
 def test_browser_runtime_settings_can_be_overridden_and_validated(

@@ -45,10 +45,12 @@ HAProxy health checks:
 - Backend: `/api/v1/health`
 - Frontend: `/`
 
-The Compose stack keeps a stable internal network so the backend can trust `X-Forwarded-For` only from the controlled Compose proxy boundary:
+The Compose stack keeps a stable internal network so the backend can trust `X-Forwarded-For` from the bundled HAProxy and from explicitly approved upstream proxies:
 
+- `COMPOSE_APP_SUBNET=172.30.0.0/24`
 - `backend`: `TRUST_X_FORWARDED_FOR=true`
-- `backend`: `TRUSTED_PROXY_IPS=172.30.0.0/24`
+- `backend`: trusts `COMPOSE_APP_SUBNET` as the direct app-HAProxy hop
+- `backend` and `proxy`: use `TRUSTED_PROXY_IPS` for additional trusted upstream proxy IPs or CIDRs
 
 This lets automatic abuse blocking group attempts by the real caller IP instead of the proxy IP. Do not broaden `TRUSTED_PROXY_IPS` to public networks; clients must not be able to self-declare their source address.
 
@@ -111,7 +113,13 @@ The local HAProxy config binds HTTP and HTTPS and forwards:
 - All other paths to frontend.
 - `X-Forwarded-For`, `X-Forwarded-Proto`, and `X-Forwarded-Host` to the backend.
 
-For production, define TLS termination and public URL policy outside this repository. The default trust model is intentionally simple: the backend trusts the direct app HAProxy / controlled Compose proxy boundary, and any outer reverse proxy must sanitize or overwrite untrusted forwarded headers before traffic reaches the app HAProxy. Do not model arbitrary multi-proxy trust chains in this stack; if HAProxy is replaced, set `TRUSTED_PROXY_IPS` to that direct proxy's private IP address or CIDR range and keep `TRUST_X_FORWARDED_FOR=true` only when that boundary is controlled.
+The bundled app HAProxy sanitizes `X-Forwarded-For` on every request:
+
+- Requests from untrusted peers have any incoming `X-Forwarded-For` removed, then the direct source IP is forwarded.
+- Requests from peers listed in `TRUSTED_PROXY_IPS` keep the incoming chain and append that peer IP before forwarding to the backend.
+- The backend then trusts the app HAProxy's direct Compose hop plus the configured upstream proxy ranges when resolving the caller IP.
+
+For production, define TLS termination and public URL policy outside this repository. The default trust model is intentionally simple: the backend always trusts the direct app HAProxy / controlled Compose proxy boundary, and any outer reverse proxy must be listed in `TRUSTED_PROXY_IPS` before its forwarded chain is preserved. If HAProxy is replaced, move that direct proxy boundary into `COMPOSE_APP_SUBNET` or the deployment equivalent and keep `TRUST_X_FORWARDED_FOR=true` only when that boundary is controlled.
 
 TODO: Document the intended production reverse proxy, TLS certificate source, HSTS policy, and allowed public origins.
 

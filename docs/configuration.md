@@ -18,6 +18,7 @@ Use `.env.example` as the safe template. For local Docker setup, prefer `./manag
 | `API_V1_PREFIX` | API path prefix used for routers, OpenAPI docs, and generated callback paths. Code default only; not listed in `.env.example`. | No | `/api/v1` | `/api/v1` | No |
 | `PROXY_HTTP_PORT` | Host port mapped to HAProxy HTTP listener. Used by Docker Compose and Vite proxy config. | No | `8080` in `.env.example` | `8080` | No |
 | `PROXY_HTTPS_PORT` | Host port mapped to HAProxy HTTPS listener. | No | `8443` in `.env.example` | `8443` | No |
+| `COMPOSE_APP_SUBNET` | CIDR used for the internal Docker Compose application network. The backend always trusts this subnet as the direct bundled HAProxy hop. | No | `172.30.0.0/24` in `.env.example` | `172.30.0.0/24` | Yes |
 | `APP_PUBLIC_BASE_URL` | Public base URL used to build relay and OAuth callback URLs. | No | Code default `http://localhost:8000`; `.env.example` uses `http://localhost:8080` | `http://localhost:8080` | No |
 | `FRONTEND_BASE_URL` | Base URL used for generated UI links and OAuth redirects back to the frontend. | No | Code default `http://localhost:5173`; `.env.example` uses `http://localhost:8080` | `http://localhost:8080` | No |
 | `CORS_ORIGINS` | Comma-separated origins allowed for credentialed browser requests. Must not be empty. | Yes | Code default `http://localhost:5173,http://localhost` | `http://localhost:8080` | No |
@@ -26,10 +27,16 @@ Use `.env.example` as the safe template. For local Docker setup, prefer `./manag
 | `POSTGRES_USER` | Database user created when the bundled Postgres volume is initialized. Used by Docker Compose to build the default backend `DATABASE_URL`. | No | `app` in `.env.example` | `teams_rehook` | Yes |
 | `POSTGRES_PASSWORD` | Database password created when the bundled Postgres volume is initialized. Used by Docker Compose to build the default backend `DATABASE_URL`. | No | `app` in `.env.example` | Secret manager value | Yes |
 | `WEBHOOK_MAX_PAYLOAD_BYTES` | Maximum accepted webhook request body size. | No | `64000` | `64000` | No |
+| `WEBHOOK_ABUSE_BLOCKING_ENABLED` | Enables temporary blocking after repeated failed webhook attempts. Admins can also change this in the Settings UI. | No | `true` | `true` | No |
+| `WEBHOOK_ABUSE_FAILURE_LIMIT` | Failed attempts allowed inside the abuse window before a client is blocked. Admins can also change this in the Settings UI. | No | `10` | `5` | No |
+| `WEBHOOK_ABUSE_WINDOW_MINUTES` | Rolling failure-count window for abuse tracking. Admins can also change this in the Settings UI. | No | `10` | `15` | No |
+| `WEBHOOK_ABUSE_INITIAL_BLOCK_MINUTES` | Duration of the first temporary abuse block. This is environment-only and not exposed as a runtime override. | No | `10` | `30` | No |
+| `WEBHOOK_ABUSE_MAX_BLOCK_MINUTES` | Maximum duration for escalated abuse blocks. This is environment-only and not exposed as a runtime override. | No | `1440` | `720` | No |
+| `WEBHOOK_ABUSE_CLEANUP_DAYS` | Retention window for inactive abuse tracking buckets. This is environment-only and not exposed as a runtime override. | No | `30` | `14` | No |
 | `LOG_RETENTION_DAYS` | Retention window for delivery, audit, and bot activity logs. `0` means cleanup can remove events older than now. | No | `7` | `7` | No |
 | `LOG_CLEANUP_INTERVAL_MINUTES` | Minimum interval between automatic cleanup runs. | No | `60` | `60` | No |
 | `TRUST_X_FORWARDED_FOR` | Allows the backend to use `X-Forwarded-For` as the webhook client IP, but only when the direct client is trusted. Docker Compose overrides this to `true` for the bundled HAProxy. | No | `false` in `.env.example`; Docker backend uses `true` | `true` | Yes |
-| `TRUSTED_PROXY_IPS` | Comma-separated trusted proxy IP addresses or CIDR ranges. Docker Compose defaults this to the controlled internal Compose network. | Required if `TRUST_X_FORWARDED_FOR=true` | Empty in `.env.example`; Docker backend uses `172.30.0.0/24` | `172.30.0.0/24` | Yes |
+| `TRUSTED_PROXY_IPS` | Comma-separated additional trusted upstream proxy IP addresses or CIDR ranges. The bundled HAProxy subnet is trusted separately through `COMPOSE_APP_SUBNET`. | No | Empty in `.env.example` | `10.0.0.0/24,192.168.10.15` | Yes |
 | `MS_APP_TENANT_ID` | Entra tenant ID for Bot Framework and Microsoft Graph token requests. The repository keeps this commented in `.env.example` because operators can also set it in the Settings UI. | Required for real Microsoft integrations | Empty | `00000000-0000-0000-0000-000000000000` | No |
 | `MS_APP_CLIENT_ID` | Entra app client ID for Bot Framework and Microsoft Graph token requests. The repository keeps this commented in `.env.example` because operators can also set it in the Settings UI. | Required for real Microsoft integrations | Empty | `00000000-0000-0000-0000-000000000000` | No |
 | `MS_APP_CLIENT_SECRET` | Entra app client secret. The repository keeps this commented in `.env.example` because operators can also set it in the Settings UI. | Required for real Microsoft integrations | Empty | `change-me` | Yes |
@@ -57,11 +64,11 @@ When the default organization has no admin users, the frontend shows the first-r
 
 ```text
 DATABASE_URL=${DATABASE_URL:-postgresql+psycopg2://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-app}}
-TRUST_X_FORWARDED_FOR=true
-TRUSTED_PROXY_IPS=${TRUSTED_PROXY_IPS:-172.30.0.0/24}
+COMPOSE_APP_SUBNET=${COMPOSE_APP_SUBNET:-172.30.0.0/24}
+TRUST_X_FORWARDED_FOR=${TRUST_X_FORWARDED_FOR:-true}
 ```
 
-The trusted proxy default is limited to the controlled internal Compose network. This makes webhook abuse blocking use the caller from `X-Forwarded-For` when the direct proxy hop is the bundled HAProxy instead of grouping all callers under the proxy IP.
+The bundled HAProxy is always trusted through `COMPOSE_APP_SUBNET`. Additional upstream reverse proxies belong in `TRUSTED_PROXY_IPS`. This makes webhook abuse blocking use the caller from `X-Forwarded-For` when the direct proxy hop is the bundled HAProxy, while still allowing an explicit trust chain through approved upstream proxies.
 
 The bundled Postgres service uses local development bootstrap values:
 
@@ -87,14 +94,10 @@ These settings are defined in `backend/app/core/settings_overrides.py` and can b
 | `webhook_abuse_blocking_enabled` | bool | No | Enables temporary blocking for repeated failed webhook attempts. |
 | `webhook_abuse_failure_limit` | int | No | Minimum `1`; default code value is `10`. |
 | `webhook_abuse_window_minutes` | int | No | Minimum `1`; default code value is `10`. |
-| `webhook_abuse_initial_block_minutes` | int | No | Minimum `1`; default code value is `10`. |
-| `webhook_abuse_max_block_minutes` | int | No | Minimum `1`; default code value is `1440`. |
-| `webhook_abuse_cleanup_days` | int | No | Minimum `1`; controls cleanup of inactive abuse tracking records. |
 | `log_retention_days` | int | No | Minimum `0`. |
 | `log_cleanup_interval_minutes` | int | No | Minimum `1`. |
 | `session_secure_cookie` | bool | No | Applies the session cookie `Secure` flag immediately for new logins. |
 | `trust_x_forwarded_for` | bool | No | Runtime override for trusting `X-Forwarded-For` from trusted proxies. |
-| `trusted_proxy_ips` | string | No | Comma-separated IP addresses or CIDR ranges for trusted reverse proxies. |
 | `cors_origins` | string | No | Comma-separated HTTP/HTTPS origins; scheme, host, and optional port only. |
 | `app_public_base_url` | url | No | Valid `http`/`https` URL. |
 | `frontend_base_url` | url | No | Valid `http`/`https` URL. |
@@ -105,6 +108,10 @@ These settings are defined in `backend/app/core/settings_overrides.py` and can b
 | `graph_scope` | string | No | Microsoft Graph OAuth scope. |
 
 Secret overrides are encrypted at rest using Fernet with `SETTINGS_ENC_KEY`. `SESSION_SECRET` is not used for settings encryption.
+
+Advanced webhook abuse timings stay in environment configuration. Only `webhook_abuse_blocking_enabled`, `webhook_abuse_failure_limit`, and `webhook_abuse_window_minutes` are admin-overridable runtime settings.
+
+`TRUSTED_PROXY_IPS` is environment-only because the bundled HAProxy consumes the same value at container start. The admin readiness view reports the effective compose subnet, trusted upstream proxies, and combined trust chain as read-only diagnostics.
 
 ## Session Secret And Scaling
 

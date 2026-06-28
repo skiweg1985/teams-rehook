@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ipaddress
 import threading
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -51,15 +50,6 @@ OVERRIDABLE_SETTINGS: dict[str, SettingDefinition] = {
     "webhook_abuse_window_minutes": SettingDefinition(
         "webhook_abuse_window_minutes", "Webhook abuse window", "int", False
     ),
-    "webhook_abuse_initial_block_minutes": SettingDefinition(
-        "webhook_abuse_initial_block_minutes", "Webhook abuse initial block", "int", False
-    ),
-    "webhook_abuse_max_block_minutes": SettingDefinition(
-        "webhook_abuse_max_block_minutes", "Webhook abuse max block", "int", False
-    ),
-    "webhook_abuse_cleanup_days": SettingDefinition(
-        "webhook_abuse_cleanup_days", "Webhook abuse cleanup", "int", False
-    ),
     "log_retention_days": SettingDefinition("log_retention_days", "Log retention", "int", False),
     "log_cleanup_interval_minutes": SettingDefinition(
         "log_cleanup_interval_minutes", "Log cleanup interval", "int", False
@@ -73,7 +63,6 @@ OVERRIDABLE_SETTINGS: dict[str, SettingDefinition] = {
     "session_secure_cookie": SettingDefinition(
         "session_secure_cookie", "Secure session cookie", "bool", False
     ),
-    "trusted_proxy_ips": SettingDefinition("trusted_proxy_ips", "Trusted proxy IPs", "string", False),
     "cors_origins": SettingDefinition("cors_origins", "CORS origins", "string", False),
     "app_public_base_url": SettingDefinition("app_public_base_url", "Public URL", "url", False),
     "frontend_base_url": SettingDefinition("frontend_base_url", "Frontend URL", "url", False),
@@ -141,12 +130,7 @@ def _validate_and_normalize(key: str, value: str) -> str:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payload limit must be at least 1024")
         if key == "webhook_abuse_failure_limit" and parsed < 1:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failure limit must be at least 1")
-        if key in {
-            "webhook_abuse_window_minutes",
-            "webhook_abuse_initial_block_minutes",
-            "webhook_abuse_max_block_minutes",
-            "webhook_abuse_cleanup_days",
-        } and parsed < 1:
+        if key == "webhook_abuse_window_minutes" and parsed < 1:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Value must be at least 1")
         if key == "log_retention_days" and parsed < 0:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Retention must be zero or greater")
@@ -182,30 +166,10 @@ def _validate_and_normalize(key: str, value: str) -> str:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Value must be a valid HTTP URL")
         return raw.rstrip("/")
 
-    if key == "trusted_proxy_ips":
-        return _normalize_trusted_proxy_ips(raw)
     if key == "cors_origins":
         return _normalize_cors_origins(raw)
 
     return raw
-
-
-def _normalize_trusted_proxy_ips(value: str) -> str:
-    if not value:
-        return ""
-    networks: list[str] = []
-    for part in value.split(","):
-        candidate = part.strip()
-        if not candidate:
-            continue
-        try:
-            networks.append(str(ipaddress.ip_network(candidate, strict=False)))
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Trusted proxy IPs must be comma-separated IP addresses or CIDR ranges",
-            ) from exc
-    return ",".join(networks)
 
 
 def _normalize_cors_origins(value: str) -> str:
