@@ -2,21 +2,18 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: app
-      POSTGRES_USER: app
-      POSTGRES_PASSWORD: app
-    ports:
-      - "5432:5432"
+      POSTGRES_DB: ${POSTGRES_DB:-app}
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-app}"]
       interval: 5s
       timeout: 5s
       retries: 5
     networks:
-      app_net:
-        ipv4_address: 172.30.0.20
+      - app_net
     restart: unless-stopped
 
   proxy:
@@ -32,8 +29,7 @@ services:
     volumes:
       - ./devcert:/certs
     networks:
-      app_net:
-        ipv4_address: 172.30.0.10
+      - app_net
     restart: unless-stopped
 
   frontend:
@@ -41,8 +37,7 @@ services:
       context: ./frontend
     container_name: teams-rehook-frontend
     networks:
-      app_net:
-        ipv4_address: 172.30.0.30
+      - app_net
     restart: unless-stopped
 
   backend:
@@ -52,19 +47,21 @@ services:
     env_file:
       - .env
     environment:
-      # Override the SQLite default with the bundled Postgres service in containers
-      DATABASE_URL: postgresql+psycopg2://app:app@postgres:5432/app
-      # Trust X-Forwarded-For only when the direct client is the bundled HAProxy.
+      # Use the bundled Postgres service by default; DATABASE_URL can override it.
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-app}}
+      POSTGRES_DB: ${POSTGRES_DB:-app}
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
+      # Trust X-Forwarded-For only inside the controlled Compose network.
       TRUST_X_FORWARDED_FOR: "true"
-      TRUSTED_PROXY_IPS: "172.30.0.10"
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-172.30.0.0/24}
     volumes:
       - /etc/localtime:/etc/localtime:ro
     depends_on:
       postgres:
         condition: service_healthy
     networks:
-      app_net:
-        ipv4_address: 172.30.0.40
+      - app_net
     restart: unless-stopped
 
 volumes:

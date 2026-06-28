@@ -21,12 +21,15 @@ Use `.env.example` as the safe template. Do not commit a populated `.env`.
 | `APP_PUBLIC_BASE_URL` | Public base URL used to build relay and OAuth callback URLs. | No | Code default `http://localhost:8000`; `.env.example` uses `http://localhost:8080` | `http://localhost:8080` | No |
 | `FRONTEND_BASE_URL` | Base URL used for generated UI links and OAuth redirects back to the frontend. | No | Code default `http://localhost:5173`; `.env.example` uses `http://localhost:8080` | `http://localhost:8080` | No |
 | `CORS_ORIGINS` | Comma-separated origins allowed for credentialed browser requests. Must not be empty. | Yes | Code default `http://localhost:5173,http://localhost` | `http://localhost:8080` | No |
-| `DATABASE_URL` | SQLAlchemy database URL. Docker Compose overrides this to Postgres for the backend container. | No | `sqlite:///./app.db` | `postgresql+psycopg2://app:app@postgres:5432/app` | Yes |
+| `DATABASE_URL` | SQLAlchemy database URL. Bare-process backend defaults to SQLite. Docker Compose uses the bundled Postgres service unless this is set to an external database URL. | No | `sqlite:///./app.db`; Docker Compose builds an internal Postgres URL | `postgresql+psycopg2://app:app@postgres:5432/app` | Yes |
+| `POSTGRES_DB` | Database name created when the bundled Postgres volume is initialized. Used by Docker Compose to build the default backend `DATABASE_URL`. | No | `app` in `.env.example` | `teams_rehook` | No |
+| `POSTGRES_USER` | Database user created when the bundled Postgres volume is initialized. Used by Docker Compose to build the default backend `DATABASE_URL`. | No | `app` in `.env.example` | `teams_rehook` | Yes |
+| `POSTGRES_PASSWORD` | Database password created when the bundled Postgres volume is initialized. Used by Docker Compose to build the default backend `DATABASE_URL`. | No | `app` in `.env.example` | Secret manager value | Yes |
 | `WEBHOOK_MAX_PAYLOAD_BYTES` | Maximum accepted webhook request body size. | No | `64000` | `64000` | No |
 | `LOG_RETENTION_DAYS` | Retention window for delivery, audit, and bot activity logs. `0` means cleanup can remove events older than now. | No | `7` | `7` | No |
 | `LOG_CLEANUP_INTERVAL_MINUTES` | Minimum interval between automatic cleanup runs. | No | `60` | `60` | No |
 | `TRUST_X_FORWARDED_FOR` | Allows the backend to use `X-Forwarded-For` as the webhook client IP, but only when the direct client is trusted. Docker Compose overrides this to `true` for the bundled HAProxy. | No | `false` in `.env.example`; Docker backend uses `true` | `true` | Yes |
-| `TRUSTED_PROXY_IPS` | Comma-separated trusted proxy IP addresses or CIDR ranges. Docker Compose sets this to the fixed HAProxy IP `172.30.0.10`. | Required if `TRUST_X_FORWARDED_FOR=true` | Empty in `.env.example`; Docker backend uses `172.30.0.10` | `172.30.0.10` | Yes |
+| `TRUSTED_PROXY_IPS` | Comma-separated trusted proxy IP addresses or CIDR ranges. Docker Compose defaults this to the controlled internal Compose network. | Required if `TRUST_X_FORWARDED_FOR=true` | Empty in `.env.example`; Docker backend uses `172.30.0.0/24` | `172.30.0.0/24` | Yes |
 | `MS_APP_TENANT_ID` | Entra tenant ID for Bot Framework and Microsoft Graph token requests. | Required for real Microsoft integrations | Empty | `00000000-0000-0000-0000-000000000000` | No |
 | `MS_APP_CLIENT_ID` | Entra app client ID for Bot Framework and Microsoft Graph token requests. | Required for real Microsoft integrations | Empty | `00000000-0000-0000-0000-000000000000` | No |
 | `MS_APP_CLIENT_SECRET` | Entra app client secret. | Required for real Microsoft integrations | Empty | `change-me` | Yes |
@@ -50,23 +53,25 @@ When the default organization has no admin users, the frontend shows the first-r
 
 ## Docker Compose Overrides
 
-`docker-compose.yml` loads `.env` into the backend and overrides:
+`docker-compose.yml` loads `.env` into the backend and applies these stack defaults:
 
 ```text
-DATABASE_URL=postgresql+psycopg2://app:app@postgres:5432/app
+DATABASE_URL=${DATABASE_URL:-postgresql+psycopg2://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-app}}
 TRUST_X_FORWARDED_FOR=true
-TRUSTED_PROXY_IPS=172.30.0.10
+TRUSTED_PROXY_IPS=${TRUSTED_PROXY_IPS:-172.30.0.0/24}
 ```
 
-The fixed trusted proxy IP belongs to the bundled HAProxy service on the internal Compose network. This makes webhook abuse blocking use the real caller from `X-Forwarded-For` instead of grouping all callers under the proxy IP.
+The trusted proxy default is limited to the controlled internal Compose network. This makes webhook abuse blocking use the caller from `X-Forwarded-For` when the direct proxy hop is the bundled HAProxy instead of grouping all callers under the proxy IP.
 
-The bundled Postgres service uses local development credentials:
+The bundled Postgres service uses local development bootstrap values:
 
 - `POSTGRES_DB=app`
 - `POSTGRES_USER=app`
 - `POSTGRES_PASSWORD=app`
 
-Do not reuse these credentials for production.
+Do not reuse these values for production. `POSTGRES_*` values are applied by the Postgres image only when a new `postgres_data` volume is initialized. They are not ongoing credential management for an existing database. To rotate credentials for an existing database, change the user/password in Postgres, update `DATABASE_URL` if needed, and restart the backend.
+
+If production database credentials contain URL-special characters, set `DATABASE_URL` explicitly with proper URL encoding instead of relying on the Compose fallback assembled from `POSTGRES_*`.
 
 ## Admin-Overridable Runtime Settings
 

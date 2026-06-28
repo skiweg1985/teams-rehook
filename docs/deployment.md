@@ -25,18 +25,17 @@ Services:
 | `proxy` | HAProxy routes `/api/*` to backend and all other paths to frontend. | `${PROXY_HTTP_PORT:-8080}:80`, `${PROXY_HTTPS_PORT:-8443}:443` |
 | `frontend` | React/Vite build served by nginx. | Internal `80` |
 | `backend` | FastAPI app served by Uvicorn. | Internal `8000` |
-| `postgres` | Local Postgres database. | Host `5432` |
+| `postgres` | Local Postgres database. | Internal `5432` |
 
 HAProxy health checks:
 
 - Backend: `/api/v1/health`
 - Frontend: `/`
 
-The Compose stack uses a fixed internal network so the backend can trust `X-Forwarded-For` only when the direct client is the bundled HAProxy container:
+The Compose stack keeps a stable internal network so the backend can trust `X-Forwarded-For` only from the controlled Compose proxy boundary:
 
-- `proxy`: `172.30.0.10`
 - `backend`: `TRUST_X_FORWARDED_FOR=true`
-- `backend`: `TRUSTED_PROXY_IPS=172.30.0.10`
+- `backend`: `TRUSTED_PROXY_IPS=172.30.0.0/24`
 
 This lets automatic abuse blocking group attempts by the real caller IP instead of the proxy IP. Do not broaden `TRUSTED_PROXY_IPS` to public networks; clients must not be able to self-declare their source address.
 
@@ -62,7 +61,17 @@ The backend default outside Docker is SQLite at:
 sqlite:///./app.db
 ```
 
-The Docker backend overrides this to the bundled Postgres service.
+The Docker backend uses the bundled Postgres service by default. Set `DATABASE_URL` in `.env` only when the backend should use an external Postgres instance.
+
+The bundled Postgres service reads these bootstrap values when a new `postgres_data` volume is initialized:
+
+- `POSTGRES_DB`
+- `POSTGRES_USER`
+- `POSTGRES_PASSWORD`
+
+Changing `POSTGRES_*` after the volume already exists does not rename users, rotate passwords, or recreate databases. For existing databases, rotate credentials with Postgres administration tools, update `DATABASE_URL` if needed, and restart the backend.
+
+If production database credentials contain URL-special characters, set `DATABASE_URL` explicitly with proper URL encoding instead of relying on the Compose fallback assembled from `POSTGRES_*`.
 
 ## Secrets
 
@@ -89,7 +98,7 @@ The local HAProxy config binds HTTP and HTTPS and forwards:
 - All other paths to frontend.
 - `X-Forwarded-For`, `X-Forwarded-Proto`, and `X-Forwarded-Host` to the backend.
 
-For production, define TLS termination and public URL policy outside this repository. If another reverse proxy replaces HAProxy, set `TRUSTED_PROXY_IPS` to that proxy's private IP address or CIDR range and keep `TRUST_X_FORWARDED_FOR=true` only when that direct proxy boundary is controlled.
+For production, define TLS termination and public URL policy outside this repository. The default trust model is intentionally simple: the backend trusts the direct app HAProxy / controlled Compose proxy boundary, and any outer reverse proxy must sanitize or overwrite untrusted forwarded headers before traffic reaches the app HAProxy. Do not model arbitrary multi-proxy trust chains in this stack; if HAProxy is replaced, set `TRUSTED_PROXY_IPS` to that direct proxy's private IP address or CIDR range and keep `TRUST_X_FORWARDED_FOR=true` only when that boundary is controlled.
 
 TODO: Document the intended production reverse proxy, TLS certificate source, HSTS policy, and allowed public origins.
 

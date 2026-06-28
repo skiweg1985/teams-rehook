@@ -68,7 +68,7 @@ Treat relay URLs as secrets. Anyone with a valid relay URL can send messages to 
 
 ## Configuration
 
-Copy `.env.example` to `.env` for local configuration. The Docker stack loads `.env` into the backend and overrides `DATABASE_URL` to use the bundled Postgres service.
+Copy `.env.example` to `.env` for local configuration. The Docker stack uses the bundled Postgres service by default. Set `DATABASE_URL` only when the backend should use an external Postgres database.
 
 Full configuration reference:
 
