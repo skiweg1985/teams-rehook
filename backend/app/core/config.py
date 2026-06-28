@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     bot_delivery_mode: str = "real"
     bot_default_service_url: str = ""
     webhook_max_payload_bytes: int = 64_000
+    webhook_abuse_blocking_enabled: bool = True
+    webhook_abuse_failure_limit: int = 10
+    webhook_abuse_window_minutes: int = 10
+    webhook_abuse_initial_block_minutes: int = 10
+    webhook_abuse_max_block_minutes: int = 1440
+    webhook_abuse_cleanup_days: int = 30
     log_retention_days: int = 7
     log_cleanup_interval_minutes: int = 60
     trust_x_forwarded_for: bool = False

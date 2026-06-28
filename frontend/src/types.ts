@@ -80,8 +80,31 @@ export type SystemLogEventOut = {
   created_at: string;
 };
 
+export type WebhookAbuseBucketOut = {
+  id: string;
+  scope: "ip" | "ip_route";
+  status: "watching" | "blocked";
+  client_fingerprint: string;
+  route_token_fingerprint: string;
+  failure_count: number;
+  block_count: number;
+  window_started_at: string;
+  blocked_until: string | null;
+  last_reason: string;
+  last_seen_at: string;
+  created_at: string;
+};
+
+export type WebhookAbuseCleanupOut = {
+  ok: boolean;
+  deleted: number;
+  cleanup_days: number;
+  cutoff: string;
+};
+
 export type WebhookTargetType = "bot_conversation";
 export type DeliveryBackend = "bot_framework" | "graph";
+export type ClientIpAccessMode = "public" | "restricted";
 export type GraphTargetKind = "user" | "team" | "channel" | "chat";
 
 export type WebhookRouteOut = {
@@ -90,6 +113,8 @@ export type WebhookRouteOut = {
   name: string;
   is_active: boolean;
   delivery_backend: DeliveryBackend;
+  client_ip_access_mode: ClientIpAccessMode;
+  client_ip_allowlist: string;
   target_type: WebhookTargetType;
   target_name: string;
   bot_service_url: string;
@@ -117,6 +142,8 @@ export type WebhookRouteCreate = {
   name: string;
   is_active: boolean;
   delivery_backend?: DeliveryBackend;
+  client_ip_access_mode?: ClientIpAccessMode;
+  client_ip_allowlist?: string;
   target_type: WebhookTargetType;
   target_name: string;
   bot_service_url: string;

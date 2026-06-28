@@ -240,6 +240,8 @@ def _ensure_additive_schema() -> None:
         "webhook_routes": {
             "route_token": "TEXT DEFAULT '' NOT NULL",
             "delivery_backend": "VARCHAR(32) DEFAULT 'bot_framework' NOT NULL",
+            "client_ip_access_mode": "VARCHAR(32) DEFAULT 'public' NOT NULL",
+            "client_ip_allowlist": "TEXT DEFAULT '' NOT NULL",
             "graph_target_kind": "VARCHAR(32) DEFAULT '' NOT NULL",
             "graph_target_id": "TEXT DEFAULT '' NOT NULL",
             "graph_team_id": "TEXT DEFAULT '' NOT NULL",
@@ -375,6 +377,7 @@ def _sqlite_has_unique_webhook_route_index(connection, columns: list[str]) -> bo
 
 
 def _sqlite_rebuild_webhook_routes_table(connection) -> None:
+    existing_columns = {row[1] for row in connection.execute(text("PRAGMA table_info(webhook_routes)")).all()}
     columns = [
         "id",
         "organization_id",
@@ -384,6 +387,8 @@ def _sqlite_rebuild_webhook_routes_table(connection) -> None:
         "route_token_hash",
         "route_token",
         "delivery_backend",
+        "client_ip_access_mode",
+        "client_ip_allowlist",
         "target_type",
         "target_name",
         "bot_service_url",
@@ -405,6 +410,7 @@ def _sqlite_rebuild_webhook_routes_table(connection) -> None:
         "updated_at",
     ]
     column_list = ", ".join(columns)
+    select_expressions = ", ".join(_sqlite_rebuild_select_expression(column, existing_columns) for column in columns)
     connection.execute(text("DROP TABLE IF EXISTS webhook_routes_rebuild"))
     connection.execute(
         text(
@@ -418,6 +424,8 @@ def _sqlite_rebuild_webhook_routes_table(connection) -> None:
                 route_token_hash VARCHAR(64) NOT NULL,
                 route_token TEXT NOT NULL,
                 delivery_backend VARCHAR(32) NOT NULL,
+                client_ip_access_mode VARCHAR(32) DEFAULT 'public' NOT NULL,
+                client_ip_allowlist TEXT DEFAULT '' NOT NULL,
                 target_type VARCHAR(32) NOT NULL,
                 target_name VARCHAR(200) NOT NULL,
                 bot_service_url TEXT NOT NULL,
@@ -448,13 +456,23 @@ def _sqlite_rebuild_webhook_routes_table(connection) -> None:
         text(
             f"""
             INSERT INTO webhook_routes_rebuild ({column_list})
-            SELECT {column_list}
+            SELECT {select_expressions}
             FROM webhook_routes
             """
         )
     )
     connection.execute(text("DROP TABLE webhook_routes"))
     connection.execute(text("ALTER TABLE webhook_routes_rebuild RENAME TO webhook_routes"))
+
+
+def _sqlite_rebuild_select_expression(column: str, existing_columns: set[str]) -> str:
+    if column in existing_columns:
+        return column
+    if column == "client_ip_access_mode":
+        return "'public' AS client_ip_access_mode"
+    if column == "client_ip_allowlist":
+        return "'' AS client_ip_allowlist"
+    return f"NULL AS {column}"
 
 
 def _sqlite_ensure_webhook_route_indexes(connection) -> None:

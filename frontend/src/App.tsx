@@ -47,6 +47,7 @@ import type {
   AdminReadinessOut,
   AuditEventOut,
   BotConversationReferenceOut,
+  ClientIpAccessMode,
   DeliveryBackend,
   GraphTargetKind,
   OAuthDiagnosticsOut,
@@ -54,6 +55,7 @@ import type {
   SystemLogEventOut,
   TeamsTargetSearchResult,
   UserOut,
+  WebhookAbuseBucketOut,
   WebhookDeliveryEventDetailOut,
   WebhookDeliveryEventOut,
   WebhookDeliveryEventPageOut,
@@ -1362,12 +1364,14 @@ function buildWebhookRouteView(route: WebhookRouteOut, policy: DeliveryFeaturePo
     facts: [
       { label: "State", value: route.is_active ? "Active" : "Disabled", tone: route.is_active ? "success" : "warn" },
       { label: "Backend", value: deliveryBackendLabel(route.delivery_backend) },
+      { label: "Client IP access", value: clientIpAccessLabel(route) },
       { label: "Delivery", value: deliveryLabel, tone: webhookDeliveryTone(route) },
       { label: "Last activity", value: lastActivityLabel },
     ],
     technicalRows: [
       { label: "Route ID", value: route.id },
       { label: "Webhook URL", value: route.webhook_url ? <code>{route.webhook_url}</code> : "-" },
+      { label: "Client IP allowlist", value: route.client_ip_allowlist ? <code>{route.client_ip_allowlist}</code> : "All clients" },
       { label: "Target type", value: route.target_type },
       { label: "Bot conversation", value: route.bot_conversation_id ? <code>{shortId(route.bot_conversation_id)}</code> : "-" },
       { label: "Bot service URL", value: route.bot_service_url || "-" },
@@ -1427,6 +1431,14 @@ function webhookTargetSummary(route: WebhookRouteOut): string {
     return `${type} · ${route.target_name || route.graph_target_id || "No target name"}`;
   }
   return route.target_name || "Bot conversation";
+}
+
+function clientIpAccessLabel(route: WebhookRouteOut): string {
+  if (route.client_ip_access_mode === "restricted") {
+    const count = route.client_ip_allowlist.split(/\s+/).filter(Boolean).length;
+    return `Restricted (${count} allowed)`;
+  }
+  return "Public";
 }
 
 function capitalize(value: string): string {
@@ -2331,6 +2343,8 @@ function emptyWebhookRoute(botDefaultServiceUrl = ""): WebhookRouteOut {
     name: "",
     is_active: true,
     delivery_backend: "bot_framework",
+    client_ip_access_mode: "public",
+    client_ip_allowlist: "",
     target_type: "bot_conversation",
     target_name: "",
     bot_service_url: botDefaultServiceUrl,
@@ -2392,6 +2406,8 @@ function WebhookRouteModal({
   const [name, setName] = useState(initial.name);
   const [isActive, setIsActive] = useState(initial.is_active);
   const [deliveryBackend, setDeliveryBackend] = useState<DeliveryBackend>(initial.delivery_backend);
+  const [clientIpAccessMode, setClientIpAccessMode] = useState<ClientIpAccessMode>(initial.client_ip_access_mode);
+  const [clientIpAllowlist, setClientIpAllowlist] = useState(initial.client_ip_allowlist);
   const [targetName, setTargetName] = useState(initial.target_name);
   const [botServiceUrl, setBotServiceUrl] = useState(initial.bot_service_url);
   const [botConversationId, setBotConversationId] = useState(initial.bot_conversation_id);
@@ -2644,6 +2660,8 @@ function WebhookRouteModal({
       name: name.trim(),
       is_active: isActive,
       delivery_backend: deliveryBackend,
+      client_ip_access_mode: clientIpAccessMode,
+      client_ip_allowlist: clientIpAccessMode === "restricted" ? clientIpAllowlist.trim() : "",
       target_type: "bot_conversation" as const,
       target_name: targetName.trim(),
       bot_service_url: botServiceUrl.trim(),
@@ -2744,7 +2762,38 @@ function WebhookRouteModal({
             </div>
             {!selectedBackendEnabled ? <p className="form-error">{deliveryBackend === "graph" ? "Microsoft Graph delivery is disabled." : "Bot Framework delivery is disabled."}</p> : null}
           </div>
+          <div className="field">
+            <span>Client IP access</span>
+            <div className="segmented-control" aria-label="Client IP access">
+              <button
+                type="button"
+                className={classNames("segmented-control-button", clientIpAccessMode === "public" && "is-active")}
+                aria-pressed={clientIpAccessMode === "public"}
+                onClick={() => setClientIpAccessMode("public")}
+              >
+                Public
+              </button>
+              <button
+                type="button"
+                className={classNames("segmented-control-button", clientIpAccessMode === "restricted" && "is-active")}
+                aria-pressed={clientIpAccessMode === "restricted"}
+                onClick={() => setClientIpAccessMode("restricted")}
+              >
+                Restricted
+              </button>
+            </div>
+          </div>
         </div>
+        {clientIpAccessMode === "restricted" ? (
+          <Field label="Allowed client IPs" hint="Enter IPv4/IPv6 addresses or CIDR ranges, separated by commas or new lines.">
+            <textarea
+              value={clientIpAllowlist}
+              required
+              placeholder={"203.0.113.10\n10.0.0.0/24"}
+              onChange={(event) => setClientIpAllowlist(event.target.value)}
+            />
+          </Field>
+        ) : null}
         {deliveryBackend === "bot_framework" && botBackendEnabled ? (
         <div className="graph-target-picker">
           <div className="graph-target-picker-header">
@@ -3699,6 +3748,47 @@ const SETTING_META: Record<string, SettingMeta> = {
     unit: "bytes",
     display: "number",
   },
+  webhook_abuse_blocking_enabled: {
+    section: "runtime",
+    label: "Abuse blocking",
+    description: "Temporarily block clients after repeated failed webhook attempts.",
+    display: "switch",
+  },
+  webhook_abuse_failure_limit: {
+    section: "runtime",
+    label: "Failure limit",
+    description: "Failed attempts allowed inside the abuse window.",
+    unit: "failures",
+    display: "number",
+  },
+  webhook_abuse_window_minutes: {
+    section: "runtime",
+    label: "Abuse window",
+    description: "Rolling window used for webhook failure counting.",
+    unit: "minutes",
+    display: "number",
+  },
+  webhook_abuse_initial_block_minutes: {
+    section: "runtime",
+    label: "Initial block",
+    description: "First temporary block duration.",
+    unit: "minutes",
+    display: "number",
+  },
+  webhook_abuse_max_block_minutes: {
+    section: "runtime",
+    label: "Max block",
+    description: "Longest escalated block duration.",
+    unit: "minutes",
+    display: "number",
+  },
+  webhook_abuse_cleanup_days: {
+    section: "runtime",
+    label: "Abuse cleanup",
+    description: "How long inactive abuse buckets are kept.",
+    unit: "days",
+    display: "number",
+  },
   log_retention_days: {
     section: "runtime",
     label: "Log retention",
@@ -3781,6 +3871,12 @@ const RUNTIME_SETTING_KEYS = [
   "frontend_base_url",
   "bot_default_service_url",
   "webhook_max_payload_bytes",
+  "webhook_abuse_blocking_enabled",
+  "webhook_abuse_failure_limit",
+  "webhook_abuse_window_minutes",
+  "webhook_abuse_initial_block_minutes",
+  "webhook_abuse_max_block_minutes",
+  "webhook_abuse_cleanup_days",
   "log_retention_days",
   "log_cleanup_interval_minutes",
   "trust_x_forwarded_for",
@@ -4100,7 +4196,8 @@ function RuntimeDefaultsCard({
   settingsByKey,
 }: SettingsCardProps) {
   const urlSettings = settings.filter((item) => item.type === "url" && item.key !== "bot_default_service_url");
-  const limitSettings = settings.filter((item) => item.type === "int");
+  const limitSettings = settings.filter((item) => item.type === "int" && !item.key.startsWith("webhook_abuse_"));
+  const abuseSettings = settings.filter((item) => item.key.startsWith("webhook_abuse_"));
   const fallbackSettings = settings.filter((item) => item.key === "bot_default_service_url");
   const proxySettings = settings.filter((item) => item.key === "trust_x_forwarded_for" || item.key === "trusted_proxy_ips");
 
@@ -4129,6 +4226,23 @@ function RuntimeDefaultsCard({
             <p>Small operational values should be fast to scan and adjust.</p>
           </div>
           {limitSettings.map((item) => (
+            <RuntimeSettingControl
+              key={item.key}
+              item={item}
+              csrfToken={csrfToken}
+              onChanged={onChanged}
+              notify={notify}
+              settingsByKey={settingsByKey}
+              compact
+            />
+          ))}
+        </div>
+        <div className="settings-card-block">
+          <div className="settings-card-block-header">
+            <h3>Abuse blocking</h3>
+            <p>Controls temporary webhook blocks after repeated failed attempts.</p>
+          </div>
+          {abuseSettings.map((item) => (
             <RuntimeSettingControl
               key={item.key}
               item={item}
@@ -5538,8 +5652,11 @@ function SystemLogsPage() {
   const { session, notify } = useAppContext();
   const [auditLogs, setAuditLogs] = useState<AuditEventOut[]>([]);
   const [systemLogs, setSystemLogs] = useState<SystemLogEventOut[]>([]);
+  const [abuseBuckets, setAbuseBuckets] = useState<WebhookAbuseBucketOut[]>([]);
   const [loading, setLoading] = useState(true);
   const [cleanupBusy, setCleanupBusy] = useState(false);
+  const [abuseCleanupBusy, setAbuseCleanupBusy] = useState(false);
+  const [resettingBucketId, setResettingBucketId] = useState("");
   const [error, setError] = useState("");
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
 
@@ -5547,12 +5664,14 @@ function SystemLogsPage() {
     setLoading(true);
     setError("");
     try {
-      const [nextAuditLogs, nextSystemLogs] = await Promise.all([
+      const [nextAuditLogs, nextSystemLogs, nextAbuseBuckets] = await Promise.all([
         api.adminLogs(csrfToken),
         api.adminSystemLogs(csrfToken),
+        api.adminWebhookAbuseBuckets(csrfToken),
       ]);
       setAuditLogs(nextAuditLogs);
       setSystemLogs(nextSystemLogs);
+      setAbuseBuckets(nextAbuseBuckets);
     } catch (err) {
       setError(isApiError(err) ? err.message : "System logs could not be loaded.");
     } finally {
@@ -5585,6 +5704,46 @@ function SystemLogsPage() {
     }
   }
 
+  async function cleanupAbuseBuckets() {
+    setAbuseCleanupBusy(true);
+    try {
+      const result = await api.cleanupWebhookAbuseBuckets(csrfToken);
+      notify({
+        tone: "info",
+        title: "Abuse buckets cleaned up",
+        description: `${result.deleted} inactive buckets removed. Retention is ${result.cleanup_days} days.`,
+      });
+      await refresh();
+    } catch (err) {
+      notify({
+        tone: "error",
+        title: "Cleanup failed",
+        description: isApiError(err) ? err.message : "Abuse buckets could not be cleaned up.",
+      });
+    } finally {
+      setAbuseCleanupBusy(false);
+    }
+  }
+
+  async function resetAbuseBucket(bucket: WebhookAbuseBucketOut) {
+    setResettingBucketId(bucket.id);
+    try {
+      await api.resetWebhookAbuseBucket(csrfToken, bucket.id);
+      notify({ tone: "success", title: "Webhook block reset", description: `${abuseScopeLabel(bucket)} bucket is watching again.` });
+      await refresh();
+    } catch (err) {
+      notify({
+        tone: "error",
+        title: "Reset failed",
+        description: isApiError(err) ? err.message : "Webhook abuse bucket could not be reset.",
+      });
+    } finally {
+      setResettingBucketId("");
+    }
+  }
+
+  const activeBlockCount = abuseBuckets.filter((bucket) => bucket.status === "blocked").length;
+
   return (
     <>
       <PageIntro
@@ -5592,12 +5751,54 @@ function SystemLogsPage() {
         title="System logs"
         description="Review audit events and Teams bot activity separately from webhook message delivery."
         actions={
-          <button className="secondary-button button-with-icon" type="button" disabled={cleanupBusy} onClick={() => void cleanupLogs()}>
-            <Trash2 aria-hidden="true" className="button-icon" focusable="false" />
-            {cleanupBusy ? "Cleaning..." : "Clean up"}
-          </button>
+          <>
+            <StatusBadge label={activeBlockCount ? `${activeBlockCount} blocked` : "No active blocks"} tone={activeBlockCount ? "warn" : "success"} />
+            <button className="secondary-button button-with-icon" type="button" disabled={abuseCleanupBusy} onClick={() => void cleanupAbuseBuckets()}>
+              <Trash2 aria-hidden="true" className="button-icon" focusable="false" />
+              {abuseCleanupBusy ? "Cleaning..." : "Clean abuse"}
+            </button>
+            <button className="secondary-button button-with-icon" type="button" disabled={cleanupBusy} onClick={() => void cleanupLogs()}>
+              <Trash2 aria-hidden="true" className="button-icon" focusable="false" />
+              {cleanupBusy ? "Cleaning..." : "Clean logs"}
+            </button>
+          </>
         }
       />
+      <Card title="Webhook abuse" description="Temporary blocks and watched clients for public webhook ingress.">
+        <DataTable
+          columns={["Status", "Scope", "Client", "Failures", "Reason", "Blocked until", "Last seen", "Action"]}
+          rows={abuseBuckets.map((bucket) => [
+            <StatusBadge label={bucket.status === "blocked" ? "Blocked" : "Watching"} tone={bucket.status === "blocked" ? "warn" : "neutral"} />,
+            abuseScopeLabel(bucket),
+            <div className="stacked-cell">
+              <code>{bucket.client_fingerprint}</code>
+              <span className="muted">{bucket.route_token_fingerprint ? `route ${bucket.route_token_fingerprint}` : "all routes"}</span>
+            </div>,
+            <div className="stacked-cell">
+              <span>{bucket.failure_count}</span>
+              <span className="muted">{bucket.block_count} blocks</span>
+            </div>,
+            abuseReasonLabel(bucket.last_reason),
+            bucket.blocked_until ? formatDateTime(bucket.blocked_until) : "-",
+            formatRelativeTime(bucket.last_seen_at),
+            <button
+              className="secondary-button secondary-button--small"
+              type="button"
+              disabled={resettingBucketId === bucket.id}
+              onClick={() => void resetAbuseBucket(bucket)}
+            >
+              {resettingBucketId === bucket.id ? "Resetting..." : "Reset"}
+            </button>,
+          ])}
+          emptyTitle="No webhook abuse buckets"
+          emptyBody="Repeated failed webhook attempts will appear here once blocking starts tracking a client."
+          loading={loading}
+          loadingLabel="Loading webhook abuse buckets..."
+          error={error}
+          onRetry={() => void refresh()}
+          rowKey={(index) => abuseBuckets[index]?.id ?? index}
+        />
+      </Card>
       <Card title="Audit logs" description="Recent sign-ins, route changes and administration activity.">
         <DataTable
           columns={["Action", "Actor", "Metadata", "Time"]}
@@ -5648,6 +5849,27 @@ function SystemLogsPage() {
 function systemLogConversation(event: SystemLogEventOut): string {
   if (event.team_name && event.channel_name) return `${event.team_name} / ${event.channel_name}`;
   return event.channel_name || event.team_name || shortId(event.conversation_id) || "-";
+}
+
+function abuseScopeLabel(bucket: WebhookAbuseBucketOut): string {
+  return bucket.scope === "ip_route" ? "Client + route" : "Client";
+}
+
+function abuseReasonLabel(reason: string): string {
+  switch (reason) {
+    case "delivery_backend_disabled":
+      return "Delivery backend disabled";
+    case "invalid_payload":
+      return "Invalid payload";
+    case "payload_too_large":
+      return "Payload too large";
+    case "route_disabled":
+      return "Route disabled";
+    case "unknown_route":
+      return "Unknown route";
+    default:
+      return reason || "-";
+  }
 }
 
 function InnerApp() {

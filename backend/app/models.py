@@ -66,6 +66,8 @@ class WebhookRoute(Base):
     route_token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     route_token: Mapped[str] = mapped_column(Text, default="")
     delivery_backend: Mapped[str] = mapped_column(String(32), default="bot_framework")
+    client_ip_access_mode: Mapped[str] = mapped_column(String(32), default="public")
+    client_ip_allowlist: Mapped[str] = mapped_column(Text, default="")
     target_type: Mapped[str] = mapped_column(String(32), default="bot_conversation")
     target_name: Mapped[str] = mapped_column(String(200))
     bot_service_url: Mapped[str] = mapped_column(Text, default="")
@@ -103,6 +105,23 @@ class WebhookDeliveryEvent(Base):
     normalized_message_json: Mapped[str] = mapped_column(Text, default="{}")
     delivery_result_json: Mapped[str] = mapped_column(Text, default="{}")
     error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
+
+
+class WebhookAbuseBucket(Base):
+    __tablename__ = "webhook_abuse_buckets"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    bucket_key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    scope: Mapped[str] = mapped_column(String(32), index=True)
+    client_hash: Mapped[str] = mapped_column(String(64), index=True)
+    route_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    failure_count: Mapped[int] = mapped_column(default=0)
+    block_count: Mapped[int] = mapped_column(default=0)
+    window_started_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
+    blocked_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    last_reason: Mapped[str] = mapped_column(String(120), default="")
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
 
 

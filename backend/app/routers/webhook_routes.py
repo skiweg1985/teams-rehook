@@ -34,6 +34,14 @@ from app.services.graph_targets import GraphConfigError, GraphRequestError
 from app.services.log_retention import cleanup_log_events
 from app.services.teams_bot import BotDeliveryError, send_bot_activity
 from app.services.teams_graph_delivery import GraphDeliveryError, send_graph_message
+from app.services.client_ip_allowlist import (
+    CLIENT_IP_ACCESS_PUBLIC,
+    CLIENT_IP_ACCESS_RESTRICTED,
+    client_ip_allowed,
+    normalize_client_ip_access_mode,
+    normalize_client_ip_allowlist,
+)
+from app.services.webhook_abuse import BLOCKED_WEBHOOK_DETAIL, check_block, record_failure, record_success
 from app.services.webhook_payloads import NormalizedMessage, WebhookPayloadError, normalize_webhook_payload, payload_preview
 
 router = APIRouter(tags=["webhook-routes"])
@@ -41,6 +49,12 @@ router = APIRouter(tags=["webhook-routes"])
 DeliveryStatusFilter = Literal["delivered", "failed", "rejected"]
 DELIVERY_BACKEND_BOT = "bot_framework"
 DELIVERY_BACKEND_GRAPH = "graph"
+ABUSE_REASON_BACKEND_DISABLED = "delivery_backend_disabled"
+ABUSE_REASON_INVALID_PAYLOAD = "invalid_payload"
+ABUSE_REASON_CLIENT_IP_NOT_ALLOWED = "client_ip_not_allowed"
+ABUSE_REASON_PAYLOAD_TOO_LARGE = "payload_too_large"
+ABUSE_REASON_ROUTE_DISABLED = "route_disabled"
+ABUSE_REASON_UNKNOWN_ROUTE = "unknown_route"
 
 
 @router.get("/webhook-routes", response_model=list[WebhookRouteOut])
@@ -80,6 +94,8 @@ def create_webhook_route(
         route_token_hash=lookup_secret_hash(route_token),
         route_token=route_token,
         delivery_backend=payload.delivery_backend,
+        client_ip_access_mode=payload.client_ip_access_mode,
+        client_ip_allowlist=payload.client_ip_allowlist,
         target_type=payload.target_type,
         target_name=payload.target_name.strip(),
         bot_service_url=payload.bot_service_url.strip(),
@@ -95,6 +111,7 @@ def create_webhook_route(
         bot_target_source=payload.bot_target_source.strip(),
     )
     _ensure_route_feature_enabled(route, settings)
+    _validate_client_ip_access(route)
     _materialize_graph_user_target(db, admin.organization_id, route)
     if settings.graph_lookup_enabled:
         try_resolve_route_graph_names(route)
@@ -135,6 +152,12 @@ def update_webhook_route(
         route.is_active = payload.is_active
     if payload.delivery_backend is not None:
         route.delivery_backend = payload.delivery_backend
+    if payload.client_ip_access_mode is not None:
+        route.client_ip_access_mode = payload.client_ip_access_mode
+        if payload.client_ip_access_mode == CLIENT_IP_ACCESS_PUBLIC:
+            route.client_ip_allowlist = ""
+    if payload.client_ip_allowlist is not None:
+        route.client_ip_allowlist = payload.client_ip_allowlist
     if payload.target_type is not None:
         route.target_type = payload.target_type
     if payload.target_name is not None:
@@ -162,6 +185,7 @@ def update_webhook_route(
     if payload.bot_target_source is not None:
         route.bot_target_source = payload.bot_target_source.strip()
     _ensure_route_feature_enabled(route, settings)
+    _validate_client_ip_access(route)
     _materialize_graph_user_target(db, admin.organization_id, route)
     if settings.graph_lookup_enabled:
         try_resolve_route_graph_names(route)
@@ -446,8 +470,15 @@ def test_webhook_route(
 async def receive_webhook(route_token: str, request: Request, db: Session = Depends(get_db)):
     settings = get_effective_settings()
     token_hash = lookup_secret_hash(route_token)
+    client_host, _, _, _ = _resolve_client_host(request)
+    block = check_block(db, client_host=client_host, route_token_hash=token_hash)
+    if block is not None:
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=BLOCKED_WEBHOOK_DETAIL)
+
     body = await request.body()
     if len(body) > settings.webhook_max_payload_bytes:
+        record_failure(db, client_host=client_host, route_token_hash=token_hash, reason=ABUSE_REASON_PAYLOAD_TOO_LARGE)
         event = _record_event(
             db,
             route=None,
@@ -461,6 +492,7 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
 
     route = db.scalar(select(WebhookRoute).where(WebhookRoute.route_token_hash == token_hash))
     if not route:
+        record_failure(db, client_host=client_host, route_token_hash=token_hash, reason=ABUSE_REASON_UNKNOWN_ROUTE)
         _record_event(
             db,
             route=None,
@@ -472,6 +504,7 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
         db.commit()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook route not found")
     if not route.is_active:
+        record_failure(db, client_host=client_host, route_token_hash=token_hash, reason=ABUSE_REASON_ROUTE_DISABLED)
         event = _record_event(
             db,
             route=route,
@@ -486,6 +519,7 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=event.error)
     disabled_message = _route_feature_disabled_message(route, settings)
     if disabled_message:
+        record_failure(db, client_host=client_host, route_token_hash=token_hash, reason=ABUSE_REASON_BACKEND_DISABLED)
         event = _record_event(
             db,
             route=route,
@@ -498,10 +532,25 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
         route.last_delivery_at = utcnow()
         db.commit()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=event.error)
+    if not _route_allows_client_ip(route, client_host):
+        record_failure(db, client_host=client_host, route_token_hash=token_hash, reason=ABUSE_REASON_CLIENT_IP_NOT_ALLOWED)
+        event = _record_event(
+            db,
+            route=route,
+            route_token_hash=token_hash,
+            status_value="rejected",
+            request_metadata=_request_metadata(request, body),
+            error="Client IP is not allowed for this webhook route",
+        )
+        route.last_delivery_status = "rejected"
+        route.last_delivery_at = utcnow()
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=event.error)
 
     try:
         message = normalize_webhook_payload(body, request.headers.get("content-type"))
     except WebhookPayloadError as exc:
+        record_failure(db, client_host=client_host, route_token_hash=token_hash, reason=ABUSE_REASON_INVALID_PAYLOAD)
         event = _record_event(
             db,
             route=route,
@@ -515,6 +564,7 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
         db.commit()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=event.error) from exc
 
+    record_success(db, client_host=client_host, route_token_hash=token_hash)
     delivery = _deliver_to_route(db, route, message, request_metadata=_request_metadata(request, body))
     db.commit()
     if delivery.status == "failed":
@@ -615,6 +665,29 @@ def _validate_target(route: WebhookRoute) -> None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Graph chat routes require an existing chat ID")
         if kind not in {"channel", "chat"}:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Graph delivery supports channel and existing chat targets in V1")
+
+
+def _validate_client_ip_access(route: WebhookRoute) -> None:
+    try:
+        route.client_ip_access_mode = normalize_client_ip_access_mode(route.client_ip_access_mode)
+        route.client_ip_allowlist = normalize_client_ip_allowlist(route.client_ip_allowlist or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if route.client_ip_access_mode == CLIENT_IP_ACCESS_PUBLIC:
+        route.client_ip_allowlist = ""
+        return
+    if route.client_ip_access_mode == CLIENT_IP_ACCESS_RESTRICTED and not route.client_ip_allowlist:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Restricted routes require at least one client IP or CIDR range")
+
+
+def _route_allows_client_ip(route: WebhookRoute, client_host: str) -> bool:
+    try:
+        mode = normalize_client_ip_access_mode(route.client_ip_access_mode)
+    except ValueError:
+        mode = CLIENT_IP_ACCESS_PUBLIC
+    if mode == CLIENT_IP_ACCESS_PUBLIC:
+        return True
+    return client_ip_allowed(client_host, route.client_ip_allowlist or "")
 
 
 def _ensure_route_name_available(
@@ -872,6 +945,8 @@ def _route_out(
         "name": route.name,
         "is_active": route.is_active,
         "delivery_backend": _route_delivery_backend(route),
+        "client_ip_access_mode": normalize_client_ip_access_mode(route.client_ip_access_mode),
+        "client_ip_allowlist": normalize_client_ip_allowlist(route.client_ip_allowlist or ""),
         "target_type": route.target_type,
         "target_name": route.target_name,
         "bot_service_url": route.bot_service_url,

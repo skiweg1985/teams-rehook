@@ -381,6 +381,95 @@ def test_webhook_and_info_commands_reply_with_route_and_reference_details(monkey
     db.close()
 
 
+def test_allowlist_command_shows_and_updates_single_linked_route(monkeypatch):
+    sent_replies: list[dict] = []
+    monkeypatch.setattr("app.routers.bot_messages.send_bot_activity", lambda **kwargs: sent_replies.append(kwargs))
+    client, db = make_client()
+    base_activity = {
+        "type": "message",
+        "serviceUrl": "https://smba.trafficmanager.net/emea/",
+        "conversation": {"id": "conversation-id", "conversationType": "personal"},
+        "from": {"id": "29:user", "aadObjectId": "aad-user-id"},
+        "channelData": {"tenant": {"id": "tenant-id"}},
+    }
+    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "register Personal Alerts"}).status_code == 200
+
+    restricted_response = client.post(
+        "/api/v1/bot/messages",
+        json={**base_activity, "text": "allowlist restricted 203.0.113.10, 10.0.0.0/24"},
+    )
+    show_response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "allowlist"})
+    public_response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "allowlist public"})
+
+    route = db.scalar(select(WebhookRoute).where(WebhookRoute.name == "Personal Alerts"))
+    assert route is not None
+    assert restricted_response.status_code == 200
+    assert "restricted (2 allowed)" in restricted_response.json()["reply_text"]
+    assert "203.0.113.10" in show_response.json()["reply_text"]
+    assert "10.0.0.0/24" in show_response.json()["reply_text"]
+    assert public_response.status_code == 200
+    db.refresh(route)
+    assert route.client_ip_access_mode == "public"
+    assert route.client_ip_allowlist == ""
+    assert "updated to `public`" in public_response.json()["reply_text"]
+    assert "Client IP access updated" in repr(card_from_sent_reply(sent_replies[-1]))
+    db.close()
+
+
+def test_allowlist_command_targets_named_route_when_multiple_are_linked(monkeypatch):
+    monkeypatch.setattr("app.routers.bot_messages.send_bot_activity", lambda **kwargs: None)
+    client, db = make_client()
+    base_activity = {
+        "type": "message",
+        "serviceUrl": "https://smba.trafficmanager.net/emea/",
+        "conversation": {"id": "conversation-id", "conversationType": "personal"},
+        "from": {"id": "29:user", "aadObjectId": "aad-user-id"},
+        "channelData": {"tenant": {"id": "tenant-id"}},
+    }
+    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "register Primary Alerts"}).status_code == 200
+    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "register Secondary Alerts"}).status_code == 200
+
+    unnamed_response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "allowlist restricted 203.0.113.10"})
+    named_response = client.post(
+        "/api/v1/bot/messages",
+        json={**base_activity, "text": "allowlist restricted Secondary Alerts: 203.0.113.10"},
+    )
+
+    primary = db.scalar(select(WebhookRoute).where(WebhookRoute.name == "Primary Alerts"))
+    secondary = db.scalar(select(WebhookRoute).where(WebhookRoute.name == "Secondary Alerts"))
+    assert primary is not None
+    assert secondary is not None
+    assert "Multiple routes are linked" in unnamed_response.json()["reply_text"]
+    assert named_response.status_code == 200
+    assert primary.client_ip_access_mode == "public"
+    assert secondary.client_ip_access_mode == "restricted"
+    assert secondary.client_ip_allowlist == "203.0.113.10"
+    db.close()
+
+
+def test_allowlist_command_rejects_invalid_entries(monkeypatch):
+    monkeypatch.setattr("app.routers.bot_messages.send_bot_activity", lambda **kwargs: None)
+    client, db = make_client()
+    base_activity = {
+        "type": "message",
+        "serviceUrl": "https://smba.trafficmanager.net/emea/",
+        "conversation": {"id": "conversation-id", "conversationType": "personal"},
+        "from": {"id": "29:user", "aadObjectId": "aad-user-id"},
+        "channelData": {"tenant": {"id": "tenant-id"}},
+    }
+    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "register Personal Alerts"}).status_code == 200
+
+    response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "allowlist restricted not-an-ip"})
+
+    route = db.scalar(select(WebhookRoute).where(WebhookRoute.name == "Personal Alerts"))
+    assert route is not None
+    assert response.status_code == 200
+    assert response.json()["command"] == "allowlist"
+    assert "IP addresses or CIDR ranges" in response.json()["reply_text"]
+    assert route.client_ip_access_mode == "public"
+    db.close()
+
+
 def test_info_command_lists_all_linked_routes_with_core_details(monkeypatch):
     sent_replies: list[dict] = []
     monkeypatch.setattr("app.routers.bot_messages.send_bot_activity", lambda **kwargs: sent_replies.append(kwargs))
@@ -721,6 +810,7 @@ def test_help_command_lists_available_commands_as_card(monkeypatch):
     assert "enable [route name]" in body["reply_text"]
     assert "delete <route name>" in body["reply_text"]
     assert "info [route name]" in body["reply_text"]
+    assert "allowlist [route name]" in body["reply_text"]
     assert "help" in body["reply_text"]
     assert "/register <route name>" not in body["reply_text"]
     sent_message = sent_replies[0]["message"]
@@ -736,6 +826,7 @@ def test_help_command_lists_available_commands_as_card(monkeypatch):
         "enable [route name]:",
         "delete <route name>:",
         "info [route name]:",
+        "allowlist [route name]:",
         "help:",
     }.issubset({label["text"] for label in command_labels})
     assert all(label["wrap"] is False for label in command_labels)

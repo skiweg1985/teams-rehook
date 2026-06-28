@@ -45,6 +45,24 @@ OVERRIDABLE_SETTINGS: dict[str, SettingDefinition] = {
     "webhook_max_payload_bytes": SettingDefinition(
         "webhook_max_payload_bytes", "Webhook payload limit", "int", False
     ),
+    "webhook_abuse_blocking_enabled": SettingDefinition(
+        "webhook_abuse_blocking_enabled", "Webhook abuse blocking", "bool", False
+    ),
+    "webhook_abuse_failure_limit": SettingDefinition(
+        "webhook_abuse_failure_limit", "Webhook abuse failure limit", "int", False
+    ),
+    "webhook_abuse_window_minutes": SettingDefinition(
+        "webhook_abuse_window_minutes", "Webhook abuse window", "int", False
+    ),
+    "webhook_abuse_initial_block_minutes": SettingDefinition(
+        "webhook_abuse_initial_block_minutes", "Webhook abuse initial block", "int", False
+    ),
+    "webhook_abuse_max_block_minutes": SettingDefinition(
+        "webhook_abuse_max_block_minutes", "Webhook abuse max block", "int", False
+    ),
+    "webhook_abuse_cleanup_days": SettingDefinition(
+        "webhook_abuse_cleanup_days", "Webhook abuse cleanup", "int", False
+    ),
     "log_retention_days": SettingDefinition("log_retention_days", "Log retention", "int", False),
     "log_cleanup_interval_minutes": SettingDefinition(
         "log_cleanup_interval_minutes", "Log cleanup interval", "int", False
@@ -114,6 +132,15 @@ def _validate_and_normalize(key: str, value: str) -> str:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Value must be an integer") from exc
         if key == "webhook_max_payload_bytes" and parsed < 1024:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payload limit must be at least 1024")
+        if key == "webhook_abuse_failure_limit" and parsed < 1:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failure limit must be at least 1")
+        if key in {
+            "webhook_abuse_window_minutes",
+            "webhook_abuse_initial_block_minutes",
+            "webhook_abuse_max_block_minutes",
+            "webhook_abuse_cleanup_days",
+        } and parsed < 1:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Value must be at least 1")
         if key == "log_retention_days" and parsed < 0:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Retention must be zero or greater")
         if key == "log_cleanup_interval_minutes" and parsed < 1:

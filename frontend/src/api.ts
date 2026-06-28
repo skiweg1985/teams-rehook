@@ -13,6 +13,8 @@ import type {
   UserOut,
   UserPasswordUpdate,
   UserUpdate,
+  WebhookAbuseBucketOut,
+  WebhookAbuseCleanupOut,
   WebhookDeliveryEventDetailOut,
   WebhookDeliveryEventOut,
   WebhookDeliveryEventPageOut,
@@ -117,6 +119,21 @@ export const api = {
   },
   adminSystemLogs(csrfToken: string) {
     return request<SystemLogEventOut[]>("/api/v1/admin/system-logs", { csrfToken });
+  },
+  adminWebhookAbuseBuckets(csrfToken: string) {
+    return request<WebhookAbuseBucketOut[]>("/api/v1/admin/webhook-abuse-buckets", { csrfToken });
+  },
+  resetWebhookAbuseBucket(csrfToken: string, id: string) {
+    return request<WebhookAbuseBucketOut>(`/api/v1/admin/webhook-abuse-buckets/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      csrfToken,
+    });
+  },
+  cleanupWebhookAbuseBuckets(csrfToken: string) {
+    return request<WebhookAbuseCleanupOut>("/api/v1/admin/webhook-abuse-buckets/cleanup", {
+      method: "POST",
+      csrfToken,
+    });
   },
   adminReadiness(csrfToken: string) {
     return request<AdminReadinessOut>("/api/v1/admin/readiness", { csrfToken });

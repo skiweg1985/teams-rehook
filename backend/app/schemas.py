@@ -5,6 +5,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.services.client_ip_allowlist import (
+    CLIENT_IP_ACCESS_PUBLIC,
+    CLIENT_IP_ACCESS_RESTRICTED,
+    normalize_client_ip_access_mode,
+    normalize_client_ip_allowlist,
+)
+
 
 class HealthOut(BaseModel):
     ok: bool = True
@@ -87,8 +94,31 @@ class SystemLogEventOut(BaseModel):
     created_at: datetime
 
 
+class WebhookAbuseBucketOut(BaseModel):
+    id: str
+    scope: Literal["ip", "ip_route"]
+    status: Literal["watching", "blocked"]
+    client_fingerprint: str
+    route_token_fingerprint: str = ""
+    failure_count: int
+    block_count: int
+    window_started_at: datetime
+    blocked_until: datetime | None = None
+    last_reason: str = ""
+    last_seen_at: datetime
+    created_at: datetime
+
+
+class WebhookAbuseCleanupOut(BaseModel):
+    ok: bool = True
+    deleted: int
+    cleanup_days: int
+    cutoff: datetime
+
+
 GraphTargetKind = Literal["user", "team", "channel", "chat"]
 DeliveryBackend = Literal["bot_framework", "graph"]
+ClientIpAccessMode = Literal["public", "restricted"]
 WebhookTargetType = Literal["bot_conversation"]
 WebhookRouteStatus = Literal["delivered", "failed", "rejected"]
 
@@ -97,6 +127,8 @@ class WebhookRouteBase(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     is_active: bool = True
     delivery_backend: DeliveryBackend = "bot_framework"
+    client_ip_access_mode: ClientIpAccessMode = "public"
+    client_ip_allowlist: str = Field(default="", max_length=4000)
     target_type: WebhookTargetType = "bot_conversation"
     target_name: str = Field(min_length=1, max_length=200)
     bot_service_url: str = Field(default="", max_length=2000)
@@ -111,6 +143,16 @@ class WebhookRouteBase(BaseModel):
     graph_user_principal_name: str = Field(default="", max_length=255)
     bot_target_source: str = Field(default="", max_length=40)
 
+    @model_validator(mode="after")
+    def validate_client_ip_access(self):
+        self.client_ip_access_mode = normalize_client_ip_access_mode(self.client_ip_access_mode)
+        self.client_ip_allowlist = normalize_client_ip_allowlist(self.client_ip_allowlist)
+        if self.client_ip_access_mode == CLIENT_IP_ACCESS_PUBLIC:
+            self.client_ip_allowlist = ""
+        if self.client_ip_access_mode == CLIENT_IP_ACCESS_RESTRICTED and not self.client_ip_allowlist:
+            raise ValueError("Restricted routes require at least one client IP or CIDR range")
+        return self
+
 
 class WebhookRouteCreate(WebhookRouteBase):
     pass
@@ -120,6 +162,8 @@ class WebhookRouteUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     is_active: bool | None = None
     delivery_backend: DeliveryBackend | None = None
+    client_ip_access_mode: ClientIpAccessMode | None = None
+    client_ip_allowlist: str | None = Field(default=None, max_length=4000)
     target_type: WebhookTargetType | None = None
     target_name: str | None = Field(default=None, min_length=1, max_length=200)
     bot_service_url: str | None = Field(default=None, max_length=2000)
@@ -140,6 +184,8 @@ class WebhookRouteUpdate(BaseModel):
             self.name is None
             and self.is_active is None
             and self.delivery_backend is None
+            and self.client_ip_access_mode is None
+            and self.client_ip_allowlist is None
             and self.target_type is None
             and self.target_name is None
             and self.bot_service_url is None
@@ -155,6 +201,10 @@ class WebhookRouteUpdate(BaseModel):
             and self.bot_target_source is None
         ):
             raise ValueError("At least one field must be provided")
+        if self.client_ip_access_mode is not None:
+            self.client_ip_access_mode = normalize_client_ip_access_mode(self.client_ip_access_mode)
+        if self.client_ip_allowlist is not None:
+            self.client_ip_allowlist = normalize_client_ip_allowlist(self.client_ip_allowlist)
         return self
 
 
@@ -166,6 +216,8 @@ class WebhookRouteOut(BaseModel):
     name: str
     is_active: bool
     delivery_backend: str
+    client_ip_access_mode: str
+    client_ip_allowlist: str
     target_type: str
     target_name: str
     bot_service_url: str
