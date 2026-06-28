@@ -1,5 +1,39 @@
 # Documentation Audit Report
 
+## 2026-06-29 Audit Pass
+
+Full review of documentation against the current codebase, treating the code as the source of truth.
+
+### Files Modified
+
+- `README.md`: corrected the post-setup access URL to `https://localhost:8443` for the recommended `local` profile, documented the setup profiles, and expanded the `./manage.sh` command list.
+- `docs/configuration.md`: added the `event_debug_previews_enabled` runtime override and `EVENT_DEBUG_PREVIEWS_ENABLED` environment variable, both previously undocumented.
+- `docs/api.md`: added the previously undocumented admin endpoints `GET /admin/event-logs`, `POST /admin/client-events`, and the `webhook-abuse-buckets` list/reset/cleanup endpoints.
+- `docs/admin-guide.md`: corrected install/access URLs to the HTTPS `local` profile, documented setup profiles, clarified the OAuth redirect URI per profile, and referenced `./manage.sh backup-db` / `restore-db`.
+- `docs/developer-guide.md`: corrected the local access URL and documented setup profiles.
+- `docs/deployment.md`: documented setup profiles and the HTTPS `local` default, and added `restore-db` / `rotate-db-password` to common commands.
+- `CHANGELOG.md`: added documentation-audit entry under `[Unreleased]`.
+
+### Verified Correct (No Change Needed)
+
+- API surface in `docs/api.md` otherwise matches `backend/app/routers` (health, sessions, webhook routes, public ingress, settings, readiness, users, graph-delivery OAuth, bot messages, teams targets, monitoring).
+- Data model in `docs/data-model.md` matches `backend/app/models.py` entities and relationships.
+- Configuration defaults match `backend/app/core/config.py` and `.env.example`.
+- Compose service layout, ports, and proxy trust behavior match `docker-compose.yml` and `haproxy/haproxy.cfg`.
+- `docs/technical_documentation.md` and `docs/CHANGELOG.md` remain valid compatibility pointers.
+
+### Remaining Gaps
+
+- Production-readiness items remain open `TODO:` markers (license, security contact, supported versions, backup/restore policy, hosting/TLS, release process, migration tool decision). These are intentional and cannot be resolved from code.
+- `planning/coordination/WORKLOG.md` references the pre-rename `docs/graph-autocomplete-spike.md`; left unchanged as a dated historical worklog entry.
+
+### Could Not Be Verified From Code Alone
+
+- Microsoft tenant permissions, consent model, and real delivery behavior (require a live tenant).
+- Production deployment target, public URLs, and operational ownership.
+
+## 2026-06-27 Audit Pass
+
 Audit date: 2026-06-27
 
 ## Scope

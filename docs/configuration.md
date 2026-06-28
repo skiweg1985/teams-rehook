@@ -35,6 +35,7 @@ Use `.env.example` as the safe template. For local Docker setup, prefer `./manag
 | `WEBHOOK_ABUSE_CLEANUP_DAYS` | Retention window for inactive abuse tracking buckets. This is environment-only and not exposed as a runtime override. | No | `30` | `14` | No |
 | `LOG_RETENTION_DAYS` | Retention window for delivery, audit, and bot activity logs. `0` means cleanup can remove events older than now. | No | `7` | `7` | No |
 | `LOG_CLEANUP_INTERVAL_MINUTES` | Minimum interval between automatic cleanup runs. | No | `60` | `60` | No |
+| `EVENT_DEBUG_PREVIEWS_ENABLED` | Keeps redacted, size-clipped previews of raw payloads in event log entries. Code default only; not listed in `.env.example`. Admins can also change this in the Settings UI. | No | `false` | `false` | No |
 | `TRUST_X_FORWARDED_FOR` | Allows the backend to use `X-Forwarded-For` as the webhook client IP, but only when the direct client is trusted. Docker Compose overrides this to `true` for the bundled HAProxy. | No | `false` in `.env.example`; Docker backend uses `true` | `true` | Yes |
 | `TRUSTED_PROXY_IPS` | Comma-separated additional trusted upstream proxy IP addresses or CIDR ranges. The bundled HAProxy subnet is trusted separately through `COMPOSE_APP_SUBNET`. | No | Empty in `.env.example` | `10.0.0.0/24,192.168.10.15` | Yes |
 | `MS_APP_TENANT_ID` | Entra tenant ID for Bot Framework and Microsoft Graph token requests. The repository keeps this commented in `.env.example` because operators can also set it in the Settings UI. | Required for real Microsoft integrations | Empty | `00000000-0000-0000-0000-000000000000` | No |
@@ -96,6 +97,7 @@ These settings are defined in `backend/app/core/settings_overrides.py` and can b
 | `webhook_abuse_window_minutes` | int | No | Minimum `1`; default code value is `10`. |
 | `log_retention_days` | int | No | Minimum `0`. |
 | `log_cleanup_interval_minutes` | int | No | Minimum `1`. |
+| `event_debug_previews_enabled` | bool | No | When enabled, event log entries keep redacted, size-clipped previews of raw payloads. Disabled by default; previews are empty when off. |
 | `session_secure_cookie` | bool | No | Applies the session cookie `Secure` flag immediately for new logins. |
 | `trust_x_forwarded_for` | bool | No | Runtime override for trusting `X-Forwarded-For` from trusted proxies. |
 | `cors_origins` | string | No | Comma-separated HTTP/HTTPS origins; scheme, host, and optional port only. |

@@ -80,8 +80,18 @@ The route token is secret. Do not log or publish real relay URLs.
 | `GET` | `/api/v1/webhook-delivery-events/{event_id}` | Admin session | Delivery event detail. |
 | `POST` | `/api/v1/webhook-delivery-events/cleanup` | Admin session + CSRF | Manual delivery/audit/bot activity cleanup. |
 | `GET` | `/api/v1/admin/logs` | Admin session + CSRF | Audit events. |
+| `GET` | `/api/v1/admin/event-logs` | Admin session + CSRF | Paginated unified event log with level, category, type, correlation/request ID, and search filters. |
+| `POST` | `/api/v1/admin/client-events` | Admin session + CSRF | Records a frontend-originated event log entry. |
 | `GET` | `/api/v1/admin/system-logs` | Admin session + CSRF | Captured Teams bot activity events. |
 | `POST` | `/api/v1/admin/logs/cleanup` | Admin session + CSRF | Manual cleanup endpoint exposed by the admin router. |
+
+## Webhook Abuse Blocking
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/admin/webhook-abuse-buckets` | Admin session + CSRF | List currently blocked clients and clients observed within the active abuse window. |
+| `DELETE` | `/api/v1/admin/webhook-abuse-buckets/{bucket_id}` | Admin session + CSRF | Unblock a client and clear its current failure count while keeping escalation history. |
+| `POST` | `/api/v1/admin/webhook-abuse-buckets/cleanup` | Admin session + CSRF | Remove inactive abuse tracking buckets older than `WEBHOOK_ABUSE_CLEANUP_DAYS`. |
 
 ## Admin Settings And Readiness
 

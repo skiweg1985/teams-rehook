@@ -17,7 +17,7 @@ Start:
 ./manage.sh start
 ```
 
-On first run, `./manage.sh start` launches the guided `.env` setup if the file is missing. `./manage.sh setup` still writes a local `.env` with ports, URLs, bundled Postgres credentials, `BOT_DELIVERY_MODE=real`, and the session cookie flag, then offers to start the stack. The root-level `./manage.sh` script is a thin operator wrapper around Docker Compose, `.env`, and bundled Postgres maintenance. It does not replace the in-app admin UI for normal users, runtime settings, or Microsoft integration setup.
+On first run, `./manage.sh start` launches the guided `.env` setup if the file is missing. `./manage.sh setup` offers `local`, `production`, and `custom` profiles and writes a local `.env` with ports, URLs, bundled Postgres credentials, `BOT_DELIVERY_MODE=real`, and the session cookie flag, then offers to start the stack. The recommended `local` profile publishes HTTPS on `https://localhost:8443` with a self-signed development certificate, enables `SESSION_SECURE_COOKIE=true`, and generates a random bundled Postgres password. The `production` and `custom` profiles prompt for listener ports, the publish scheme, the public DNS name, an optional public port, trusted upstream proxies, and the Postgres password mode. The root-level `./manage.sh` script is a thin operator wrapper around Docker Compose, `.env`, and bundled Postgres maintenance. It does not replace the in-app admin UI for normal users, runtime settings, or Microsoft integration setup.
 
 Common commands:
 
@@ -29,8 +29,12 @@ Common commands:
 ./manage.sh logs backend
 ./manage.sh doctor
 ./manage.sh backup-db
+./manage.sh restore-db <backup.sql>
+./manage.sh rotate-db-password
 ./manage.sh update
 ```
+
+`./manage.sh restore-db` restores a SQL dump after a typed `RESTORE` confirmation. `./manage.sh rotate-db-password` rotates the bundled Postgres password and restarts the backend; it only manages the bundled Postgres fallback and refuses to run when `DATABASE_URL` is set.
 
 `./manage.sh restart` recreates the Compose services with the current `.env` values. Use it after changing ports, proxy trust settings, URLs, or other environment-backed configuration. `./manage.sh update` remains the repository-refresh path for pulling new commits and rebuilding from the latest source tree.
 

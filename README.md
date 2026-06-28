@@ -33,18 +33,20 @@ Start the local Docker stack:
 ./manage.sh start
 ```
 
-On first run, `./manage.sh start` launches the guided `.env` setup if the file is missing, then asks whether the stack should start immediately.
+On first run, `./manage.sh start` launches the guided `.env` setup if the file is missing, lets you pick a setup profile, then asks whether the stack should start immediately. The recommended `local` profile publishes HTTPS on `https://localhost:8443` with a self-signed development certificate and enables the secure session cookie.
 
 Open the application:
 
 ```text
-http://localhost:8080
+https://localhost:8443
 ```
+
+The browser warns about the self-signed development certificate; accept it for local use.
 
 The API documentation is available at:
 
 ```text
-http://localhost:8080/api/v1/docs
+https://localhost:8443/api/v1/docs
 ```
 
 On first startup, open the application and complete the first-run setup screen. The setup flow creates the first admin with the email, display name, and password you provide.
@@ -69,15 +71,18 @@ Treat relay URLs as secrets. Anyone with a valid relay URL can send messages to 
 
 ## Configuration
 
-`./manage.sh setup` writes a small `.env` with local infrastructure defaults and can start the stack afterward. `./manage.sh start` runs that guided setup automatically when `.env` is missing. The Docker stack uses the bundled Postgres service by default. Set `DATABASE_URL` only when the backend should use an external Postgres database.
+`./manage.sh setup` writes a small `.env` through a guided wizard with `local`, `production`, and `custom` profiles, and can start the stack afterward. `./manage.sh start` runs that guided setup automatically when `.env` is missing. The Docker stack uses the bundled Postgres service by default. Set `DATABASE_URL` only when the backend should use an external Postgres database.
 
 `./manage.sh` provides common single-host Compose operations:
 
 ```bash
+./manage.sh status
+./manage.sh doctor
+./manage.sh restart
 ./manage.sh check-env
 ./manage.sh sync-env
-./manage.sh status
 ./manage.sh backup-db
+./manage.sh restore-db <backup.sql>
 ./manage.sh update
 ```
 

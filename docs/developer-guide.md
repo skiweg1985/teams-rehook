@@ -23,12 +23,12 @@
 ./manage.sh start
 ```
 
-On first run, `./manage.sh start` launches the guided `.env` setup if needed. Running `./manage.sh setup` explicitly still writes the local `.env` first and then offers to start the stack.
+On first run, `./manage.sh start` launches the guided `.env` setup if needed. Running `./manage.sh setup` explicitly still writes the local `.env` first and then offers to start the stack. The guided wizard offers `local`, `production`, and `custom` profiles; the recommended `local` profile publishes HTTPS on `https://localhost:8443`.
 
-Open:
+Open (recommended `local` profile):
 
 ```text
-http://localhost:8080
+https://localhost:8443
 ```
 
 For local credential-free delivery checks while developing integration code, set this explicitly in `.env` and restart the backend:
