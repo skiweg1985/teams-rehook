@@ -1433,3 +1433,5 @@ def test_admin_system_logs_endpoint_returns_bot_activity_events(client: TestClie
     assert rows[0]["scope"] == "channel"
     assert rows[0]["team_name"] == "Operations"
     assert rows[0]["channel_name"] == "Alerts"
+    assert rows[0]["auth_status"] == "unknown"
+    assert rows[0]["auth_service_url_matched"] is False

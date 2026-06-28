@@ -1231,6 +1231,12 @@ def list_system_logs(
             graph_team_id=row.graph_team_id,
             channel_id=row.channel_id,
             graph_user_id=row.graph_user_id,
+            auth_status=row.auth_status,
+            auth_issuer=row.auth_issuer,
+            auth_audience=row.auth_audience,
+            auth_service_url=row.auth_service_url,
+            auth_service_url_matched=row.auth_service_url_matched,
+            auth_validated_at=row.auth_validated_at,
             created_at=row.created_at,
         )
         for row in rows

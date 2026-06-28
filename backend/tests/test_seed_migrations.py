@@ -10,7 +10,7 @@ from app.database import Base
 from app.models import AppSetting, Organization, User
 from app.security import hash_secret
 from app.seed import INSTANCE_SESSION_SECRET_KEY, init_db
-from app.seed import _ensure_webhook_route_name_backend_uniqueness
+from app.seed import _ensure_additive_schema, _ensure_webhook_route_name_backend_uniqueness
 
 
 def test_sqlite_route_name_migration_replaces_old_name_unique_constraint(monkeypatch: pytest.MonkeyPatch):
@@ -268,6 +268,113 @@ def test_init_db_creates_default_org_and_instance_secret_without_bootstrap_admin
             assert get_settings().session_secret == instance_secret.value
     finally:
         get_settings.cache_clear()
+
+
+def test_additive_schema_backfills_bot_activity_auth_metadata_columns(monkeypatch: pytest.MonkeyPatch):
+    engine = create_engine("sqlite://", future=True)
+    monkeypatch.setattr("app.seed.engine", engine)
+    Base.metadata.create_all(bind=engine)
+    with engine.begin() as connection:
+        connection.execute(text("DROP TABLE bot_activity_events"))
+        connection.execute(
+            text(
+                """
+                CREATE TABLE bot_activity_events (
+                    id VARCHAR(36) NOT NULL,
+                    activity_type VARCHAR(80) NOT NULL,
+                    service_url TEXT NOT NULL,
+                    conversation_id TEXT NOT NULL,
+                    tenant_id TEXT NOT NULL,
+                    team_id TEXT NOT NULL,
+                    graph_team_id TEXT NOT NULL,
+                    channel_id TEXT NOT NULL,
+                    conversation_type VARCHAR(40) NOT NULL,
+                    team_name VARCHAR(200) NOT NULL,
+                    channel_name VARCHAR(200) NOT NULL,
+                    from_id TEXT NOT NULL,
+                    user_name VARCHAR(200) NOT NULL,
+                    graph_user_id TEXT NOT NULL,
+                    recipient_id TEXT NOT NULL,
+                    raw_activity_json TEXT NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    PRIMARY KEY (id)
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO bot_activity_events (
+                    id,
+                    activity_type,
+                    service_url,
+                    conversation_id,
+                    tenant_id,
+                    team_id,
+                    graph_team_id,
+                    channel_id,
+                    conversation_type,
+                    team_name,
+                    channel_name,
+                    from_id,
+                    user_name,
+                    graph_user_id,
+                    recipient_id,
+                    raw_activity_json,
+                    created_at
+                )
+                VALUES (
+                    'event-1',
+                    'message',
+                    'https://smba.trafficmanager.net/emea/',
+                    'conversation-id',
+                    'tenant-id',
+                    'team-id',
+                    '',
+                    'channel-id',
+                    'channel',
+                    'Team',
+                    'Alerts',
+                    'user-id',
+                    'Ada',
+                    'aad-user-id',
+                    'bot-id',
+                    '{}',
+                    CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+
+    _ensure_additive_schema()
+
+    with engine.connect() as connection:
+        columns = {row[1] for row in connection.execute(text("PRAGMA table_info(bot_activity_events)")).all()}
+        assert {
+            "auth_status",
+            "auth_issuer",
+            "auth_audience",
+            "auth_service_url",
+            "auth_service_url_matched",
+            "auth_validated_at",
+        } <= columns
+        row = connection.execute(
+            text(
+                """
+                SELECT auth_status, auth_issuer, auth_audience, auth_service_url,
+                       auth_service_url_matched, auth_validated_at
+                FROM bot_activity_events
+                WHERE id = 'event-1'
+                """
+            )
+        ).one()
+        assert row[0] == "unknown"
+        assert row[1] == ""
+        assert row[2] == ""
+        assert row[3] == ""
+        assert row[4] == 0
+        assert row[5] is None
 
 
 def test_init_db_rejects_placeholder_session_secret(monkeypatch: pytest.MonkeyPatch):

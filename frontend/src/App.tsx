@@ -5922,7 +5922,7 @@ function SystemLogsPage() {
       </Card>
       <Card title="System events" description="Teams bot activities captured by the relay service.">
         <DataTable
-          columns={["Activity", "Scope", "Conversation", "User", "Time"]}
+          columns={["Activity", "Scope", "Conversation", "User", "Auth", "Time"]}
           rows={systemLogs.map((event) => [
             <strong>{event.activity_type || "activity"}</strong>,
             <StatusBadge label={event.scope || "unknown"} tone={event.scope === "channel" ? "success" : "neutral"} />,
@@ -5933,6 +5933,10 @@ function SystemLogsPage() {
             <div className="stacked-cell">
               <span>{event.user_name || "-"}</span>
               <span className="muted">{event.graph_user_id ? shortId(event.graph_user_id) : "-"}</span>
+            </div>,
+            <div className="stacked-cell">
+              <StatusBadge label={systemLogAuthLabel(event)} tone={event.auth_status === "verified" ? "success" : "neutral"} />
+              <span className="muted">{event.auth_validated_at ? formatDateTime(event.auth_validated_at) : "legacy or unavailable"}</span>
             </div>,
             formatDateTime(event.created_at),
           ])}
@@ -5952,6 +5956,12 @@ function SystemLogsPage() {
 function systemLogConversation(event: SystemLogEventOut): string {
   if (event.team_name && event.channel_name) return `${event.team_name} / ${event.channel_name}`;
   return event.channel_name || event.team_name || shortId(event.conversation_id) || "-";
+}
+
+function systemLogAuthLabel(event: SystemLogEventOut): string {
+  if (event.auth_status === "verified" && event.auth_service_url_matched) return "Verified";
+  if (event.auth_status === "verified") return "Verified";
+  return event.auth_status || "unknown";
 }
 
 function abuseReasonLabel(reason: string): string {

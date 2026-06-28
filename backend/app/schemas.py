@@ -103,6 +103,12 @@ class SystemLogEventOut(BaseModel):
     graph_team_id: str = ""
     channel_id: str = ""
     graph_user_id: str = ""
+    auth_status: str = "unknown"
+    auth_issuer: str = ""
+    auth_audience: str = ""
+    auth_service_url: str = ""
+    auth_service_url_matched: bool = False
+    auth_validated_at: datetime | None = None
     created_at: datetime
 
 

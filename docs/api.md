@@ -116,8 +116,10 @@ The redirect URI is:
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `POST` | `/api/v1/bot/messages` | Public bot ingress | Receives Teams bot activities, captures conversation references, and handles bot commands. |
+| `POST` | `/api/v1/bot/messages` | Bot Framework bearer token | Receives Teams bot activities, captures conversation references, and handles bot commands. Invalid, missing, expired, mismatched, or incorrectly signed tokens are rejected before persistence. |
 | `GET` | `/api/v1/bot/conversation-references` | Admin session | Lists known Bot Framework conversations. |
+
+Accepted bot activities store non-sensitive authentication metadata such as validated issuer, audience, service URL match status and validation time. Raw bearer tokens and full JWTs are never stored. Historical bot activity rows created before auth metadata existed may report `auth_status` as `unknown`.
 
 ## Teams Targets
 

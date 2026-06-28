@@ -12,7 +12,19 @@ from app.core.config import get_settings
 from app.database import Base, get_db
 from app.main import create_app
 from app.models import AuditEvent, BotActivityEvent, BotConversationReference, WebhookDeliveryEvent, WebhookRoute
-from app.security import loads_json
+from app.routers.bot_messages import require_bot_framework_auth
+from app.security import loads_json, utcnow
+from app.services.bot_framework_auth import BotFrameworkClaims
+
+
+async def allow_bot_framework_auth():
+    return BotFrameworkClaims(
+        issuer="https://api.botframework.com",
+        audience="test-bot-app-id",
+        service_url="https://smba.trafficmanager.net/emea/",
+        service_url_matched=True,
+        validated_at=utcnow(),
+    )
 
 
 def make_client() -> tuple[TestClient, Session]:
@@ -32,6 +44,7 @@ def make_client() -> tuple[TestClient, Session]:
         yield db
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[require_bot_framework_auth] = allow_bot_framework_auth
     return TestClient(app), db
 
 
@@ -84,6 +97,12 @@ def test_bot_message_endpoint_captures_conversation_reference():
     assert event.conversation_id == "conversation-id"
     assert event.team_id == "team-id"
     assert event.channel_id == "channel-id"
+    assert event.auth_status == "verified"
+    assert event.auth_issuer == "https://api.botframework.com"
+    assert event.auth_audience == "test-bot-app-id"
+    assert event.auth_service_url == "https://smba.trafficmanager.net/emea/"
+    assert event.auth_service_url_matched is True
+    assert event.auth_validated_at is not None
     assert reference is not None
     assert reference.scope == "channel"
     assert reference.service_url == "https://smba.trafficmanager.net/emea/"

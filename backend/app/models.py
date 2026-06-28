@@ -145,6 +145,12 @@ class BotActivityEvent(Base):
     graph_user_id: Mapped[str] = mapped_column(Text, default="", index=True)
     recipient_id: Mapped[str] = mapped_column(Text, default="")
     raw_activity_json: Mapped[str] = mapped_column(Text, default="{}")
+    auth_status: Mapped[str] = mapped_column(String(32), default="unknown", index=True)
+    auth_issuer: Mapped[str] = mapped_column(Text, default="")
+    auth_audience: Mapped[str] = mapped_column(Text, default="")
+    auth_service_url: Mapped[str] = mapped_column(Text, default="")
+    auth_service_url_matched: Mapped[bool] = mapped_column(Boolean, default=False)
+    auth_validated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
 
 

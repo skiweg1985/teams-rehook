@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from html import unescape
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,12 @@ from app.services.client_ip_allowlist import (
     CLIENT_IP_ACCESS_RESTRICTED,
     normalize_client_ip_allowlist,
 )
+from app.services.bot_framework_auth import (
+    BotFrameworkClaims,
+    BotFrameworkAuthConfigError,
+    BotFrameworkAuthError,
+    validate_bot_framework_activity,
+)
 from app.services.graph_name_resolution import try_resolve_reference_graph_names, try_resolve_route_graph_names
 from app.services.teams_bot import BotDeliveryError, send_bot_activity
 from app.services.webhook_payloads import NormalizedMessage
@@ -30,8 +36,35 @@ router = APIRouter(tags=["bot-messages"])
 DELIVERY_BACKEND_BOT = "bot_framework"
 
 
+async def require_bot_framework_auth(
+    request: Request,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    body = await request.body()
+    try:
+        activity = json.loads(body) if body else {}
+    except json.JSONDecodeError:
+        activity = {}
+    if not isinstance(activity, dict):
+        activity = {}
+    try:
+        return validate_bot_framework_activity(authorization, activity)
+    except BotFrameworkAuthConfigError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except BotFrameworkAuthError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+
 @router.post("/bot/messages", response_model=BotActivityIngestOut)
-async def receive_bot_activity(request: Request, db: Session = Depends(get_db)):
+async def receive_bot_activity(
+    request: Request,
+    bot_auth: BotFrameworkClaims = Depends(require_bot_framework_auth),
+    db: Session = Depends(get_db),
+):
     body = await request.body()
     if not body:
         return BotActivityIngestOut(activity_event_id="", captured_reference=False)
@@ -58,6 +91,12 @@ async def receive_bot_activity(request: Request, db: Session = Depends(get_db)):
         graph_user_id=captured["graph_user_id"],
         recipient_id=captured["recipient_id"],
         raw_activity_json=dumps_json(_safe_activity(activity)),
+        auth_status="verified",
+        auth_issuer=bot_auth.issuer,
+        auth_audience=bot_auth.audience,
+        auth_service_url=bot_auth.service_url,
+        auth_service_url_matched=bot_auth.service_url_matched,
+        auth_validated_at=bot_auth.validated_at,
     )
     db.add(event)
     db.flush()

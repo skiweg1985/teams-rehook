@@ -90,6 +90,12 @@ export type SystemLogEventOut = {
   graph_team_id: string;
   channel_id: string;
   graph_user_id: string;
+  auth_status: string;
+  auth_issuer: string;
+  auth_audience: string;
+  auth_service_url: string;
+  auth_service_url_matched: boolean;
+  auth_validated_at: string | null;
   created_at: string;
 };
 

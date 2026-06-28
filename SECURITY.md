@@ -42,6 +42,7 @@ Use placeholders in examples and documentation.
 
 - Treat relay URLs as secrets.
 - Rotate relay URLs if they may have been exposed.
+- Treat `/api/v1/bot/messages` as a Bot Framework platform ingress: it must receive `Authorization: Bearer <token>` from Bot Framework, and the backend validates the token issuer, audience, lifetime, signing key, and `serviceUrl` before storing activity data.
 - Use HTTPS and `SESSION_SECURE_COOKIE=true` for production-like environments.
 - Restrict access to the admin UI and monitoring endpoint.
 - Grant Microsoft Graph permissions deliberately and with tenant admin review.

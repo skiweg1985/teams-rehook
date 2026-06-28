@@ -263,6 +263,12 @@ def _ensure_additive_schema() -> None:
             "channel_name": "VARCHAR(200) DEFAULT '' NOT NULL",
             "user_name": "VARCHAR(200) DEFAULT '' NOT NULL",
             "graph_user_id": "TEXT DEFAULT '' NOT NULL",
+            "auth_status": "VARCHAR(32) DEFAULT 'unknown' NOT NULL",
+            "auth_issuer": "TEXT DEFAULT '' NOT NULL",
+            "auth_audience": "TEXT DEFAULT '' NOT NULL",
+            "auth_service_url": "TEXT DEFAULT '' NOT NULL",
+            "auth_service_url_matched": "BOOLEAN DEFAULT FALSE NOT NULL",
+            "auth_validated_at": "TIMESTAMP NULL",
         },
         "bot_conversation_references": {
             "graph_team_id": "TEXT DEFAULT '' NOT NULL",
