@@ -806,9 +806,12 @@ restart_stack() {
   ensure_no_extra_args "$@"
   ensure_env
   require_command docker
-  step "Restarting Compose services"
-  run_compose restart
-  ok "Compose services restarted."
+  step "Recreating Compose services"
+  if ! docker_daemon_available; then
+    die_with_hint "Docker is installed but the daemon is not reachable." "Start Docker Desktop or your Docker service, then rerun ./manage.sh restart."
+  fi
+  run_compose up -d --build --force-recreate
+  ok "Compose services recreated with the current .env values."
 }
 
 status_stack() {
@@ -1106,7 +1109,7 @@ Core commands:
   setup                       Guided .env wizard with setup profiles
   start                       Build and start the Compose stack
   stop                        Stop the Compose stack
-  restart                     Restart running Compose services
+  restart                     Recreate services and reload .env values
   status                      Show Compose service status
   logs [service]              Follow Compose logs
   doctor                      Run environment and health diagnostics
@@ -1169,6 +1172,7 @@ Usage:
 
 Behavior:
   Starts the Compose stack. If .env is missing, the setup wizard runs first.
+  If the stack is already running, this command leaves it in place and only prints the known URLs.
 
 Supported setup options when .env is missing:
   --profile <name>     local, production, or custom
@@ -1178,6 +1182,32 @@ Supported setup options when .env is missing:
 Examples:
   ./manage.sh start
   ./manage.sh start --yes
+EOF
+      ;;
+    restart)
+      cat <<'EOF'
+Usage:
+  ./manage.sh restart
+
+Behavior:
+  Recreates the Compose services with the current .env values.
+  This is the safe choice after changing environment variables, image build context, or proxy settings.
+
+Example:
+  ./manage.sh restart
+EOF
+      ;;
+    update)
+      cat <<'EOF'
+Usage:
+  ./manage.sh update
+
+Behavior:
+  Pulls the current branch with ff-only, rebuilds the images, and refreshes the Compose stack.
+  Use this after repository changes. Use ./manage.sh restart after .env-only changes.
+
+Example:
+  ./manage.sh update
 EOF
       ;;
     doctor)

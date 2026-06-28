@@ -25,11 +25,14 @@ Common commands:
 ./manage.sh check-env
 ./manage.sh sync-env
 ./manage.sh status
+./manage.sh restart
 ./manage.sh logs backend
 ./manage.sh doctor
 ./manage.sh backup-db
 ./manage.sh update
 ```
+
+`./manage.sh restart` recreates the Compose services with the current `.env` values. Use it after changing ports, proxy trust settings, URLs, or other environment-backed configuration. `./manage.sh update` remains the repository-refresh path for pulling new commits and rebuilding from the latest source tree.
 
 Services:
 
@@ -162,7 +165,7 @@ No formal release process is visible in the repository. Until one exists:
 2. Review `CHANGELOG.md`.
 3. Run validation.
 4. Rebuild images.
-5. Start the stack.
+5. Recreate or start the stack.
 6. Check health, readiness, and route tests.
 
 ```bash

@@ -19,6 +19,7 @@ This project follows the structure of [Keep a Changelog](https://keepachangelog.
 
 ### Changed
 
+- `./manage.sh restart` now recreates Compose services with the current `.env` values instead of only restarting existing containers, so environment changes apply immediately.
 - Compose network CIDR is now controlled through `COMPOSE_APP_SUBNET`, the backend always trusts that internal HAProxy hop by default, and the status view reports the effective proxy trust chain for operators.
 - The bundled HAProxy now drops untrusted incoming `X-Forwarded-For` headers and only preserves forwarded chains from upstream proxies explicitly listed in `TRUSTED_PROXY_IPS`.
 - Abuse-blocking settings now show only the on/off switch, failure limit, and abuse window in the admin UI; initial block, max block, and cleanup retention move to environment-only configuration.
