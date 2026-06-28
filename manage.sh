@@ -213,41 +213,42 @@ EOF
 setup_env() {
   http_port=8080
   https_port=8443
-  secure_cookie=false
-  app_url="http://localhost:8080"
-  using_default_postgres_password=true
+  secure_cookie=true
+  app_url="https://localhost:8443"
+  using_random_postgres_password=true
 
   if [ -f "${ENV_FILE}" ]; then
     confirm "Replace existing .env with guided defaults?"
     backup_env
   fi
 
-  if ! confirm_default_yes "Use HTTP port 8080?"; then
-    http_port=$(prompt_value "HTTP port")
-    require_positive_port "${http_port}"
-  fi
-
-  if confirm_default_yes "Use HTTPS with the local development certificate on port 8443?"; then
-    secure_cookie=true
-    if ! confirm_default_yes "Use HTTPS port 8443?"; then
-      https_port=$(prompt_value "HTTPS port")
-      require_positive_port "${https_port}"
-    fi
-    app_url="https://localhost:${https_port}"
-  else
-    app_url="http://localhost:${http_port}"
-  fi
-
-  if confirm_default_yes "Use the bundled Postgres development password (app)?"; then
-    postgres_password=app
-  else
+  if confirm_default_yes "Use recommended local defaults (HTTPS, standard ports, random DB password)?"; then
     postgres_password=$(generate_password)
-    using_default_postgres_password=false
+  else
+    http_port=$(prompt_value "HTTP port" "8080")
+    require_positive_port "${http_port}"
+
+    if confirm_default_yes "Run locally with HTTPS at https://localhost:8443?"; then
+      https_port=$(prompt_value "HTTPS port" "8443")
+      require_positive_port "${https_port}"
+      secure_cookie=true
+      app_url="https://localhost:${https_port}"
+    else
+      secure_cookie=false
+      app_url="http://localhost:${http_port}"
+    fi
+
+    if confirm_default_yes "Generate a random bundled Postgres password?"; then
+      postgres_password=$(generate_password)
+    else
+      postgres_password=app
+      using_random_postgres_password=false
+    fi
   fi
 
   write_minimal_env "${http_port}" "${https_port}" "${app_url}" "${postgres_password}" "${secure_cookie}"
   info "Wrote guided .env configuration"
-  if [ "${using_default_postgres_password}" = false ]; then
+  if [ "${using_random_postgres_password}" = true ]; then
     info "A random bundled Postgres password was written to .env."
   fi
   print_urls

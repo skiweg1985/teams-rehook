@@ -19,6 +19,8 @@ This project follows the structure of [Keep a Changelog](https://keepachangelog.
 
 ### Changed
 
+- `./manage.sh setup` now starts with a recommended local-defaults path so the common case only needs a few confirmations; custom ports, HTTP-only mode, and the fixed `app` password remain available when explicitly selected.
+- `./manage.sh setup` now generates a random bundled Postgres password by default; the fixed `app` password is only used when explicitly selected.
 - `./manage.sh start` now launches the guided setup when `.env` is missing, avoids rebuilding when the Compose stack is already running, and prints the known URLs instead.
 - `./manage.sh setup` now offers to start the stack after writing `.env`, but skips that prompt when the Compose stack is already running.
 - `.env.example` now keeps only the core infrastructure defaults active; Microsoft identity and most runtime overrides stay commented and are intended to be configured through the Settings UI.
