@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type FocusEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -72,7 +72,7 @@ import type {
 } from "./types";
 import { classNames, compactJson, formatDateTime, formatRelativeTime } from "./utils";
 
-type RouteName = "dashboard" | "status" | "webhooks" | "payload-generator" | "users" | "settings" | "logs" | "system-logs";
+type RouteName = "dashboard" | "status" | "webhooks" | "payload-generator" | "delivery" | "users" | "settings" | "logs" | "system-logs";
 type DeliveryStatusFilter = "all" | WebhookDeliveryStatus;
 type PayloadGeneratorMode = "text" | "adaptive";
 type PayloadAccent = "neutral" | "success" | "warning" | "critical";
@@ -98,6 +98,7 @@ const NAV: Array<{ route: RouteName; label: string; path: string; icon: string }
   { route: "status", label: "Status", path: "/status", icon: "S" },
   { route: "webhooks", label: "Webhooks", path: "/webhooks", icon: "W" },
   { route: "payload-generator", label: "Payload Generator", path: "/payload-generator", icon: "P" },
+  { route: "delivery", label: "Delivery", path: "/delivery", icon: "D" },
   { route: "users", label: "Users", path: "/users", icon: "U" },
   { route: "settings", label: "Settings", path: "/settings", icon: "S" },
   { route: "logs", label: "Messages", path: "/logs", icon: "M" },
@@ -269,6 +270,7 @@ function routeFromPath(pathname: string): RouteName {
   if (pathname === "/status") return "status";
   if (pathname === "/webhooks") return "webhooks";
   if (pathname === "/payload-generator") return "payload-generator";
+  if (pathname === "/delivery") return "delivery";
   if (pathname === "/users") return "users";
   if (pathname === "/settings") return "settings";
   if (pathname === "/system-logs") return "system-logs";
@@ -567,6 +569,7 @@ function AppShell() {
         {route === "status" ? <StatusPage /> : null}
         {route === "webhooks" ? <WebhooksPage /> : null}
         {route === "payload-generator" ? <PayloadGeneratorPage /> : null}
+        {route === "delivery" ? <DeliveryMethodsPage /> : null}
         {route === "users" ? <UsersPage /> : null}
         {route === "settings" ? <SettingsPage /> : null}
         {route === "logs" ? <MessageLogsPage /> : null}
@@ -4225,6 +4228,157 @@ function deliveryAuthRefreshComponents(result: DeliveryAuthRefreshOut) {
   ];
 }
 
+function DeliveryMethodsPage() {
+  const { notify, session } = useAppContext();
+  const [settings, setSettings] = useState<SettingItemOut[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      setSettings(await api.adminSettings(csrfToken));
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Delivery settings could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
+  }, [csrfToken]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const settingsByKey = useMemo(() => new Map(settings.map((item) => [item.key, item])), [settings]);
+  const deliverySettings = orderedSettings(DELIVERY_SETTING_KEYS, settingsByKey);
+  const enabledCount = deliverySettings.filter((item) => item.effective_value === "true").length;
+  const deliveryMethodCount = deliverySettings.length || DELIVERY_SETTING_KEYS.length;
+  const graphLookupEnabled = settingEnabled(settingsByKey, "graph_lookup_enabled");
+  const graphDeliveryEnabled = settingEnabled(settingsByKey, "graph_delivery_enabled");
+  const deliveryWarning = graphDeliveryEnabled && !graphLookupEnabled;
+
+  return (
+    <>
+      <PageIntro
+        eyebrow="Operations"
+        title="Delivery"
+        description="Enable or pause the delivery methods available to webhook routes."
+        actions={<StatusBadge label={`${enabledCount}/${deliveryMethodCount} enabled`} tone={enabledCount === deliveryMethodCount ? "success" : enabledCount ? "warn" : "danger"} />}
+      />
+      {loading ? (
+        <Card>
+          <div className="table-state" role="status" aria-live="polite">
+            <div className="spinner spinner--small" aria-hidden="true" />
+            <p>Loading delivery methods...</p>
+          </div>
+        </Card>
+      ) : error ? (
+        <Card>
+          <div className="table-state table-state--error" role="alert">
+            <h3>Could not load delivery methods</h3>
+            <p>{error}</p>
+            <button className="secondary-button secondary-button--small" type="button" onClick={() => void refresh()}>
+              Retry
+            </button>
+          </div>
+        </Card>
+      ) : (
+        <div className="delivery-page">
+          {deliveryWarning ? (
+            <div className="status-detail-alert">
+              <strong>Graph delivery needs Graph lookup</strong>
+              <span>Enable Graph lookup before relying on delegated Microsoft Graph delivery.</span>
+            </div>
+          ) : null}
+          <Card className="delivery-methods-card" title="Delivery methods" description="Changes are saved immediately when a switch is toggled.">
+            <div className="delivery-method-list">
+              {deliverySettings.map((item) => (
+                <DeliveryMethodRow
+                  key={item.key}
+                  item={item}
+                  csrfToken={csrfToken}
+                  graphLookupEnabled={graphLookupEnabled}
+                  notify={notify}
+                  onChanged={refresh}
+                />
+              ))}
+            </div>
+          </Card>
+        </div>
+      )}
+    </>
+  );
+}
+
+function DeliveryMethodRow({
+  csrfToken,
+  graphLookupEnabled,
+  item,
+  notify,
+  onChanged,
+}: {
+  csrfToken: string;
+  graphLookupEnabled: boolean;
+  item: SettingItemOut;
+  notify: SettingsNotify;
+  onChanged: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const inputId = useId();
+  const meta = SETTING_META[item.key];
+  const enabled = item.effective_value === "true";
+  const graphDeliveryBlocked = item.key === "graph_delivery_enabled" && !enabled && !graphLookupEnabled;
+
+  async function toggle(nextEnabled: boolean) {
+    setBusy(true);
+    setError("");
+    try {
+      await api.updateSetting(csrfToken, item.key, nextEnabled ? "true" : "false");
+      notify({ tone: "success", title: `${item.label} ${nextEnabled ? "enabled" : "disabled"}` });
+      await onChanged();
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Delivery method could not be updated.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className={classNames("delivery-method-row", enabled && "delivery-method-row--enabled")}>
+      <div className="delivery-method-main">
+        <div>
+          <strong>{meta?.label ?? item.label}</strong>
+          <p>{meta?.description ?? item.label}</p>
+        </div>
+        <div className="delivery-method-meta">
+          <SourceBadge overridden={item.is_overridden} />
+        </div>
+      </div>
+      <label className="settings-switch delivery-method-switch" htmlFor={inputId}>
+        <input
+          id={inputId}
+          type="checkbox"
+          checked={enabled}
+          disabled={busy || graphDeliveryBlocked}
+          onChange={(event) => void toggle(event.target.checked)}
+          aria-describedby={error ? `${inputId}-error` : undefined}
+        />
+        <span aria-hidden="true" />
+        <strong>{busy ? "Saving..." : enabled ? "Enabled" : "Disabled"}</strong>
+      </label>
+      {graphDeliveryBlocked ? <p className="settings-warning">Enable Graph lookup first.</p> : null}
+      {error ? (
+        <p className="form-error" id={`${inputId}-error`}>
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function SettingsPage() {
   const { notify, session } = useAppContext();
   const [settings, setSettings] = useState<SettingItemOut[]>([]);
@@ -4251,7 +4405,6 @@ function SettingsPage() {
 
   const settingsByKey = useMemo(() => new Map(settings.map((item) => [item.key, item])), [settings]);
   const overrideCount = settings.filter((item) => item.is_overridden).length;
-  const deliverySettings = orderedSettings(DELIVERY_SETTING_KEYS, settingsByKey);
   const runtimeSettings = orderedSettings(RUNTIME_SETTING_KEYS, settingsByKey);
   const identitySettings = orderedSettings(ADVANCED_IDENTITY_SETTING_KEYS, settingsByKey);
   const overrideBadge = overrideCount > 0 ? `${overrideCount} ${overrideCount === 1 ? "override" : "overrides"}` : "All defaults";
@@ -4261,7 +4414,7 @@ function SettingsPage() {
       <PageIntro
         eyebrow="Configuration"
         title="Settings"
-        description="Control delivery behavior, runtime defaults and Microsoft identity values."
+        description="Manage runtime defaults and Microsoft identity values."
         actions={<StatusBadge label={overrideBadge} tone={overrideCount > 0 ? "warn" : "neutral"} />}
       />
       {loading ? (
@@ -4284,13 +4437,6 @@ function SettingsPage() {
       ) : (
         <div className="settings-page">
           <SettingsOverviewStrip settingsByKey={settingsByKey} overrideCount={overrideCount} />
-          <DeliveryControlsCard
-            settings={deliverySettings}
-            settingsByKey={settingsByKey}
-            csrfToken={csrfToken}
-            onChanged={refresh}
-            notify={notify}
-          />
           <RuntimeDefaultsCard
             settings={runtimeSettings}
             settingsByKey={settingsByKey}
@@ -4336,6 +4482,7 @@ function SettingsOverviewStrip({
   const clientConfigured = Boolean(settingValue(settingsByKey, "ms_app_client_id"));
   const secretConfigured = settingValue(settingsByKey, "ms_app_client_secret") === "configured";
   const identityReady = tenantConfigured && clientConfigured && secretConfigured;
+  const runtimeOverrideCount = RUNTIME_SETTING_KEYS.filter((key) => settingsByKey.get(key)?.is_overridden).length;
 
   return (
     <section className="settings-overview" aria-label="Runtime configuration overview">
@@ -4345,9 +4492,10 @@ function SettingsOverviewStrip({
         detail={overrideCount > 0 ? "Runtime overrides are applied immediately." : "All values inherit from environment defaults."}
       />
       <OverviewMetric
-        label="Features"
-        value={`${[settingEnabled(settingsByKey, "bot_framework_enabled"), settingEnabled(settingsByKey, "graph_lookup_enabled"), settingEnabled(settingsByKey, "graph_delivery_enabled")].filter(Boolean).length}/3 enabled`}
-        detail="Bot Framework, Graph lookup and delegated Graph delivery."
+        label="Runtime"
+        value={runtimeOverrideCount > 0 ? `${runtimeOverrideCount} overrides` : "Defaults"}
+        detail={runtimeOverrideCount > 0 ? "URL, retention or proxy values are overridden." : "Runtime values inherit from environment config."}
+        tone={runtimeOverrideCount > 0 ? "warn" : "neutral"}
       />
       <OverviewMetric
         label="Identity"
@@ -4376,31 +4524,6 @@ function OverviewMetric({
       <strong>{value}</strong>
       <p>{detail}</p>
     </div>
-  );
-}
-
-function DeliveryControlsCard({
-  csrfToken,
-  notify,
-  onChanged,
-  settings,
-  settingsByKey,
-}: SettingsCardProps) {
-  return (
-    <Card className="settings-card" title="Delivery" description="Primary delivery controls stay visible for quick operational changes.">
-      <div className="settings-feature-grid">
-        {settings.map((item) => (
-          <RuntimeSettingControl
-            key={item.key}
-            item={item}
-            csrfToken={csrfToken}
-            onChanged={onChanged}
-            notify={notify}
-            settingsByKey={settingsByKey}
-          />
-        ))}
-      </div>
-    </Card>
   );
 }
 
@@ -4597,12 +4720,13 @@ function RuntimeSettingControl({
   const label = meta?.label ?? item.label;
   const graphLookupEnabled = settingEnabled(settingsByKey, "graph_lookup_enabled");
   const dependencyWarning = item.key === "graph_delivery_enabled" && draft === "true" && !graphLookupEnabled;
+  const autoSavePending = item.type !== "secret" && canSave;
 
-  async function save() {
+  async function save(nextValue = draft) {
     setBusy(true);
     setError("");
     try {
-      await api.updateSetting(csrfToken, item.key, draft);
+      await api.updateSetting(csrfToken, item.key, nextValue);
       notify({ tone: "success", title: `${item.label} saved` });
       await onChanged();
     } catch (err) {
@@ -4610,6 +4734,23 @@ function RuntimeSettingControl({
     } finally {
       setBusy(false);
     }
+  }
+
+  function commitChoice(nextValue: string) {
+    setDraft(nextValue);
+    if (nextValue !== item.effective_value || (nextValue === "" && item.is_overridden)) void save(nextValue);
+  }
+
+  function handleAutoSaveBlur(event: FocusEvent<HTMLInputElement>) {
+    if (!autoSavePending || busy) return;
+    const nextTarget = event.relatedTarget;
+    const control = event.currentTarget.closest(".settings-control");
+    if (nextTarget && control?.contains(nextTarget as Node)) return;
+    void save(draft);
+  }
+
+  function blurOnEnter(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Enter") event.currentTarget.blur();
   }
 
   async function copyValue() {
@@ -4665,7 +4806,7 @@ function RuntimeSettingControl({
               checked={draft === "true"}
               disabled={busy}
               aria-describedby={error ? errorId : undefined}
-              onChange={(event) => setDraft(event.target.checked ? "true" : "false")}
+              onChange={(event) => commitChoice(event.target.checked ? "true" : "false")}
             />
             <span aria-hidden="true" />
             <strong>{draft === "true" ? "Enabled" : "Disabled"}</strong>
@@ -4680,7 +4821,7 @@ function RuntimeSettingControl({
                 role="radio"
                 aria-checked={draft === value}
                 disabled={busy}
-                onClick={() => setDraft(value)}
+                onClick={() => commitChoice(value)}
               >
                 {value}
               </button>
@@ -4725,6 +4866,8 @@ function RuntimeSettingControl({
               disabled={busy}
               aria-describedby={error ? errorId : undefined}
               onChange={(event) => setDraft(event.target.value)}
+              onBlur={handleAutoSaveBlur}
+              onKeyDown={blurOnEnter}
             />
             {meta?.unit ? <span className="settings-unit">{meta.unit}</span> : null}
           </div>
@@ -4737,6 +4880,8 @@ function RuntimeSettingControl({
               disabled={busy}
               aria-describedby={error ? errorId : undefined}
               onChange={(event) => setDraft(event.target.value)}
+              onBlur={handleAutoSaveBlur}
+              onKeyDown={blurOnEnter}
             />
             <button
               className="icon-button icon-button--tiny"
@@ -4754,6 +4899,7 @@ function RuntimeSettingControl({
         <div className="settings-control-footer">
           <div className="settings-source-row">
             <SourceBadge overridden={item.is_overridden} />
+            {autoSavePending ? <StatusBadge label="Unsaved" tone="warn" /> : null}
             {item.is_overridden ? (
               <span>
                 Default <code>{item.env_default || "-"}</code>
@@ -4772,7 +4918,7 @@ function RuntimeSettingControl({
                 Reset
               </button>
             ) : null}
-            {canSave ? (
+            {canSave && item.type === "secret" ? (
               <button className="primary-button secondary-button--small" type="button" disabled={busy} onClick={() => void save()}>
                 Save
               </button>
