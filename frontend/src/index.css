@@ -2374,27 +2374,48 @@ button:disabled {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-error-dot) 12%, transparent);
 }
 
-.delivery-inspector-modal {
-  width: min(100%, 620px);
+.modal-panel.delivery-inspector-modal {
+  width: min(100%, 640px);
 }
 
-.delivery-inspector-modal .modal-panel-header,
 .delivery-inspector-modal .modal-panel-body {
-  padding: var(--space-3);
+  padding: 0;
+}
+
+.delivery-inspector-modal .modal-panel-header {
+  padding: 18px var(--space-4) 16px;
+}
+
+.delivery-inspector-modal .modal-panel-header h2 {
+  font-size: 1.42rem;
+  line-height: 1.15;
+}
+
+.delivery-inspector-modal .modal-panel-body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .delivery-inspector-modal .modal-panel-desc {
+  flex: none;
+  padding: 14px var(--space-4) 0;
   font-size: 0.8125rem;
 }
 
 .delivery-inspector-body {
+  flex: 1 1 auto;
+  min-height: 0;
   display: grid;
-  gap: var(--space-3);
+  gap: var(--space-4);
+  padding: var(--space-4);
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .delivery-inspector-section {
   display: grid;
-  gap: var(--space-2);
+  gap: 10px;
 }
 
 .delivery-inspector-section h3,
@@ -2413,21 +2434,107 @@ button:disabled {
 .delivery-inspector-section p {
   color: var(--muted);
   font-size: 0.8125rem;
+  line-height: 1.35;
 }
 
 .delivery-inspector-modal .status-check-list,
 .delivery-inspector-modal .credential-check-grid {
-  gap: var(--space-1);
+  gap: 0;
 }
 
 .delivery-inspector-modal .status-check-row,
 .delivery-inspector-modal .credential-check {
   min-height: 34px;
-  padding-block: var(--space-1);
+  padding-block: 7px;
 }
 
 .delivery-inspector-modal .advanced-definition-list {
-  row-gap: var(--space-2);
+  margin: 0;
+  grid-template-columns: minmax(132px, 0.42fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 9px var(--space-4);
+}
+
+.delivery-inspector-modal .advanced-definition-list dt,
+.delivery-inspector-modal .advanced-definition-list dd {
+  min-width: 0;
+  line-height: 1.38;
+}
+
+.delivery-inspector-modal .advanced-definition-list dt {
+  color: var(--ink-secondary);
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.delivery-inspector-modal .advanced-definition-list dd {
+  color: var(--ink);
+  font-size: 0.86rem;
+}
+
+.delivery-inspector-modal .status-detail-facts {
+  grid-template-columns: minmax(132px, 0.42fr) minmax(0, 1fr);
+}
+
+.delivery-inspector-modal .credential-check-grid {
+  grid-template-columns: 1fr;
+}
+
+.delivery-inspector-modal .credential-check {
+  display: grid;
+  grid-template-columns: minmax(132px, 0.42fr) minmax(0, 1fr);
+  align-items: center;
+  justify-content: stretch;
+  gap: var(--space-4);
+}
+
+.delivery-inspector-modal .credential-check span,
+.delivery-inspector-modal .credential-check strong {
+  font-size: 0.84rem;
+  line-height: 1.35;
+}
+
+.delivery-inspector-modal .credential-check strong {
+  justify-self: start;
+}
+
+.delivery-inspector-modal .status-detail-facts {
+  gap: 8px var(--space-4);
+}
+
+.delivery-inspector-modal .status-detail-facts dt,
+.delivery-inspector-modal .status-detail-facts dd {
+  font-size: 0.84rem;
+  line-height: 1.35;
+}
+
+.delivery-inspector-modal .permission-badge-list {
+  gap: var(--space-1);
+}
+
+.delivery-inspector-modal .permission-badge {
+  min-height: 24px;
+  font-size: 0.78rem;
+}
+
+.delivery-inspector-modal .diagnostic-value {
+  width: 100%;
+  max-width: 100%;
+  display: inline-grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.delivery-inspector-modal .diagnostic-value code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.delivery-inspector-modal .modal-panel-body .form-actions {
+  flex: none;
+  position: static;
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
 }
 
 @container delivery-card (max-width: 1060px) {
