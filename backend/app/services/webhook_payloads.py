@@ -9,6 +9,10 @@ class WebhookPayloadError(ValueError):
     pass
 
 
+MAX_JSON_DEPTH = 80
+MAX_JSON_NODES = 5000
+
+
 @dataclass(frozen=True)
 class NormalizedMessage:
     title: str
@@ -45,6 +49,9 @@ def normalize_webhook_payload(payload: bytes, content_type: str | None) -> Norma
             parsed = json.loads(text)
         except json.JSONDecodeError as exc:
             raise WebhookPayloadError("Webhook payload is not valid JSON") from exc
+        except RecursionError as exc:
+            raise WebhookPayloadError("Webhook JSON payload is too deeply nested") from exc
+        _validate_json_complexity(parsed)
         return _normalize_json(parsed)
 
     return NormalizedMessage(
@@ -94,6 +101,22 @@ def _normalize_json(value: Any) -> NormalizedMessage:
         status=truncate_text(status, 40),
         raw_type=truncate_text(raw_type, 80),
     )
+
+
+def _validate_json_complexity(value: Any) -> None:
+    nodes = 0
+    stack: list[tuple[Any, int]] = [(value, 0)]
+    while stack:
+        current, depth = stack.pop()
+        nodes += 1
+        if depth > MAX_JSON_DEPTH:
+            raise WebhookPayloadError("Webhook JSON payload is too deeply nested")
+        if nodes > MAX_JSON_NODES:
+            raise WebhookPayloadError("Webhook JSON payload is too complex")
+        if isinstance(current, dict):
+            stack.extend((item, depth + 1) for item in current.values())
+        elif isinstance(current, list):
+            stack.extend((item, depth + 1) for item in current)
 
 
 def _is_bot_activity_with_attachments(value: dict[str, Any]) -> bool:

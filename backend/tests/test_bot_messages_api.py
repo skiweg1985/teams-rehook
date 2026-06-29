@@ -173,6 +173,40 @@ def test_bot_message_endpoint_normalizes_channel_message_conversation_id():
     db.close()
 
 
+def test_bot_message_endpoint_captures_group_chat_as_chat_reference():
+    client, db = make_client()
+    activity = {
+        "type": "message",
+        "serviceUrl": "https://smba.trafficmanager.net/emea/tenant-id/",
+        "conversation": {
+            "id": "19:group-chat@thread.v2",
+            "conversationType": "groupChat",
+            "isGroup": True,
+            "tenantId": "tenant-id",
+        },
+        "from": {"id": "29:user", "name": "Ada Admin", "aadObjectId": "aad-user-id"},
+        "recipient": {"id": "28:bot"},
+        "channelData": {"tenant": {"id": "tenant-id"}},
+    }
+
+    response = client.post("/api/v1/bot/messages", json=activity)
+
+    assert response.status_code == 200
+    event = db.scalar(select(BotActivityEvent))
+    reference = db.scalar(select(BotConversationReference))
+    assert event is not None
+    assert event.conversation_type == "groupchat"
+    assert event.conversation_id == "19:group-chat@thread.v2"
+    assert event.team_id == ""
+    assert event.channel_id == ""
+    assert reference is not None
+    assert reference.scope == "chat"
+    assert reference.conversation_type == "groupchat"
+    assert reference.conversation_id == "19:group-chat@thread.v2"
+    assert reference.user_name == "Ada Admin"
+    db.close()
+
+
 def test_register_command_creates_webhook_route_from_current_conversation(monkeypatch):
     sent_replies: list[dict] = []
 
@@ -225,6 +259,41 @@ def test_register_command_creates_webhook_route_from_current_conversation(monkey
     assert_copy_webhook_action(card, expected_webhook_url(route.route_token))
     assert any(action["type"] == "Action.ToggleVisibility" for action in card["actions"])
     assert any(item.get("id") == "technicalDetails" and item.get("isVisible") is False for item in card["body"])
+    db.close()
+
+
+def test_register_command_treats_group_chat_as_chat_target(monkeypatch):
+    monkeypatch.setattr("app.routers.bot_messages.send_bot_activity", lambda **kwargs: None)
+    client, db = make_client()
+    activity = {
+        "type": "message",
+        "text": "<at>Relay Bot</at> register Ops Chat",
+        "serviceUrl": "https://smba.trafficmanager.net/emea/tenant-id/",
+        "conversation": {
+            "id": "19:group-chat@thread.v2",
+            "conversationType": "groupChat",
+            "isGroup": True,
+            "tenantId": "tenant-id",
+        },
+        "from": {"id": "29:user", "name": "Ada Admin", "aadObjectId": "aad-user-id"},
+        "recipient": {"id": "28:bot"},
+        "channelData": {"tenant": {"id": "tenant-id"}},
+    }
+
+    response = client.post("/api/v1/bot/messages", json=activity)
+
+    assert response.status_code == 200
+    route = db.scalar(select(WebhookRoute).where(WebhookRoute.name == "Ops Chat"))
+    reference = db.scalar(select(BotConversationReference))
+    assert reference is not None
+    assert reference.scope == "chat"
+    assert route is not None
+    assert route.target_name == "Group chat"
+    assert route.bot_conversation_id == "19:group-chat@thread.v2"
+    assert route.graph_target_kind == "chat"
+    assert route.graph_target_id == "19:group-chat@thread.v2"
+    assert route.graph_channel_id == ""
+    assert route.bot_registered_by_id == "aad-user-id"
     db.close()
 
 

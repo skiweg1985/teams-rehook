@@ -161,10 +161,14 @@ def _reference_target_name(reference: BotConversationReference) -> str:
         return _clip(reference.channel_name, 200)
     if reference.team_name:
         return _clip(reference.team_name, 200)
+    if reference.scope == "chat" or reference.conversation_type.lower() == "groupchat":
+        return "Group chat"
     return _clip(reference.user_name or reference.graph_user_id or reference.user_id or reference.conversation_id, 200)
 
 
 def _reference_graph_kind(reference: BotConversationReference) -> str:
+    if reference.scope == "chat" or reference.conversation_type.lower() == "groupchat":
+        return "chat"
     if reference.scope == "channel" or reference.channel_id:
         return "channel"
     if reference.scope == "team" or reference.graph_team_id:
@@ -178,6 +182,8 @@ def _reference_graph_target_id(reference: BotConversationReference) -> str:
         return reference.channel_id
     if kind == "team":
         return reference.graph_team_id
+    if kind == "chat":
+        return reference.conversation_id
     return reference.graph_user_id or reference.user_id
 
 
@@ -208,6 +214,7 @@ def _extract_bot_activity(event: BotActivityEvent, raw: dict[str, Any]) -> dict[
         "graph_team_id": _string(team.get("aadGroupId")) or event.graph_team_id,
         "channel_id": channel_id or event.channel_id,
         "conversation_type": _clip(conversation_type or event.conversation_type, 40),
+        "is_group": _bool_string(conversation.get("isGroup")),
         "team_name": _clip(_string(team.get("name")) or event.team_name, 200),
         "channel_name": _clip(
             _string(channel.get("name"))
@@ -229,6 +236,8 @@ def _scope_for(captured: dict[str, str]) -> str:
         return "channel"
     if captured["team_id"]:
         return "team"
+    if _is_group_conversation(captured):
+        return "chat"
     return "user"
 
 
@@ -254,6 +263,14 @@ def _dict(value: Any) -> dict[str, Any]:
 
 def _string(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
+
+
+def _bool_string(value: Any) -> str:
+    return "true" if value is True else ""
+
+
+def _is_group_conversation(captured: dict[str, str]) -> bool:
+    return captured.get("is_group") == "true" or captured.get("conversation_type", "").lower() in {"groupchat", "group", "chat"}
 
 
 def _ensure_additive_schema() -> None:

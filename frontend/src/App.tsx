@@ -108,6 +108,7 @@ const DELIVERY_STATUS_FILTERS: Array<{ value: DeliveryStatusFilter; label: strin
   { value: "delivered", label: "Delivered" },
   { value: "failed", label: "Failed" },
   { value: "rejected", label: "Rejected" },
+  { value: "pending", label: "Pending" },
 ];
 
 const PAYLOAD_ACCENTS: Array<{ value: PayloadAccent; label: string }> = [
@@ -2316,7 +2317,7 @@ function BotConversationReferencesModal({
               <div className="conversation-reference-main">
                 <div className="conversation-reference-heading">
                   <h3>{referenceTitle(reference)}</h3>
-                  <StatusBadge label={reference.scope || "unknown"} tone={reference.scope === "channel" ? "success" : "warn"} />
+                  <StatusBadge label={reference.scope || "unknown"} tone={reference.scope === "channel" || reference.scope === "chat" ? "success" : reference.scope === "team" ? "neutral" : "warn"} />
                 </div>
                 <p className="conversation-reference-meta">
                   {reference.user_name ? <span>{reference.user_name}</span> : null}
@@ -2343,6 +2344,7 @@ function referenceTitle(reference: BotConversationReferenceOut): string {
   if (reference.team_name && reference.channel_name) return `${reference.team_name} / ${reference.channel_name}`;
   if (reference.channel_name) return reference.channel_name;
   if (reference.team_name) return reference.team_name;
+  if (reference.scope === "chat" || reference.conversation_type.toLowerCase() === "groupchat") return "Group chat";
   if (reference.user_name) return reference.user_name;
   return reference.conversation_type === "personal" ? "Personal chat" : "Teams conversation";
 }
@@ -2352,12 +2354,14 @@ function referenceSubtitle(reference: BotConversationReferenceOut): string {
     reference.scope || reference.conversation_type || "conversation",
     `seen ${formatRelativeTime(reference.last_seen_at)}`,
     reference.channel_id ? `channel ${shortId(reference.channel_id)}` : "",
+    reference.scope === "chat" || reference.conversation_type.toLowerCase() === "groupchat" ? `chat ${shortId(reference.conversation_id)}` : "",
     reference.graph_user_id || reference.user_id ? `user ${shortId(reference.graph_user_id || reference.user_id)}` : "",
   ].filter(Boolean);
   return parts.join(" · ");
 }
 
 function referenceGraphKind(reference: BotConversationReferenceOut): GraphTargetKind | "" {
+  if (reference.scope === "chat" || reference.conversation_type.toLowerCase() === "groupchat") return "chat";
   if (reference.scope === "channel" || reference.channel_id) return "channel";
   if (reference.scope === "team" || reference.graph_team_id) return "team";
   if (reference.scope === "user" || reference.graph_user_id || reference.user_id) return "user";
@@ -2368,6 +2372,7 @@ function referenceGraphTargetId(reference: BotConversationReferenceOut): string 
   const kind = referenceGraphKind(reference);
   if (kind === "channel") return reference.channel_id;
   if (kind === "team") return reference.graph_team_id || reference.team_id;
+  if (kind === "chat") return reference.conversation_id;
   if (kind === "user") return reference.graph_user_id || reference.user_id;
   return "";
 }
@@ -3246,22 +3251,27 @@ function WebhookDeliveryLogsModal({ route, onClose }: { route: WebhookRouteOut; 
   const [selectedEventId, setSelectedEventId] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const refreshSequence = useRef(0);
   const selectedEvent = useMemo(
     () => events.find((event) => event.id === selectedEventId) ?? events[0] ?? null,
     [events, selectedEventId],
   );
 
   const refresh = useCallback(async () => {
+    const requestId = refreshSequence.current + 1;
+    refreshSequence.current = requestId;
     setLoading(true);
     setError("");
     try {
       const rows = await api.webhookRouteDeliveries(route.id, statusFilter === "all" ? undefined : statusFilter);
+      if (refreshSequence.current !== requestId) return;
       setEvents(rows);
       setSelectedEventId(rows[0]?.id ?? "");
     } catch (err) {
+      if (refreshSequence.current !== requestId) return;
       setError(isApiError(err) ? err.message : "Delivery logs could not be loaded.");
     } finally {
-      setLoading(false);
+      if (refreshSequence.current === requestId) setLoading(false);
     }
   }, [route.id, statusFilter]);
 
@@ -3320,6 +3330,7 @@ function WebhookDeliveryLogsModal({ route, onClose }: { route: WebhookRouteOut; 
 function DeliveryEventStatusBadge({ status }: { status: WebhookDeliveryEventOut["status"] }) {
   if (status === "delivered") return <StatusBadge label="Delivered" tone="success" />;
   if (status === "failed") return <StatusBadge label="Failed" tone="danger" />;
+  if (status === "pending") return <StatusBadge label="Pending" tone="neutral" />;
   return <StatusBadge label="Rejected" tone="warn" />;
 }
 
@@ -5517,6 +5528,7 @@ function MessageLogsPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const [error, setError] = useState("");
+  const refreshSequence = useRef(0);
   const pageSize = 25;
   const deliveryEvents = deliveryPage?.items ?? [];
   const total = deliveryPage?.total ?? 0;
@@ -5533,6 +5545,8 @@ function MessageLogsPage() {
   }, [searchText]);
 
   const refresh = useCallback(async () => {
+    const requestId = refreshSequence.current + 1;
+    refreshSequence.current = requestId;
     setLoading(true);
     setError("");
     try {
@@ -5546,15 +5560,17 @@ function MessageLogsPage() {
         }),
         api.webhookRoutes(),
       ]);
+      if (refreshSequence.current !== requestId) return;
       setDeliveryPage(nextDeliveryPage);
       setRoutes(nextRoutes);
       setSelectedEventId((current) =>
         nextDeliveryPage.items.some((event) => event.id === current) ? current : "",
       );
     } catch (err) {
+      if (refreshSequence.current !== requestId) return;
       setError(isApiError(err) ? err.message : "Logs could not be loaded.");
     } finally {
-      setLoading(false);
+      if (refreshSequence.current === requestId) setLoading(false);
     }
   }, [page, routeFilter, searchQuery, statusFilter]);
 

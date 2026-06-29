@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.settings_overrides import get_effective_settings
@@ -219,9 +220,18 @@ def _get_or_create_bucket(
         window_started_at=now,
         last_seen_at=now,
     )
-    db.add(bucket)
-    db.flush()
-    return bucket
+    try:
+        with db.begin_nested():
+            db.add(bucket)
+            db.flush()
+        return bucket
+    except IntegrityError:
+        if bucket in db:
+            db.expunge(bucket)
+        existing = _find_bucket(db, client_host=client_host, scope=scope, route_token_hash=route_token_hash)
+        if existing is not None:
+            return existing
+        raise
 
 
 def _find_bucket(
@@ -233,7 +243,7 @@ def _find_bucket(
 ) -> WebhookAbuseBucket | None:
     client_hash = _client_hash(client_host)
     key = _bucket_key(scope, client_hash, route_token_hash)
-    return db.scalar(select(WebhookAbuseBucket).where(WebhookAbuseBucket.bucket_key == key))
+    return db.scalar(select(WebhookAbuseBucket).where(WebhookAbuseBucket.bucket_key == key).with_for_update())
 
 
 def _bucket_scopes(route_token_hash: str | None) -> list[tuple[str, str | None]]:
