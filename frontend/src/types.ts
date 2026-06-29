@@ -383,6 +383,23 @@ export type AdminReadinessOut = {
   };
 };
 
+export type DeliveryAuthRefreshStatus = "refreshed" | "cleared" | "skipped" | "failed";
+
+export type DeliveryAuthRefreshComponentOut = {
+  status: DeliveryAuthRefreshStatus;
+  message: string;
+};
+
+export type DeliveryAuthRefreshOut = {
+  ok: boolean;
+  refreshed_at: string;
+  bot_delivery: DeliveryAuthRefreshComponentOut;
+  graph_lookup: DeliveryAuthRefreshComponentOut;
+  graph_delivery: DeliveryAuthRefreshComponentOut;
+  bot_inbound_auth: DeliveryAuthRefreshComponentOut;
+  readiness: AdminReadinessOut;
+};
+
 export type OAuthDiagnosticsOut = {
   credential_source: string;
   tenant_id: string;

@@ -16,7 +16,7 @@ from app.core.settings_overrides import load_overrides, reset_override_state
 from app.core.encrypted_secrets import encrypt_secret
 from app.database import Base, get_db
 from app.main import create_app
-from app.models import GraphDelegatedCredential, Organization, User
+from app.models import AuditEvent, GraphDelegatedCredential, Organization, User
 from app.security import hash_secret
 from app.schemas import OAuthAppDiagnosticsOut, OAuthTenantDiagnosticsOut
 from app.services import graph_delegated_auth
@@ -678,3 +678,136 @@ def test_graph_delivery_oauth_disconnect_removes_credential(db_session: Session,
 
     assert response.status_code == 204
     assert db_session.query(GraphDelegatedCredential).count() == 0
+
+
+def test_delivery_auth_refresh_requires_csrf(db_session: Session, monkeypatch: pytest.MonkeyPatch):
+    with make_client(db_session, monkeypatch) as client:
+        login_admin(client)
+        response = client.post("/api/v1/admin/delivery-auth/refresh")
+
+    assert response.status_code == 403
+
+
+def test_delivery_auth_refresh_resets_enabled_token_managers_and_returns_readiness(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    add_delegated_credential(db_session)
+    calls = {"bot": 0, "graph": 0, "delegated": 0}
+
+    def bot_token(settings):
+        calls["bot"] += 1
+        return "bot-token", 3600
+
+    def graph_token(settings):
+        calls["graph"] += 1
+        return "graph-token", 3600
+
+    def delegated_token(**kwargs):
+        calls["delegated"] += 1
+        return delegated_token_response()
+
+    monkeypatch.setattr("app.services.teams_bot.fetch_botframework_token", bot_token)
+    monkeypatch.setattr("app.services.graph_targets.fetch_graph_token", graph_token)
+    monkeypatch.setattr(graph_delegated_auth, "_request_token", delegated_token)
+    monkeypatch.setattr("app.routers.admin._fetch_oauth_token", lambda **kwargs: fake_token_response(kwargs["scope"]))
+    monkeypatch.setattr("app.routers.admin._metadata_from_graph_token", lambda access_token, client_id: metadata_pair())
+
+    with make_client(
+        db_session,
+        monkeypatch,
+        BOT_DELIVERY_MODE="real",
+        MS_APP_TENANT_ID="tenant",
+        MS_APP_CLIENT_ID="client",
+        MS_APP_CLIENT_SECRET="secret",
+    ) as client:
+        csrf_token = login_admin(client)
+        response = client.post("/api/v1/admin/delivery-auth/refresh", headers={"X-CSRF-Token": csrf_token})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["bot_delivery"]["status"] == "refreshed"
+    assert body["graph_lookup"]["status"] == "refreshed"
+    assert body["graph_delivery"]["status"] == "refreshed"
+    assert body["bot_inbound_auth"]["status"] == "cleared"
+    assert body["readiness"]["bot"]["ready"] is True
+    assert body["readiness"]["graph_lookup"]["ready"] is True
+    assert body["readiness"]["graph_delivery"]["ready"] is True
+    assert calls["bot"] == 1
+    assert calls["graph"] == 1
+    assert calls["delegated"] >= 1
+    assert "bot-token" not in json.dumps(body)
+    assert "graph-token" not in json.dumps(body)
+    assert "refresh-token" not in json.dumps(body)
+    audit = db_session.query(AuditEvent).filter_by(action="delivery_auth.tokens_refreshed").one()
+    assert json.loads(audit.metadata_json)["components"] == {
+        "bot_delivery": "refreshed",
+        "graph_lookup": "refreshed",
+        "graph_delivery": "refreshed",
+        "bot_inbound_auth": "cleared",
+    }
+
+
+def test_delivery_auth_refresh_skips_disabled_and_mock_components(db_session: Session, monkeypatch: pytest.MonkeyPatch):
+    with make_client(
+        db_session,
+        monkeypatch,
+        BOT_DELIVERY_MODE="mock",
+        GRAPH_LOOKUP_ENABLED="false",
+        GRAPH_DELIVERY_ENABLED="false",
+    ) as client:
+        csrf_token = login_admin(client)
+        response = client.post("/api/v1/admin/delivery-auth/refresh", headers={"X-CSRF-Token": csrf_token})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["bot_delivery"]["status"] == "skipped"
+    assert body["graph_lookup"]["status"] == "skipped"
+    assert body["graph_delivery"]["status"] == "skipped"
+    assert body["bot_inbound_auth"]["status"] == "cleared"
+    assert body["readiness"]["bot"]["auth_status"] == "mock"
+    assert body["readiness"]["graph_lookup"]["auth_status"] == "disabled"
+    assert body["readiness"]["graph_delivery"]["auth_status"] == "disabled"
+
+
+def test_delivery_auth_refresh_reports_sanitized_failures(db_session: Session, monkeypatch: pytest.MonkeyPatch):
+    add_delegated_credential(db_session)
+
+    def bot_token(settings):
+        raise BotDeliveryError("raw bot provider body with bot-secret")
+
+    def graph_token(settings):
+        raise GraphRequestError("raw graph provider body with graph-secret")
+
+    def delegated_token(**kwargs):
+        raise GraphDelegatedAuthError("raw delegated provider body with delegated-secret")
+
+    monkeypatch.setattr("app.services.teams_bot.fetch_botframework_token", bot_token)
+    monkeypatch.setattr("app.services.graph_targets.fetch_graph_token", graph_token)
+    monkeypatch.setattr(graph_delegated_auth, "_request_token", delegated_token)
+    monkeypatch.setattr("app.routers.admin._fetch_oauth_token", lambda **kwargs: fake_token_response(kwargs["scope"]))
+    monkeypatch.setattr("app.routers.admin._metadata_from_graph_token", lambda access_token, client_id: metadata_pair())
+
+    with make_client(
+        db_session,
+        monkeypatch,
+        BOT_DELIVERY_MODE="real",
+        MS_APP_TENANT_ID="tenant",
+        MS_APP_CLIENT_ID="client",
+        MS_APP_CLIENT_SECRET="secret",
+    ) as client:
+        csrf_token = login_admin(client)
+        response = client.post("/api/v1/admin/delivery-auth/refresh", headers={"X-CSRF-Token": csrf_token})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is False
+    assert body["bot_delivery"]["status"] == "failed"
+    assert body["graph_lookup"]["status"] == "failed"
+    assert body["graph_delivery"]["status"] == "failed"
+    encoded = json.dumps(body)
+    assert "bot-secret" not in encoded
+    assert "graph-secret" not in encoded
+    assert "delegated-secret" not in encoded

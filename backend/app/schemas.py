@@ -500,6 +500,24 @@ class AdminReadinessOut(BaseModel):
     runtime: RuntimeReadinessOut
 
 
+DeliveryAuthRefreshStatus = Literal["refreshed", "cleared", "skipped", "failed"]
+
+
+class DeliveryAuthRefreshComponentOut(BaseModel):
+    status: DeliveryAuthRefreshStatus
+    message: str
+
+
+class DeliveryAuthRefreshOut(BaseModel):
+    ok: bool
+    refreshed_at: datetime
+    bot_delivery: DeliveryAuthRefreshComponentOut
+    graph_lookup: DeliveryAuthRefreshComponentOut
+    graph_delivery: DeliveryAuthRefreshComponentOut
+    bot_inbound_auth: DeliveryAuthRefreshComponentOut
+    readiness: AdminReadinessOut
+
+
 class SettingItemOut(BaseModel):
     key: str
     label: str

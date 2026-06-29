@@ -27,6 +27,8 @@ from app.schemas import (
     AuditEventOut,
     BotReadinessOut,
     ClientEventIn,
+    DeliveryAuthRefreshComponentOut,
+    DeliveryAuthRefreshOut,
     EventLogEntryOut,
     EventLogEntryPageOut,
     GraphDeliveryOAuthStartOut,
@@ -49,6 +51,7 @@ from app.schemas import (
     WebhookAbuseCleanupOut,
 )
 from app.security import ensure_utc, hash_secret, loads_json, utcnow
+from app.services.bot_framework_auth import reset_bot_framework_auth_cache
 from app.services.event_log import emit_event, event_from_entry
 from app.services.graph_delegated_auth import (
     DEFAULT_DELEGATED_GRAPH_SCOPES,
@@ -59,9 +62,9 @@ from app.services.graph_delegated_auth import (
     exchange_authorization_code,
     refresh_delegated_access_token,
 )
-from app.services.graph_targets import GraphConfigError, GraphRequestError
+from app.services.graph_targets import GraphConfigError, GraphRequestError, get_graph_token_manager, reset_graph_token_manager
 from app.services.log_retention import cleanup_log_events
-from app.services.teams_bot import BotDeliveryError
+from app.services.teams_bot import BotDeliveryError, get_token_manager, reset_bot_token_manager
 from app.services.webhook_abuse import cleanup_buckets, unblock_bucket
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -391,7 +394,48 @@ def _record_session_revocation(db: Session, admin: User, user: User, revoked_ses
 
 @router.get("/readiness", response_model=AdminReadinessOut, dependencies=[Depends(require_csrf)])
 def readiness(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    return _admin_readiness(db, admin)
+
+
+@router.post("/delivery-auth/refresh", response_model=DeliveryAuthRefreshOut, dependencies=[Depends(require_csrf)])
+def refresh_delivery_auth(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     settings = get_effective_settings()
+    refreshed_at = utcnow()
+    bot_delivery = _refresh_bot_delivery_token(settings)
+    graph_lookup = _refresh_graph_lookup_token(settings)
+    graph_delivery = _refresh_graph_delivery_token(db, admin.organization_id, settings)
+    bot_inbound_auth = _refresh_bot_inbound_auth_cache()
+    components = {
+        "bot_delivery": bot_delivery,
+        "graph_lookup": graph_lookup,
+        "graph_delivery": graph_delivery,
+        "bot_inbound_auth": bot_inbound_auth,
+    }
+    record_audit(
+        db,
+        action="delivery_auth.tokens_refreshed",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata={
+            "components": {key: value.status for key, value in components.items()},
+        },
+    )
+    readiness_out = _admin_readiness(db, admin, settings=settings)
+    db.commit()
+    return DeliveryAuthRefreshOut(
+        ok=not any(component.status == "failed" for component in components.values()),
+        refreshed_at=refreshed_at,
+        bot_delivery=bot_delivery,
+        graph_lookup=graph_lookup,
+        graph_delivery=graph_delivery,
+        bot_inbound_auth=bot_inbound_auth,
+        readiness=readiness_out,
+    )
+
+
+def _admin_readiness(db: Session, admin: User, settings=None) -> AdminReadinessOut:
+    settings = settings or get_effective_settings()
     delivery_mode = settings.bot_delivery_mode_normalized
     bot = _bot_readiness(settings, delivery_mode) if settings.bot_framework_enabled else _disabled_bot_readiness(settings, delivery_mode)
     graph_lookup = _graph_lookup_readiness(settings) if settings.graph_lookup_enabled else _disabled_graph_lookup_readiness(settings)
@@ -427,6 +471,79 @@ def readiness(admin: User = Depends(require_admin), db: Session = Depends(get_db
             settings_encryption_ready=bool(settings.settings_enc_key.strip()),
         ),
     )
+
+
+def _refresh_bot_delivery_token(settings) -> DeliveryAuthRefreshComponentOut:
+    reset_bot_token_manager()
+    if not settings.bot_framework_enabled:
+        return DeliveryAuthRefreshComponentOut(status="skipped", message="Bot Framework delivery is disabled by feature policy.")
+    if settings.bot_delivery_mode_normalized != "real":
+        return DeliveryAuthRefreshComponentOut(status="skipped", message="Bot Framework delivery is in mock mode; no delivery token is requested.")
+    try:
+        get_token_manager().get_token()
+    except BotDeliveryError:
+        return DeliveryAuthRefreshComponentOut(
+            status="failed",
+            message="Bot Framework delivery token refresh failed. Check tenant ID, client ID, client secret and app permissions.",
+        )
+    return DeliveryAuthRefreshComponentOut(status="refreshed", message="Bot Framework delivery token was refreshed.")
+
+
+def _refresh_graph_lookup_token(settings) -> DeliveryAuthRefreshComponentOut:
+    reset_graph_token_manager()
+    if not settings.graph_lookup_enabled:
+        return DeliveryAuthRefreshComponentOut(status="skipped", message="Microsoft Graph lookup is disabled by feature policy.")
+    try:
+        get_graph_token_manager().get_token()
+    except GraphConfigError:
+        return DeliveryAuthRefreshComponentOut(
+            status="failed",
+            message="Microsoft Graph lookup token refresh failed because app credentials are incomplete.",
+        )
+    except GraphRequestError:
+        return DeliveryAuthRefreshComponentOut(
+            status="failed",
+            message="Microsoft Graph lookup token refresh failed. Check credentials, tenant and app permissions.",
+        )
+    return DeliveryAuthRefreshComponentOut(status="refreshed", message="Microsoft Graph lookup token was refreshed.")
+
+
+def _refresh_graph_delivery_token(db: Session, organization_id: str, settings) -> DeliveryAuthRefreshComponentOut:
+    if not settings.graph_delivery_enabled:
+        return DeliveryAuthRefreshComponentOut(status="skipped", message="Delegated Graph delivery is disabled by feature policy.")
+    if not settings.graph_lookup_enabled:
+        return DeliveryAuthRefreshComponentOut(status="skipped", message="Delegated Graph delivery is disabled because Graph lookup is disabled.")
+    diagnostics = diagnostics_for_organization(db, organization_id)
+    if not diagnostics.configured:
+        return DeliveryAuthRefreshComponentOut(status="skipped", message="Delegated Graph delivery has no connected service user.")
+    try:
+        refresh_delegated_access_token(
+            db,
+            organization_id=organization_id,
+            settings=settings,
+            scopes=DEFAULT_DELEGATED_GRAPH_SCOPES,
+        )
+    except GraphDelegatedConfigError:
+        return DeliveryAuthRefreshComponentOut(
+            status="failed",
+            message="Delegated Graph delivery token refresh failed because app registration settings are incomplete.",
+        )
+    except HTTPException as exc:
+        detail = str(exc.detail)
+        if "SETTINGS_ENC_KEY" in detail:
+            return DeliveryAuthRefreshComponentOut(status="failed", message=detail)
+        raise
+    except GraphDelegatedAuthError:
+        return DeliveryAuthRefreshComponentOut(
+            status="failed",
+            message="Delegated Graph delivery token refresh failed. Reconnect the service user if the token is expired or revoked.",
+        )
+    return DeliveryAuthRefreshComponentOut(status="refreshed", message="Delegated Graph delivery token was refreshed.")
+
+
+def _refresh_bot_inbound_auth_cache() -> DeliveryAuthRefreshComponentOut:
+    reset_bot_framework_auth_cache()
+    return DeliveryAuthRefreshComponentOut(status="cleared", message="Bot Framework inbound authentication signing-key cache was cleared.")
 
 
 def _graph_delivery_redirect_uri(settings) -> str:

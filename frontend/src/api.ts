@@ -3,6 +3,7 @@ import type {
   ApiError,
   AuditEventOut,
   BotConversationReferenceOut,
+  DeliveryAuthRefreshOut,
   EventLogEntryPageOut,
   FirstAdminCreate,
   GraphDeliveryOAuthStartOut,
@@ -173,6 +174,12 @@ export const api = {
   },
   adminReadiness(csrfToken: string) {
     return request<AdminReadinessOut>("/api/v1/admin/readiness", { csrfToken });
+  },
+  refreshDeliveryAuth(csrfToken: string) {
+    return request<DeliveryAuthRefreshOut>("/api/v1/admin/delivery-auth/refresh", {
+      method: "POST",
+      csrfToken,
+    });
   },
   adminSettings(csrfToken: string) {
     return request<SettingItemOut[]>("/api/v1/admin/settings", { csrfToken });

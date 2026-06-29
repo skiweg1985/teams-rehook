@@ -52,6 +52,7 @@ import type {
   AuditEventOut,
   BotConversationReferenceOut,
   ClientIpAccessMode,
+  DeliveryAuthRefreshOut,
   DeliveryBackend,
   EventLogEntryOut,
   EventLogEntryPageOut,
@@ -4054,6 +4055,7 @@ function StatusPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [graphOAuthBusy, setGraphOAuthBusy] = useState(false);
+  const [authRefreshBusy, setAuthRefreshBusy] = useState(false);
   const [selectedComponentId, setSelectedComponentId] = useState("");
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
 
@@ -4104,6 +4106,24 @@ function StatusPage() {
     }
   }
 
+  async function refreshDeliveryAuth() {
+    setAuthRefreshBusy(true);
+    setError("");
+    try {
+      const result = await api.refreshDeliveryAuth(csrfToken);
+      setReadiness(result.readiness);
+      notify({
+        tone: result.ok ? deliveryAuthRefreshToastTone(result) : "error",
+        title: result.ok ? "Auth tokens refreshed" : "Auth refresh needs attention",
+        description: deliveryAuthRefreshToastDescription(result),
+      });
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Delivery auth tokens could not be refreshed.");
+    } finally {
+      setAuthRefreshBusy(false);
+    }
+  }
+
   const integrationViews = readiness
     ? [
         buildBotIntegrationView(readiness, copyDiagnosticValue),
@@ -4122,7 +4142,23 @@ function StatusPage() {
         eyebrow="Operations"
         title="Status"
         description="Production readiness, delivery paths and diagnostics for Teams Rehook."
-        actions={readiness ? <StatusBadge label={overallLabel} tone={overallTone} /> : null}
+        actions={
+          readiness ? (
+            <div className="row-actions">
+              <button
+                className="secondary-button secondary-button--small button-with-icon"
+                type="button"
+                onClick={() => void refreshDeliveryAuth()}
+                disabled={authRefreshBusy}
+                aria-busy={authRefreshBusy}
+              >
+                <RefreshCw aria-hidden="true" className={classNames("button-icon", authRefreshBusy && "button-icon--spin")} focusable="false" />
+                {authRefreshBusy ? "Refreshing..." : "Refresh auth tokens"}
+              </button>
+              <StatusBadge label={overallLabel} tone={overallTone} />
+            </div>
+          ) : null
+        }
       />
       {loading ? (
         <Card>
@@ -4157,6 +4193,36 @@ function StatusPage() {
       ) : null}
     </>
   );
+}
+
+function deliveryAuthRefreshToastTone(result: DeliveryAuthRefreshOut): "success" | "info" {
+  return deliveryAuthRefreshComponents(result).some((component) => component.status === "skipped") ? "info" : "success";
+}
+
+function deliveryAuthRefreshToastDescription(result: DeliveryAuthRefreshOut): string {
+  const components = deliveryAuthRefreshComponents(result);
+  const failed = components.filter((component) => component.status === "failed");
+  if (failed.length) {
+    return failed.map((component) => `${component.label}: ${component.message}`).join(" ");
+  }
+  const refreshed = components.filter((component) => component.status === "refreshed").length;
+  const cleared = components.filter((component) => component.status === "cleared").length;
+  const skipped = components.filter((component) => component.status === "skipped").length;
+  const parts = [
+    refreshed ? `${refreshed} refreshed` : "",
+    cleared ? `${cleared} cache${cleared === 1 ? "" : "s"} cleared` : "",
+    skipped ? `${skipped} skipped` : "",
+  ].filter(Boolean);
+  return parts.join(", ") || "Delivery authentication state was checked.";
+}
+
+function deliveryAuthRefreshComponents(result: DeliveryAuthRefreshOut) {
+  return [
+    { label: "Bot delivery", ...result.bot_delivery },
+    { label: "Graph lookup", ...result.graph_lookup },
+    { label: "Graph delivery", ...result.graph_delivery },
+    { label: "Bot inbound auth", ...result.bot_inbound_auth },
+  ];
 }
 
 function SettingsPage() {
@@ -5382,7 +5448,7 @@ function tokenFact(oauth: OAuthDiagnosticsOut): string {
   if (!oauth.token.checked) return "Not checked";
   if (!oauth.token.succeeded) return "Failed";
   if (!oauth.token.expires_at) return "Valid";
-  return `Valid ${formatRelativeTime(oauth.token.expires_at)}`;
+  return tokenValidityLabel(oauth.token.expires_at);
 }
 
 function tokenExpirationShortLabel(oauth: OAuthDiagnosticsOut): string {
@@ -5390,6 +5456,13 @@ function tokenExpirationShortLabel(oauth: OAuthDiagnosticsOut): string {
   if (!oauth.token.succeeded) return "Unavailable";
   if (!oauth.token.expires_at) return "Not provided";
   return formatRelativeTime(oauth.token.expires_at);
+}
+
+function tokenValidityLabel(expiresAt: string): string {
+  const relative = formatRelativeTime(expiresAt);
+  if (relative.startsWith("in ")) return `Valid for ${relative.slice(3)}`;
+  if (relative === "now") return "Expires now";
+  return `Expired ${relative}`;
 }
 
 function readinessSummary(authStatus: string, message: string, oauth: OAuthDiagnosticsOut): string {
@@ -5419,7 +5492,7 @@ function delegatedTokenFact(readiness: AdminReadinessOut["graph_delivery"]): str
   if (!readiness.token_checked) return "Not checked";
   if (!readiness.token_request_succeeded) return "Failed";
   if (!readiness.access_token_expires_at) return "Valid";
-  return `Valid ${formatRelativeTime(readiness.access_token_expires_at)}`;
+  return tokenValidityLabel(readiness.access_token_expires_at);
 }
 
 function graphDeliveryScopeSummary(readiness: AdminReadinessOut["graph_delivery"]): string {
