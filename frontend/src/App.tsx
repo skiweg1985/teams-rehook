@@ -4356,7 +4356,21 @@ function DeliveryComponentCard({
   const tokenFactValue = integration.facts.find((fact) => fact.label === "Token");
   const actionItem = integration.attentionItems[0];
   const checksTone = readyChecks === integration.healthChecks.length ? "success" : readyChecks > 0 ? "warn" : "danger";
+  const configuredCount = integration.credentials.filter(([, value]) => value === "Configured" || value === "Inherited").length;
   const tokenTooltip = `Token ${tokenFactValue?.value ?? "Unknown"}`;
+  const secondaryDetailItems: RowActionItem[] = [
+    { label: "Open diagnostics", icon: Activity, onClick: () => setDetailView("diagnostics") },
+    { label: "Open technical information", icon: Info, onClick: () => setDetailView("technical") },
+  ];
+  const overflowItems: RowActionItem[] = integration.manageActionItems?.length
+    ? [
+        ...secondaryDetailItems,
+        ...integration.manageActionItems.map((item, index) => ({
+          ...item,
+          separated: index === 0 ? true : item.separated,
+        })),
+      ]
+    : secondaryDetailItems;
 
   async function toggle(nextEnabled: boolean) {
     if (!item) return;
@@ -4384,8 +4398,10 @@ function DeliveryComponentCard({
               <p>{integration.description}</p>
             </span>
           </div>
-          <div className="delivery-component-kpis" aria-label={`${integration.title} summary`}>
+          <div className="delivery-component-health" aria-label={`${integration.title} health`}>
             <DeliveryStatusGroup integration={integration} overridden={Boolean(item?.source === "environment" && item.is_overridden)} tokenLabel={tokenTooltip} />
+          </div>
+          <div className="delivery-component-state" aria-label={`${integration.title} state`}>
             {item ? (
               <label className="settings-switch delivery-method-switch" htmlFor={inputId}>
                 <input
@@ -4400,32 +4416,47 @@ function DeliveryComponentCard({
                 <strong>{busy ? "Saving..." : enabled ? "Enabled" : "Disabled"}</strong>
               </label>
             ) : null}
-            {integration.manageActionSlot ? <div className="delivery-manage-action">{integration.manageActionSlot}</div> : null}
           </div>
-          <div className="delivery-detail-hub" aria-label={`${integration.title} details`}>
+          <div className="delivery-detail-hub" aria-label={`${integration.title} actions`}>
             <button
               type="button"
-              className={classNames("delivery-detail-button", `delivery-detail-button--${checksTone}`)}
+              className={classNames("delivery-detail-button delivery-detail-button--primary", `delivery-detail-button--${checksTone}`)}
               aria-label={`Open ${integration.title} readiness checks, ${readyChecks} of ${integration.healthChecks.length} passing`}
               onClick={() => setDetailView("readiness")}
             >
               <Check aria-hidden="true" className="button-icon" focusable="false" />
-              <span>Checks</span>
+              <span className="delivery-action-label" data-short="Checks" data-icon="Checks">
+                Checks
+              </span>
               <strong>{readyChecks}/{integration.healthChecks.length}</strong>
             </button>
-            <button type="button" className="delivery-detail-button" aria-label={`Open ${integration.title} configuration`} onClick={() => setDetailView("configuration")}>
+            <button type="button" className="delivery-detail-button delivery-detail-button--primary" aria-label={`Open ${integration.title} configuration`} onClick={() => setDetailView("configuration")}>
               <Wrench aria-hidden="true" className="button-icon" focusable="false" />
-              <span>Config</span>
-              <strong>{integration.credentials.filter(([, value]) => value === "Configured" || value === "Inherited").length}/{integration.credentials.length}</strong>
+              <span className="delivery-action-label" data-short="Config" data-icon="Config">
+                Config
+              </span>
+              <strong>{configuredCount}/{integration.credentials.length}</strong>
             </button>
-            <button type="button" className="delivery-detail-button" aria-label={`Open ${integration.title} diagnostics`} onClick={() => setDetailView("diagnostics")}>
+            <button type="button" className="delivery-detail-button delivery-detail-button--secondary" aria-label={`Open ${integration.title} diagnostics`} onClick={() => setDetailView("diagnostics")}>
               <Activity aria-hidden="true" className="button-icon" focusable="false" />
-              <span>Diagnostics</span>
+              <span className="delivery-action-label" data-short="Diag" data-icon="Diag">
+                Diagnostics
+              </span>
             </button>
-            <button type="button" className="delivery-detail-button" aria-label={`Open ${integration.title} technical information`} onClick={() => setDetailView("technical")}>
+            <button type="button" className="delivery-detail-button delivery-detail-button--secondary" aria-label={`Open ${integration.title} technical information`} onClick={() => setDetailView("technical")}>
               <Info aria-hidden="true" className="button-icon" focusable="false" />
-              <span>Technical</span>
+              <span className="delivery-action-label" data-short="Tech" data-icon="Tech">
+                Technical
+              </span>
             </button>
+          </div>
+          {integration.manageActionItems?.length ? (
+            <div className="delivery-overflow-action delivery-overflow-action--manage">
+              <RowActionMenu label={`Manage ${integration.title}`} items={integration.manageActionItems} />
+            </div>
+          ) : null}
+          <div className="delivery-overflow-action delivery-overflow-action--details">
+            <RowActionMenu label={`More ${integration.title} actions`} items={overflowItems} />
           </div>
         </div>
 
@@ -5189,7 +5220,7 @@ type IntegrationStatusView = {
   diagnosticRows: StatusTechnicalRow[];
   technicalRows: StatusTechnicalRow[];
   primaryActionSlot?: ReactNode;
-  manageActionSlot?: ReactNode;
+  manageActionItems?: RowActionItem[];
 };
 
 function buildBotIntegrationView(readiness: AdminReadinessOut, onCopy: (value: string, label: string) => void): IntegrationStatusView {
@@ -5360,15 +5391,13 @@ function buildGraphDeliveryIntegrationView(
         onDisconnect={onDisconnect}
       />
     ),
-    manageActionSlot: (
-      <GraphDeliveryManageMenu
-        busy={busy}
-        configured={readiness.configured}
-        enabled={readiness.enabled}
-        onConnect={onConnect}
-        onDisconnect={onDisconnect}
-      />
-    ),
+    manageActionItems: graphDeliveryManageItems({
+      busy,
+      configured: readiness.configured,
+      enabled: readiness.enabled,
+      onConnect,
+      onDisconnect,
+    }),
     diagnosticRows: [
       { label: "Credential source", value: readiness.credential_source || "missing" },
       { label: "Refresh checked", value: readiness.refresh_checked_at ? formatDateTime(readiness.refresh_checked_at) : "Not checked" },
@@ -5577,7 +5606,7 @@ function GraphDeliveryActionBar({
   );
 }
 
-function GraphDeliveryManageMenu({
+function graphDeliveryManageItems({
   busy,
   configured,
   enabled,
@@ -5589,34 +5618,34 @@ function GraphDeliveryManageMenu({
   enabled: boolean;
   onConnect: () => void;
   onDisconnect: () => void;
-}) {
-  const items: RowActionItem[] = configured
-    ? [
-        {
-          label: "Reconnect service user",
-          icon: RefreshCw,
-          onClick: onConnect,
-          disabled: busy || !enabled,
-          spinning: busy,
-        },
-        {
-          label: "Disconnect service user",
-          icon: PowerOff,
-          onClick: onDisconnect,
-          disabled: busy,
-          separated: true,
-        },
-      ]
-    : [
-        {
-          label: "Connect service user",
-          icon: Power,
-          onClick: onConnect,
-          disabled: busy || !enabled,
-        },
-      ];
+}): RowActionItem[] {
+  if (configured) {
+    return [
+      {
+        label: "Reconnect service user",
+        icon: RefreshCw,
+        onClick: onConnect,
+        disabled: busy || !enabled,
+        spinning: busy,
+      },
+      {
+        label: "Disconnect service user",
+        icon: PowerOff,
+        onClick: onDisconnect,
+        disabled: busy,
+        separated: true,
+      },
+    ];
+  }
 
-  return <RowActionMenu label="Manage Graph delivery connection" items={items} />;
+  return [
+    {
+      label: "Connect service user",
+      icon: Power,
+      onClick: onConnect,
+      disabled: busy || !enabled,
+    },
+  ];
 }
 
 function RuntimeSnapshotCard({ onCopy, readiness }: { onCopy: (value: string, label: string) => void; readiness: AdminReadinessOut }) {
