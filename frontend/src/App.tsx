@@ -4345,11 +4345,14 @@ function DeliveryComponentCard({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const inputId = useId();
+  const detailId = useId();
   const enabled = item?.effective_value === "true";
   const graphDeliveryBlocked = item?.key === "graph_delivery_enabled" && !enabled && !graphLookupEnabled;
   const readyChecks = integration.healthChecks.filter((check) => check.tone === "success").length;
-  const keyFacts = integration.facts.filter((fact) => fact.label !== "Scope").slice(0, 3);
+  const tokenFactValue = integration.facts.find((fact) => fact.label === "Token");
+  const actionItem = integration.attentionItems[0];
 
   async function toggle(nextEnabled: boolean) {
     if (!item) return;
@@ -4369,37 +4372,20 @@ function DeliveryComponentCard({
   return (
     <Card className={classNames("delivery-component-card", `delivery-component-card--${integration.tone}`)}>
       <div className="delivery-component-header">
-        <div className={classNames("status-dot", `status-dot--${integration.tone}`)} aria-hidden="true" />
-        <div>
-          <p className="integration-kicker">Delivery method</p>
+        <div className="delivery-component-title">
+          <span className={classNames("status-dot", `status-dot--${integration.tone}`)} aria-hidden="true" />
           <h2>{integration.title}</h2>
           <p>{integration.description}</p>
         </div>
-        <DeliveryStatusGroup enabled={enabled} integration={integration} overridden={Boolean(item?.is_overridden)} />
-      </div>
-
-      {integration.attentionItems.length ? (
-        <div className={classNames("status-detail-alert", `status-detail-alert--${integration.attentionItems[0].tone}`)}>
-          <strong>{integration.attentionItems[0].title}</strong>
-          <span>{integration.attentionItems[0].description}</span>
+        <div className="delivery-component-kpis" aria-label={`${integration.title} summary`}>
+          <DeliveryStatusGroup enabled={enabled} integration={integration} overridden={Boolean(item?.is_overridden)} />
+          <CompactStatusValue label="Checks" tone={readyChecks === integration.healthChecks.length ? "success" : readyChecks > 0 ? "warn" : "danger"} value={`${readyChecks}/${integration.healthChecks.length}`} />
+          <CompactStatusValue label="Token" tone={tokenFactValue?.tone ?? "neutral"} value={tokenFactValue?.value ?? "Unknown"} />
         </div>
-      ) : null}
-      {graphDeliveryBlocked ? <p className="settings-warning">Enable Graph lookup first.</p> : null}
-      {error ? (
-        <p className="form-error" id={`${inputId}-error`}>
-          {error}
-        </p>
-      ) : null}
-
-      <section className="status-detail-section">
-        <h3>Status</h3>
-        <p>{integration.summary}</p>
-        <StatusFactList facts={keyFacts} />
-      </section>
-
-      <section className="status-detail-section status-next-step">
-        <h3>Configure</h3>
-        <div className="delivery-config-row">
+        <div className="delivery-component-action">
+          <span className={classNames("delivery-action-state", actionItem && `delivery-action-state--${actionItem.tone}`)}>
+            {actionItem ? actionItem.title : "No action"}
+          </span>
           {item ? (
             <label className="settings-switch delivery-method-switch" htmlFor={inputId}>
               <input
@@ -4414,22 +4400,43 @@ function DeliveryComponentCard({
               <strong>{busy ? "Saving..." : enabled ? "Enabled" : "Disabled"}</strong>
             </label>
           ) : null}
-          {integration.primaryActionSlot ? (
-            <div className="status-detail-actions">{integration.primaryActionSlot}</div>
-          ) : (
-            <p>{integration.attentionItems.length ? "Resolve the attention item above, then refresh auth tokens." : "No configuration action is required right now."}</p>
-          )}
+          <button
+            className="secondary-button secondary-button--small delivery-details-toggle"
+            type="button"
+            aria-controls={detailId}
+            aria-expanded={detailsOpen}
+            onClick={() => setDetailsOpen((open) => !open)}
+          >
+            <ChevronDown aria-hidden="true" className={classNames("settings-disclosure-icon", detailsOpen && "settings-disclosure-icon--open")} focusable="false" />
+            Details
+          </button>
         </div>
-      </section>
+      </div>
 
-      <details className="status-detail-disclosure delivery-component-details">
-        <summary>
-          <span>Details</span>
-          <small>
-            {readyChecks}/{integration.healthChecks.length} checks passing, diagnostics and technical information
-          </small>
-        </summary>
-        <div className="status-detail-disclosure-body">
+      {actionItem || graphDeliveryBlocked || error ? (
+        <div className="delivery-inline-issues">
+          {actionItem ? (
+            <div className={classNames("delivery-inline-issue", `delivery-inline-issue--${actionItem.tone}`)}>
+              <strong>{actionItem.title}</strong>
+              <span>{actionItem.description}</span>
+            </div>
+          ) : null}
+          {actionItem && integration.primaryActionSlot ? <div className="delivery-inline-action">{integration.primaryActionSlot}</div> : null}
+          {graphDeliveryBlocked ? <p className="settings-warning">Enable Graph lookup first.</p> : null}
+          {error ? (
+            <p className="form-error" id={`${inputId}-error`}>
+              {error}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {detailsOpen ? (
+        <div className="delivery-component-details" id={detailId}>
+          <div className="delivery-details-summary">
+            <p>{integration.summary}</p>
+            {integration.primaryActionSlot ? <div className="status-detail-actions">{integration.primaryActionSlot}</div> : null}
+          </div>
           <div className="status-detail-section">
             <h3>Readiness checks</h3>
             <StatusCheckList checks={integration.healthChecks} />
@@ -4474,8 +4481,18 @@ function DeliveryComponentCard({
             </dl>
           </div>
         </div>
-      </details>
+      ) : null}
     </Card>
+  );
+}
+
+function CompactStatusValue({ label, tone = "neutral", value }: { label: string; tone?: StatusTone; value: ReactNode }) {
+  return (
+    <span className="delivery-compact-value">
+      <span className={classNames("delivery-status-dot", tone !== "neutral" && `delivery-status-dot--${tone}`)} aria-hidden="true" />
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </span>
   );
 }
 
