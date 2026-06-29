@@ -4248,8 +4248,6 @@ function DeliveryMethodsPage() {
     : [];
   const overallTone = integrationViews.some((view) => view.tone === "danger") ? "danger" : integrationViews.some((view) => view.tone === "warn") ? "warn" : "success";
   const overallLabel = overallTone === "danger" ? "Degraded" : overallTone === "warn" ? "Attention" : "Ready";
-  const readyCount = integrationViews.filter((view) => view.tone === "success").length;
-  const attentionCount = integrationViews.reduce((count, view) => count + view.attentionItems.length, 0);
 
   return (
     <>
@@ -4294,33 +4292,14 @@ function DeliveryMethodsPage() {
         </Card>
       ) : readiness ? (
         <div className="delivery-page delivery-operations-page">
-          <RelayHealthHero readiness={readiness} integrations={integrationViews} overallLabel={overallLabel} overallTone={overallTone} />
-          <section className="status-overview" aria-label="Delivery overview">
-            <StatusOverviewMetric
-              label="Methods"
-              value={`${enabledCount}/${deliveryMethodCount} enabled`}
-              detail="Delivery components currently available to routes."
-              tone={enabledCount === deliveryMethodCount ? "success" : enabledCount ? "warn" : "danger"}
-            />
-            <StatusOverviewMetric
-              label="Health"
-              value={`${readyCount}/${integrationViews.length} ready`}
-              detail="Component readiness from the latest check."
-              tone={readyCount === integrationViews.length ? "success" : readyCount > 0 ? "warn" : "danger"}
-            />
-            <StatusOverviewMetric
-              label="Action"
-              value={attentionCount ? `${attentionCount} item${attentionCount === 1 ? "" : "s"}` : "None"}
-              detail={attentionCount ? "Review the affected component below." : "No immediate delivery action required."}
-              tone={attentionCount ? (integrationViews.some((view) => view.attentionItems.some((item) => item.tone === "danger")) ? "danger" : "warn") : "success"}
-            />
-            <StatusOverviewMetric
-              label="Auth"
-              value={`${integrationViews.filter((view) => view.facts.some((fact) => fact.label === "Token" && fact.tone === "success")).length}/${integrationViews.length} valid`}
-              detail="Token checks that currently pass."
-              tone={overallTone}
-            />
-          </section>
+          <RelayHealthHero
+            deliveryMethodCount={deliveryMethodCount}
+            enabledCount={enabledCount}
+            integrations={integrationViews}
+            overallLabel={overallLabel}
+            overallTone={overallTone}
+            readiness={readiness}
+          />
           <section className="delivery-component-grid" aria-label="Delivery methods">
             {integrationViews.map((integration) => (
               <DeliveryComponentCard
@@ -5354,11 +5333,15 @@ function oauthTechnicalRows(oauth: OAuthDiagnosticsOut, onCopy: (value: string, 
 }
 
 function RelayHealthHero({
+  deliveryMethodCount,
+  enabledCount,
   integrations,
   overallLabel,
   overallTone,
   readiness,
 }: {
+  deliveryMethodCount?: number;
+  enabledCount?: number;
   integrations: IntegrationStatusView[];
   overallLabel: string;
   overallTone: StatusTone;
@@ -5368,6 +5351,8 @@ function RelayHealthHero({
   const attentionItems = integrations.flatMap((integration) => integration.attentionItems);
   const readyCount = integrations.filter((integration) => integration.tone === "success").length;
   const nextStep = attentionItems[0]?.title ?? (readiness.graph_delivery.configured ? "Monitor message delivery" : "Connect service user");
+  const methodsEnabled = enabledCount ?? readyCount;
+  const methodsTotal = deliveryMethodCount ?? integrations.length;
 
   return (
     <section className={classNames("status-relay-hero", `status-relay-hero--${overallTone}`)} aria-label="Relay health">
@@ -5392,10 +5377,10 @@ function RelayHealthHero({
           tone={attentionItems.length ? (attentionItems.some((item) => item.tone === "danger") ? "danger" : "warn") : "success"}
         />
         <StatusOverviewMetric
-          label="Paths"
-          value={`${readyCount}/${integrations.length} ready`}
-          detail="Bot, lookup and Graph delivery."
-          tone={readyCount === integrations.length ? "success" : readyCount > 0 ? "warn" : "danger"}
+          label="Methods"
+          value={`${methodsEnabled}/${methodsTotal} enabled`}
+          detail={`${readyCount}/${integrations.length} components ready.`}
+          tone={methodsEnabled === methodsTotal ? "success" : methodsEnabled > 0 ? "warn" : "danger"}
         />
         <StatusOverviewMetric
           label="Auth"
