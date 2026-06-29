@@ -3238,8 +3238,20 @@ button:disabled {
 
 .status-relay-metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(112px, 1fr));
   gap: var(--space-1);
+}
+
+.status-relay-metrics .status-overview-item {
+  gap: 1px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+}
+
+.status-relay-metrics .status-overview-item p {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status-dot {
@@ -4814,7 +4826,6 @@ button:disabled {
   .settings-overview,
   .system-summary-grid,
   .status-overview,
-  .status-relay-metrics,
   .webhook-route-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -4948,7 +4959,6 @@ button:disabled {
   .settings-kv-list,
   .settings-overview,
   .system-summary-grid,
-  .status-relay-metrics,
   .webhook-route-summary,
   .status-detail-facts,
   .status-overview,
@@ -5170,5 +5180,11 @@ button:disabled {
     bottom: calc(var(--space-3) * -1);
     margin: var(--space-2) calc(var(--space-3) * -1) calc(var(--space-3) * -1);
     padding: var(--space-3);
+  }
+}
+
+@media (max-width: 520px) {
+  .status-relay-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
