@@ -4435,12 +4435,10 @@ function DeliveryComponentCard({
           <button type="button" className="delivery-detail-button" aria-label={`Open ${integration.title} diagnostics`} onClick={() => setDetailView("diagnostics")}>
             <Activity aria-hidden="true" className="button-icon" focusable="false" />
             <span>Diagnostics</span>
-            <strong>{integration.lastCheckedLabel}</strong>
           </button>
           <button type="button" className="delivery-detail-button" aria-label={`Open ${integration.title} technical information`} onClick={() => setDetailView("technical")}>
             <Info aria-hidden="true" className="button-icon" focusable="false" />
             <span>Technical</span>
-            <strong>{integration.technicalRows.length} rows</strong>
           </button>
         </div>
       </Card>
