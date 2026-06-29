@@ -4355,6 +4355,8 @@ function DeliveryComponentCard({
   const readyChecks = integration.healthChecks.filter((check) => check.tone === "success").length;
   const tokenFactValue = integration.facts.find((fact) => fact.label === "Token");
   const actionItem = integration.attentionItems[0];
+  const checksTone = readyChecks === integration.healthChecks.length ? "success" : readyChecks > 0 ? "warn" : "danger";
+  const tokenTooltip = `Token ${tokenFactValue?.value ?? "Unknown"}`;
 
   async function toggle(nextEnabled: boolean) {
     if (!item) return;
@@ -4383,9 +4385,7 @@ function DeliveryComponentCard({
             </span>
           </div>
           <div className="delivery-component-kpis" aria-label={`${integration.title} summary`}>
-            <DeliveryStatusGroup integration={integration} overridden={Boolean(item?.source === "environment" && item.is_overridden)} />
-            <CompactStatusValue label="Checks" tone={readyChecks === integration.healthChecks.length ? "success" : readyChecks > 0 ? "warn" : "danger"} value={`${readyChecks}/${integration.healthChecks.length}`} />
-            <CompactStatusValue label="Token" tone={tokenFactValue?.tone ?? "neutral"} value={tokenFactValue?.value ?? "Unknown"} />
+            <DeliveryStatusGroup integration={integration} overridden={Boolean(item?.source === "environment" && item.is_overridden)} tokenLabel={tokenTooltip} />
             {item ? (
               <label className="settings-switch delivery-method-switch" htmlFor={inputId}>
                 <input
@@ -4403,7 +4403,12 @@ function DeliveryComponentCard({
             {integration.manageActionSlot ? <div className="delivery-manage-action">{integration.manageActionSlot}</div> : null}
           </div>
           <div className="delivery-detail-hub" aria-label={`${integration.title} details`}>
-            <button type="button" className="delivery-detail-button" aria-label={`Open ${integration.title} readiness checks`} onClick={() => setDetailView("readiness")}>
+            <button
+              type="button"
+              className={classNames("delivery-detail-button", `delivery-detail-button--${checksTone}`)}
+              aria-label={`Open ${integration.title} readiness checks, ${readyChecks} of ${integration.healthChecks.length} passing`}
+              onClick={() => setDetailView("readiness")}
+            >
               <Check aria-hidden="true" className="button-icon" focusable="false" />
               <span>Checks</span>
               <strong>{readyChecks}/{integration.healthChecks.length}</strong>
@@ -4547,19 +4552,14 @@ function DeliveryTechnicalInspector({ integration }: { integration: IntegrationS
   );
 }
 
-function CompactStatusValue({ label, tone = "neutral", value }: { label: string; tone?: StatusTone; value: ReactNode }) {
+function DeliveryStatusGroup({ integration, overridden, tokenLabel }: { integration: IntegrationStatusView; overridden: boolean; tokenLabel: string }) {
   return (
-    <span className="delivery-compact-value">
-      <span className={classNames("delivery-status-dot", tone !== "neutral" && `delivery-status-dot--${tone}`)} aria-hidden="true" />
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </span>
-  );
-}
-
-function DeliveryStatusGroup({ integration, overridden }: { integration: IntegrationStatusView; overridden: boolean }) {
-  return (
-    <div className="delivery-status-group" aria-label={`${integration.title}: ${integration.statusLabel}${overridden ? ", Override active" : ""}`}>
+    <div
+      className="delivery-status-group delivery-token-tooltip"
+      aria-label={`${integration.title}: ${integration.statusLabel}${overridden ? ", Override active" : ""}. ${tokenLabel}`}
+      data-tooltip={tokenLabel}
+      tabIndex={0}
+    >
       <span className={classNames("delivery-status-dot", `delivery-status-dot--${integration.tone}`)} aria-hidden="true" />
       <strong>{integration.statusLabel}</strong>
       {overridden ? (
