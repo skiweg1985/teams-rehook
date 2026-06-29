@@ -2479,13 +2479,13 @@ button:disabled {
 }
 
 .status-command-center {
-  gap: var(--space-5);
+  gap: var(--space-4);
 }
 
 .status-relay-hero {
   display: grid;
-  grid-template-columns: minmax(0, 0.95fr) minmax(520px, 1.15fr);
-  align-items: stretch;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(440px, 1.1fr);
+  align-items: center;
   gap: var(--space-4);
   padding: var(--space-5);
   border: 1px solid var(--line);
@@ -2581,7 +2581,7 @@ button:disabled {
 .status-master-pane {
   display: grid;
   gap: var(--space-3);
-  padding: var(--space-4);
+  padding: var(--space-3);
 }
 
 .status-pane-header,
@@ -2623,10 +2623,10 @@ button:disabled {
   width: 100%;
   min-width: 0;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) minmax(132px, 0.38fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-3);
+  padding: var(--space-2);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -2693,8 +2693,10 @@ button:disabled {
 }
 
 .status-component-row-meta {
-  justify-items: end;
-  gap: 3px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-1);
 }
 
 .status-component-row-meta span {
@@ -2702,6 +2704,37 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.status-mini-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.status-mini-badge--success {
+  border-color: rgba(13, 104, 50, 0.18);
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.status-mini-badge--warn {
+  border-color: rgba(138, 90, 0, 0.22);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.status-mini-badge--danger {
+  border-color: rgba(180, 35, 24, 0.22);
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .status-dot {
@@ -2725,7 +2758,7 @@ button:disabled {
 
 .status-detail-pane {
   display: grid;
-  gap: var(--space-4);
+  gap: var(--space-3);
   padding: var(--space-5);
 }
 
@@ -2758,7 +2791,14 @@ button:disabled {
 
 .status-detail-section {
   display: grid;
-  gap: var(--space-3);
+  gap: var(--space-2);
+}
+
+.status-next-step {
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
 }
 
 .status-detail-section h3,
@@ -2856,13 +2896,17 @@ button:disabled {
 }
 
 .status-detail-disclosure {
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--line);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
 }
 
 .status-detail-disclosure summary {
-  display: grid;
-  gap: var(--space-1);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
   color: var(--ink-secondary);
   cursor: pointer;
   font-weight: 800;
@@ -2876,6 +2920,7 @@ button:disabled {
   color: var(--muted);
   font-size: 0.8125rem;
   font-weight: 500;
+  text-align: right;
 }
 
 .status-detail-disclosure-body {
@@ -2892,7 +2937,7 @@ button:disabled {
   min-width: 0;
   display: grid;
   gap: var(--space-1);
-  padding: var(--space-4);
+  padding: var(--space-3);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: var(--surface);
@@ -3197,7 +3242,61 @@ button:disabled {
   display: grid;
   grid-template-columns: 1fr;
   align-items: start;
-  gap: var(--space-4);
+  gap: var(--space-3);
+}
+
+.status-context-card .card-body {
+  padding: 0;
+}
+
+.status-runtime-disclosure {
+  min-width: 0;
+}
+
+.status-runtime-disclosure summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  cursor: pointer;
+  list-style: none;
+}
+
+.status-runtime-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.status-runtime-disclosure summary > span:first-child {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.status-runtime-disclosure summary strong,
+.status-runtime-disclosure summary small {
+  min-width: 0;
+}
+
+.status-runtime-disclosure summary strong {
+  color: var(--ink);
+  font-size: 1rem;
+}
+
+.status-runtime-disclosure summary small {
+  color: var(--muted);
+}
+
+.status-runtime-summary-badges {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.status-runtime-disclosure[open] .settings-disclosure-icon {
+  transform: rotate(180deg);
 }
 
 .status-runtime-list {
@@ -3205,6 +3304,7 @@ button:disabled {
   grid-template-columns: minmax(120px, 0.46fr) minmax(0, 1fr);
   gap: var(--space-2) var(--space-4);
   margin: 0;
+  padding: 0 var(--space-4) var(--space-4);
 }
 
 .status-runtime-list dt {
@@ -4338,7 +4438,7 @@ button:disabled {
 
   .status-component-row-meta {
     grid-column: 2;
-    justify-items: start;
+    justify-content: flex-start;
   }
 
   .status-component-row-main > span:last-child {
@@ -4349,9 +4449,22 @@ button:disabled {
   .settings-control,
   .settings-overview-item,
   .status-health-card .card-body,
-  .status-context-card .card-body,
   .status-overview-item {
     padding: var(--space-3);
+  }
+
+  .status-context-card .card-body {
+    padding: 0;
+  }
+
+  .status-runtime-disclosure summary,
+  .status-detail-disclosure summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .status-runtime-summary-badges {
+    justify-content: flex-start;
   }
 
   .settings-disclosure-trigger,

@@ -4141,10 +4141,11 @@ function StatusPage() {
       <PageIntro
         eyebrow="Operations"
         title="Status"
-        description="Production readiness, delivery paths and diagnostics for Teams Rehook."
+        description="See whether Teams Rehook is ready, what needs attention and the next operational step."
         actions={
           readiness ? (
             <div className="row-actions">
+              <StatusBadge label={overallLabel} tone={overallTone} />
               <button
                 className="secondary-button secondary-button--small button-with-icon"
                 type="button"
@@ -4155,7 +4156,6 @@ function StatusPage() {
                 <RefreshCw aria-hidden="true" className={classNames("button-icon", authRefreshBusy && "button-icon--spin")} focusable="false" />
                 {authRefreshBusy ? "Refreshing..." : "Refresh auth tokens"}
               </button>
-              <StatusBadge label={overallLabel} tone={overallTone} />
             </div>
           ) : null
         }
@@ -5082,7 +5082,8 @@ function RelayHealthHero({
 }) {
   const tokenCount = integrations.filter((integration) => integration.facts.some((fact) => fact.label === "Token" && fact.tone === "success")).length;
   const attentionItems = integrations.flatMap((integration) => integration.attentionItems);
-  const firstAction = attentionItems[0]?.title ?? (readiness.graph_delivery.configured ? "Monitor Messages" : "Connect service user");
+  const readyCount = integrations.filter((integration) => integration.tone === "success").length;
+  const nextStep = attentionItems[0]?.title ?? (readiness.graph_delivery.configured ? "Monitor message delivery" : "Connect service user");
 
   return (
     <section className={classNames("status-relay-hero", `status-relay-hero--${overallTone}`)} aria-label="Relay health">
@@ -5093,24 +5094,30 @@ function RelayHealthHero({
           <h2>{overallLabel === "Ready" ? "Relay is ready to deliver messages" : overallLabel === "Attention" ? "Relay needs operator attention" : "Relay delivery is degraded"}</h2>
           <p>
             {overallTone === "success"
-              ? "All configured relay paths report usable readiness."
-              : "One or more relay checks need review before production delivery can be trusted."}
+              ? "No immediate action is required. Keep an eye on message logs after new routes are added."
+              : "Start with the first item below, then refresh auth tokens to confirm the fix."}
           </p>
         </div>
       </div>
       <div className="status-relay-metrics">
-        <StatusOverviewMetric label="Overall" value={overallLabel} detail={overallTone === "success" ? "No active blockers." : "Review pipeline details."} tone={overallTone} />
+        <StatusOverviewMetric label="Status" value={overallLabel} detail={overallTone === "success" ? "No active blockers." : "Review the selected component."} tone={overallTone} />
         <StatusOverviewMetric
-          label="Tokens"
-          value={`${tokenCount}/${integrations.length} valid`}
-          detail="Bot, lookup and delegated checks."
-          tone={tokenCount === integrations.length ? "success" : tokenCount > 0 ? "warn" : "danger"}
+          label="Action"
+          value={attentionItems.length ? `${attentionItems.length} item${attentionItems.length === 1 ? "" : "s"}` : "None"}
+          detail={nextStep}
+          tone={attentionItems.length ? (attentionItems.some((item) => item.tone === "danger") ? "danger" : "warn") : "success"}
         />
         <StatusOverviewMetric
-          label="Next"
-          value={attentionItems.length ? `${attentionItems.length} issue${attentionItems.length === 1 ? "" : "s"}` : "No blockers"}
-          detail={firstAction}
-          tone={attentionItems.length ? (attentionItems.some((item) => item.tone === "danger") ? "danger" : "warn") : "success"}
+          label="Paths"
+          value={`${readyCount}/${integrations.length} ready`}
+          detail="Bot, lookup and Graph delivery."
+          tone={readyCount === integrations.length ? "success" : readyCount > 0 ? "warn" : "danger"}
+        />
+        <StatusOverviewMetric
+          label="Auth"
+          value={`${tokenCount}/${integrations.length} valid`}
+          detail="Token checks that currently pass."
+          tone={tokenCount === integrations.length ? "success" : tokenCount > 0 ? "warn" : "danger"}
         />
       </div>
     </section>
@@ -5158,7 +5165,6 @@ function ComponentList({
     <div className="status-component-list" role="list">
       {integrations.map((integration) => {
         const topIssue = integration.attentionItems[0];
-        const tokenFact = integration.facts.find((fact) => fact.label === "Token");
         return (
           <button
             aria-pressed={selectedComponentId === integration.id}
@@ -5176,8 +5182,11 @@ function ComponentList({
               <span>{topIssue ? topIssue.title : integration.summary}</span>
             </span>
             <span className="status-component-row-meta">
-              <span>{tokenFact ? tokenFact.value : "Token unknown"}</span>
-              <span>{integration.lastCheckedLabel}</span>
+              {integration.badges.slice(0, 2).map((badge) => (
+                <span className={classNames("status-mini-badge", badge.tone && `status-mini-badge--${badge.tone}`)} key={badge.label}>
+                  {badge.label}
+                </span>
+              ))}
             </span>
           </button>
         );
@@ -5188,11 +5197,14 @@ function ComponentList({
 
 function ComponentDetailPane({ integration }: { integration: IntegrationStatusView | null }) {
   if (!integration) return null;
+  const keyFacts = integration.facts.filter((fact) => fact.label !== "Scope").slice(0, 3);
+  const readyChecks = integration.healthChecks.filter((check) => check.tone === "success").length;
+
   return (
     <aside className="status-detail-pane" aria-label={`${integration.title} details`}>
       <div className="status-detail-header">
         <div>
-          <p className="integration-kicker">Selected component</p>
+          <p className="integration-kicker">Current focus</p>
           <h2>{integration.title}</h2>
           <p>{integration.description}</p>
         </div>
@@ -5209,28 +5221,36 @@ function ComponentDetailPane({ integration }: { integration: IntegrationStatusVi
         </div>
       ) : null}
 
-      <section className="status-detail-section">
-        <h3>Overview</h3>
-        <p>{integration.summary}</p>
-        <StatusFactList facts={integration.facts} />
-      </section>
-
-      <section className="status-detail-section">
-        <h3>Health checks</h3>
-        <StatusCheckList checks={integration.healthChecks} />
-      </section>
-
-      <section className="status-detail-section">
-        <h3>Capabilities</h3>
-        <StatusFactList facts={integration.capabilities} />
-      </section>
-
-      {integration.primaryActionSlot ? (
-        <section className="status-detail-section">
-          <h3>Actions</h3>
+      <section className="status-detail-section status-next-step">
+        <h3>Next step</h3>
+        {integration.primaryActionSlot ? (
           <div className="status-detail-actions">{integration.primaryActionSlot}</div>
-        </section>
-      ) : null}
+        ) : (
+          <p>{integration.attentionItems.length ? "Review and resolve the attention item above." : "No action is needed for this component right now."}</p>
+        )}
+      </section>
+
+      <section className="status-detail-section">
+        <h3>What matters now</h3>
+        <p>{integration.summary}</p>
+        <StatusFactList facts={keyFacts} />
+      </section>
+
+      <details className="status-detail-disclosure">
+        <summary>
+          <span>Readiness checks</span>
+          <small>
+            {readyChecks}/{integration.healthChecks.length} checks passing, capabilities and delivery scope
+          </small>
+        </summary>
+        <div className="status-detail-disclosure-body">
+          <StatusCheckList checks={integration.healthChecks} />
+          <div className="status-detail-section">
+            <h3>Capabilities</h3>
+            <StatusFactList facts={integration.capabilities} />
+          </div>
+        </div>
+      </details>
 
       <details className="status-detail-disclosure">
         <summary>
@@ -5365,39 +5385,59 @@ function GraphDeliveryActionBar({
 
 function RuntimeSnapshotCard({ onCopy, readiness }: { onCopy: (value: string, label: string) => void; readiness: AdminReadinessOut }) {
   return (
-    <Card className="status-context-card" title="Runtime snapshot" description="Effective values used by relay operations.">
-      <dl className="status-runtime-list">
-        <dt>Application</dt>
-        <dd>
-          {readiness.app_name} {readiness.app_version}
-        </dd>
-        <dt>Public URL</dt>
-        <dd>
-          <CopyInlineValue label="Public URL" onCopy={onCopy} value={readiness.runtime.app_public_base_url} />
-        </dd>
-        <dt>Frontend URL</dt>
-        <dd>
-          <CopyInlineValue label="Frontend URL" onCopy={onCopy} value={readiness.runtime.frontend_base_url} />
-        </dd>
-        <dt>CORS origins</dt>
-        <dd>{readiness.runtime.cors_origins.join(", ") || "-"}</dd>
-        <dt>Compose subnet</dt>
-        <dd>{readiness.runtime.compose_app_subnet || "-"}</dd>
-        <dt>Trusted upstream proxies</dt>
-        <dd>{readiness.runtime.trusted_proxy_ips || "-"}</dd>
-        <dt>Trusted proxy chain</dt>
-        <dd>{readiness.runtime.trusted_proxy_chain || "-"}</dd>
-        <dt>Payload limit</dt>
-        <dd>{formatBytes(readiness.runtime.webhook_max_payload_bytes)}</dd>
-        <dt>Log retention</dt>
-        <dd>{readiness.runtime.log_retention_days} days</dd>
-        <dt>Cleanup interval</dt>
-        <dd>{readiness.runtime.log_cleanup_interval_minutes} minutes</dd>
-        <dt>Secure session cookie</dt>
-        <dd>{yesNo(readiness.runtime.session_secure_cookie)}</dd>
-        <dt>Settings encryption</dt>
-        <dd>{settingsEncryptionLabel(readiness.runtime.settings_encryption_key_source, readiness.runtime.settings_encryption_ready)}</dd>
-      </dl>
+    <Card className="status-context-card">
+      <details className="status-runtime-disclosure">
+        <summary>
+          <span>
+            <span className="integration-kicker">Developer details</span>
+            <strong>Runtime and environment</strong>
+            <small>URLs, proxy settings, limits and retention values.</small>
+          </span>
+          <span className="status-runtime-summary-badges">
+            <StatusBadge
+              label={`Retention ${readiness.runtime.log_retention_days}d`}
+              tone="neutral"
+            />
+            <StatusBadge
+              label={settingsEncryptionLabel(readiness.runtime.settings_encryption_key_source, readiness.runtime.settings_encryption_ready)}
+              tone={readiness.runtime.settings_encryption_ready ? "success" : "warn"}
+            />
+            <ChevronDown aria-hidden="true" className="settings-disclosure-icon" focusable="false" />
+          </span>
+        </summary>
+        <dl className="status-runtime-list">
+          <dt>Application</dt>
+          <dd>
+            {readiness.app_name} {readiness.app_version}
+          </dd>
+          <dt>Public URL</dt>
+          <dd>
+            <CopyInlineValue label="Public URL" onCopy={onCopy} value={readiness.runtime.app_public_base_url} />
+          </dd>
+          <dt>Frontend URL</dt>
+          <dd>
+            <CopyInlineValue label="Frontend URL" onCopy={onCopy} value={readiness.runtime.frontend_base_url} />
+          </dd>
+          <dt>CORS origins</dt>
+          <dd>{readiness.runtime.cors_origins.join(", ") || "-"}</dd>
+          <dt>Compose subnet</dt>
+          <dd>{readiness.runtime.compose_app_subnet || "-"}</dd>
+          <dt>Trusted upstream proxies</dt>
+          <dd>{readiness.runtime.trusted_proxy_ips || "-"}</dd>
+          <dt>Trusted proxy chain</dt>
+          <dd>{readiness.runtime.trusted_proxy_chain || "-"}</dd>
+          <dt>Payload limit</dt>
+          <dd>{formatBytes(readiness.runtime.webhook_max_payload_bytes)}</dd>
+          <dt>Log retention</dt>
+          <dd>{readiness.runtime.log_retention_days} days</dd>
+          <dt>Cleanup interval</dt>
+          <dd>{readiness.runtime.log_cleanup_interval_minutes} minutes</dd>
+          <dt>Secure session cookie</dt>
+          <dd>{yesNo(readiness.runtime.session_secure_cookie)}</dd>
+          <dt>Settings encryption</dt>
+          <dd>{settingsEncryptionLabel(readiness.runtime.settings_encryption_key_source, readiness.runtime.settings_encryption_ready)}</dd>
+        </dl>
+      </details>
     </Card>
   );
 }
