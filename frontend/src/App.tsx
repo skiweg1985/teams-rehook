@@ -4254,7 +4254,7 @@ function DeliveryMethodsPage() {
       <PageIntro
         eyebrow="Operations"
         title="Delivery"
-        description="Operate the complete delivery pipeline from one place: status, configuration, diagnostics and required actions per component."
+        description="Operate the complete delivery pipeline from one place."
         actions={
           readiness ? (
             <div className="row-actions">
@@ -4345,9 +4345,8 @@ function DeliveryComponentCard({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [detailView, setDetailView] = useState<DeliveryDetailView | null>(null);
   const inputId = useId();
-  const detailId = useId();
   const enabled = item?.effective_value === "true";
   const graphDeliveryBlocked = item?.key === "graph_delivery_enabled" && !enabled && !graphLookupEnabled;
   const readyChecks = integration.healthChecks.filter((check) => check.tone === "success").length;
@@ -4370,119 +4369,173 @@ function DeliveryComponentCard({
   }
 
   return (
-    <Card className={classNames("delivery-component-card", `delivery-component-card--${integration.tone}`)}>
-      <div className="delivery-component-header">
-        <div className="delivery-component-title">
-          <span className={classNames("status-dot", `status-dot--${integration.tone}`)} aria-hidden="true" />
-          <h2>{integration.title}</h2>
-          <p>{integration.description}</p>
+    <>
+      <Card className={classNames("delivery-component-card", `delivery-component-card--${integration.tone}`)}>
+        <div className="delivery-component-header">
+          <div className="delivery-component-title">
+            <span className={classNames("status-dot", `status-dot--${integration.tone}`)} aria-hidden="true" />
+            <h2>{integration.title}</h2>
+            <p>{integration.description}</p>
+          </div>
+          <div className="delivery-component-kpis" aria-label={`${integration.title} summary`}>
+            <DeliveryStatusGroup enabled={enabled} integration={integration} overridden={Boolean(item?.is_overridden)} />
+            <CompactStatusValue label="Checks" tone={readyChecks === integration.healthChecks.length ? "success" : readyChecks > 0 ? "warn" : "danger"} value={`${readyChecks}/${integration.healthChecks.length}`} />
+            <CompactStatusValue label="Token" tone={tokenFactValue?.tone ?? "neutral"} value={tokenFactValue?.value ?? "Unknown"} />
+          </div>
+          <div className="delivery-component-action">
+            <span className={classNames("delivery-action-state", actionItem && `delivery-action-state--${actionItem.tone}`)}>
+              {actionItem ? actionItem.title : "No action"}
+            </span>
+            {item ? (
+              <label className="settings-switch delivery-method-switch" htmlFor={inputId}>
+                <input
+                  id={inputId}
+                  type="checkbox"
+                  checked={enabled}
+                  disabled={busy || graphDeliveryBlocked}
+                  onChange={(event) => void toggle(event.target.checked)}
+                  aria-describedby={error ? `${inputId}-error` : undefined}
+                />
+                <span aria-hidden="true" />
+                <strong>{busy ? "Saving..." : enabled ? "Enabled" : "Disabled"}</strong>
+              </label>
+            ) : null}
+          </div>
         </div>
-        <div className="delivery-component-kpis" aria-label={`${integration.title} summary`}>
-          <DeliveryStatusGroup enabled={enabled} integration={integration} overridden={Boolean(item?.is_overridden)} />
-          <CompactStatusValue label="Checks" tone={readyChecks === integration.healthChecks.length ? "success" : readyChecks > 0 ? "warn" : "danger"} value={`${readyChecks}/${integration.healthChecks.length}`} />
-          <CompactStatusValue label="Token" tone={tokenFactValue?.tone ?? "neutral"} value={tokenFactValue?.value ?? "Unknown"} />
-        </div>
-        <div className="delivery-component-action">
-          <span className={classNames("delivery-action-state", actionItem && `delivery-action-state--${actionItem.tone}`)}>
-            {actionItem ? actionItem.title : "No action"}
-          </span>
-          {item ? (
-            <label className="settings-switch delivery-method-switch" htmlFor={inputId}>
-              <input
-                id={inputId}
-                type="checkbox"
-                checked={enabled}
-                disabled={busy || graphDeliveryBlocked}
-                onChange={(event) => void toggle(event.target.checked)}
-                aria-describedby={error ? `${inputId}-error` : undefined}
-              />
-              <span aria-hidden="true" />
-              <strong>{busy ? "Saving..." : enabled ? "Enabled" : "Disabled"}</strong>
-            </label>
-          ) : null}
-          <button
-            className="secondary-button secondary-button--small delivery-details-toggle"
-            type="button"
-            aria-controls={detailId}
-            aria-expanded={detailsOpen}
-            onClick={() => setDetailsOpen((open) => !open)}
-          >
-            <ChevronDown aria-hidden="true" className={classNames("settings-disclosure-icon", detailsOpen && "settings-disclosure-icon--open")} focusable="false" />
-            Details
+
+        {actionItem || graphDeliveryBlocked || error ? (
+          <div className="delivery-inline-issues">
+            {actionItem ? (
+              <div className={classNames("delivery-inline-issue", `delivery-inline-issue--${actionItem.tone}`)}>
+                <strong>{actionItem.title}</strong>
+                <span>{actionItem.description}</span>
+              </div>
+            ) : null}
+            {actionItem && integration.primaryActionSlot ? <div className="delivery-inline-action">{integration.primaryActionSlot}</div> : null}
+            {graphDeliveryBlocked ? <p className="settings-warning">Enable Graph lookup first.</p> : null}
+            {error ? (
+              <p className="form-error" id={`${inputId}-error`}>
+                {error}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div className="delivery-detail-hub" aria-label={`${integration.title} details`}>
+          <button type="button" className="delivery-detail-button" aria-label={`Open ${integration.title} readiness checks`} onClick={() => setDetailView("readiness")}>
+            <Check aria-hidden="true" className="button-icon" focusable="false" />
+            <span>Checks</span>
+            <strong>{readyChecks}/{integration.healthChecks.length}</strong>
+          </button>
+          <button type="button" className="delivery-detail-button" aria-label={`Open ${integration.title} configuration`} onClick={() => setDetailView("configuration")}>
+            <Wrench aria-hidden="true" className="button-icon" focusable="false" />
+            <span>Config</span>
+            <strong>{integration.credentials.filter(([, value]) => value === "Configured" || value === "Inherited").length}/{integration.credentials.length}</strong>
+          </button>
+          <button type="button" className="delivery-detail-button" aria-label={`Open ${integration.title} diagnostics`} onClick={() => setDetailView("diagnostics")}>
+            <Activity aria-hidden="true" className="button-icon" focusable="false" />
+            <span>Diagnostics</span>
+            <strong>{integration.lastCheckedLabel}</strong>
+          </button>
+          <button type="button" className="delivery-detail-button" aria-label={`Open ${integration.title} technical information`} onClick={() => setDetailView("technical")}>
+            <Info aria-hidden="true" className="button-icon" focusable="false" />
+            <span>Technical</span>
+            <strong>{integration.technicalRows.length} rows</strong>
           </button>
         </div>
+      </Card>
+      {detailView ? <DeliveryDetailModal integration={integration} view={detailView} onClose={() => setDetailView(null)} /> : null}
+    </>
+  );
+}
+
+type DeliveryDetailView = "readiness" | "configuration" | "diagnostics" | "technical";
+
+function DeliveryDetailModal({ integration, onClose, view }: { integration: IntegrationStatusView; onClose: () => void; view: DeliveryDetailView }) {
+  const titleByView: Record<DeliveryDetailView, string> = {
+    readiness: "Readiness Checks",
+    configuration: "Configuration",
+    diagnostics: "Diagnostics",
+    technical: "Technical Information",
+  };
+
+  return (
+    <Modal title={titleByView[view]} description={`${integration.title} · ${integration.statusLabel}`} onClose={onClose} panelClassName="delivery-inspector-modal">
+      {view === "readiness" ? <DeliveryReadinessInspector integration={integration} /> : null}
+      {view === "configuration" ? <DeliveryConfigurationInspector integration={integration} /> : null}
+      {view === "diagnostics" ? <DeliveryDiagnosticsInspector integration={integration} /> : null}
+      {view === "technical" ? <DeliveryTechnicalInspector integration={integration} /> : null}
+      <div className="form-actions">
+        <button className="secondary-button secondary-button--small" type="button" onClick={onClose}>
+          Close
+        </button>
       </div>
+    </Modal>
+  );
+}
 
-      {actionItem || graphDeliveryBlocked || error ? (
-        <div className="delivery-inline-issues">
-          {actionItem ? (
-            <div className={classNames("delivery-inline-issue", `delivery-inline-issue--${actionItem.tone}`)}>
-              <strong>{actionItem.title}</strong>
-              <span>{actionItem.description}</span>
-            </div>
-          ) : null}
-          {actionItem && integration.primaryActionSlot ? <div className="delivery-inline-action">{integration.primaryActionSlot}</div> : null}
-          {graphDeliveryBlocked ? <p className="settings-warning">Enable Graph lookup first.</p> : null}
-          {error ? (
-            <p className="form-error" id={`${inputId}-error`}>
-              {error}
-            </p>
-          ) : null}
-        </div>
-      ) : null}
+function DeliveryReadinessInspector({ integration }: { integration: IntegrationStatusView }) {
+  return (
+    <div className="delivery-inspector-body">
+      <StatusCheckList checks={integration.healthChecks} />
+    </div>
+  );
+}
 
-      {detailsOpen ? (
-        <div className="delivery-component-details" id={detailId}>
-          <div className="delivery-details-summary">
-            <p>{integration.summary}</p>
-            {integration.primaryActionSlot ? <div className="status-detail-actions">{integration.primaryActionSlot}</div> : null}
-          </div>
-          <div className="status-detail-section">
-            <h3>Readiness checks</h3>
-            <StatusCheckList checks={integration.healthChecks} />
-          </div>
-          <div className="status-detail-section">
-            <h3>Capabilities</h3>
-            <StatusFactList facts={integration.capabilities} />
-          </div>
-          <div className="status-detail-section">
-            <h3>Configuration</h3>
-            <div className="credential-check-grid">
-              {integration.credentials.map(([label, value]) => (
-                <CredentialCheck key={label} label={label} value={value} />
-              ))}
-            </div>
-          </div>
-          <div className="status-detail-section">
-            <h3>Permissions</h3>
-            <p>{integration.permissionSummary}</p>
-            <div className="permission-badge-list">
-              {integration.permissionBadges.map((badge) => (
-                <span className={classNames("permission-badge", `permission-badge--${badge.tone}`)} key={badge.label}>
-                  {badge.label}
-                </span>
-              ))}
-            </div>
-          </div>
-          <div className="status-detail-section">
-            <h3>Diagnostics</h3>
-            <dl className="definition-list definition-list--compact advanced-definition-list">
-              {integration.diagnosticRows.map((row) => (
-                <FragmentPair key={row.label} label={row.label} value={row.value} />
-              ))}
-            </dl>
-          </div>
-          <div className="status-detail-section">
-            <h3>Technical information</h3>
-            <dl className="definition-list definition-list--compact advanced-definition-list">
-              {integration.technicalRows.map((row) => (
-                <FragmentPair key={row.label} label={row.label} value={row.value} />
-              ))}
-            </dl>
-          </div>
+function DeliveryConfigurationInspector({ integration }: { integration: IntegrationStatusView }) {
+  return (
+    <div className="delivery-inspector-body">
+      <section className="delivery-inspector-section">
+        <h3>Credentials</h3>
+        <div className="credential-check-grid">
+          {integration.credentials.map(([label, value]) => (
+            <CredentialCheck key={label} label={label} value={value} />
+          ))}
         </div>
-      ) : null}
-    </Card>
+      </section>
+      <section className="delivery-inspector-section">
+        <h3>Capabilities</h3>
+        <StatusFactList facts={integration.capabilities} />
+      </section>
+    </div>
+  );
+}
+
+function DeliveryDiagnosticsInspector({ integration }: { integration: IntegrationStatusView }) {
+  return (
+    <div className="delivery-inspector-body">
+      <section className="delivery-inspector-section">
+        <h3>Permissions</h3>
+        <p>{integration.permissionSummary}</p>
+        <div className="permission-badge-list">
+          {integration.permissionBadges.map((badge) => (
+            <span className={classNames("permission-badge", `permission-badge--${badge.tone}`)} key={badge.label}>
+              {badge.label}
+            </span>
+          ))}
+        </div>
+      </section>
+      <section className="delivery-inspector-section">
+        <h3>Diagnostic output</h3>
+        <dl className="definition-list definition-list--compact advanced-definition-list">
+          {integration.diagnosticRows.map((row) => (
+            <FragmentPair key={row.label} label={row.label} value={row.value} />
+          ))}
+        </dl>
+      </section>
+    </div>
+  );
+}
+
+function DeliveryTechnicalInspector({ integration }: { integration: IntegrationStatusView }) {
+  return (
+    <div className="delivery-inspector-body">
+      <dl className="definition-list definition-list--compact advanced-definition-list">
+        {integration.technicalRows.map((row) => (
+          <FragmentPair key={row.label} label={row.label} value={row.value} />
+        ))}
+      </dl>
+    </div>
   );
 }
 

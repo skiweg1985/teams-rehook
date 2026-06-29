@@ -2182,36 +2182,112 @@ button:disabled {
   gap: var(--space-2);
 }
 
-.delivery-component-details {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-3);
-  padding-top: var(--space-2);
-  border-top: 1px solid var(--line);
-}
-
-.delivery-details-summary {
-  grid-column: 1 / -1;
+.delivery-detail-hub {
+  min-width: 0;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  padding: var(--space-2) 0;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0;
+  padding-top: var(--space-1);
 }
 
-.delivery-details-summary p {
-  min-width: 0;
-  margin: 0;
+.delivery-detail-button {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-right-width: 0;
+  background: var(--surface);
+  color: var(--ink-secondary);
+  font-size: 0.78rem;
+  font-weight: 750;
+  line-height: 1;
+}
+
+.delivery-detail-button:first-child {
+  border-top-left-radius: var(--radius-sm);
+  border-bottom-left-radius: var(--radius-sm);
+}
+
+.delivery-detail-button:last-child {
+  border-right-width: 1px;
+  border-top-right-radius: var(--radius-sm);
+  border-bottom-right-radius: var(--radius-sm);
+}
+
+.delivery-detail-button:hover {
+  background: var(--surface-muted);
+}
+
+.delivery-detail-button .button-icon {
+  width: 14px;
+  height: 14px;
   color: var(--muted);
-  font-size: 0.875rem;
 }
 
-.delivery-component-details .status-detail-section {
+.delivery-detail-button strong {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.delivery-inspector-modal {
+  width: min(100%, 620px);
+}
+
+.delivery-inspector-modal .modal-panel-header,
+.delivery-inspector-modal .modal-panel-body {
+  padding: var(--space-3);
+}
+
+.delivery-inspector-modal .modal-panel-desc {
+  font-size: 0.8125rem;
+}
+
+.delivery-inspector-body {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.delivery-inspector-section {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.delivery-inspector-section h3,
+.delivery-inspector-section p {
+  margin: 0;
+}
+
+.delivery-inspector-section h3 {
+  color: var(--ink-secondary);
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.delivery-inspector-section p {
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.delivery-inspector-modal .status-check-list,
+.delivery-inspector-modal .credential-check-grid {
   gap: var(--space-1);
 }
 
-.delivery-component-details .status-detail-section h3 {
-  font-size: 0.76rem;
+.delivery-inspector-modal .status-check-row,
+.delivery-inspector-modal .credential-check {
+  min-height: 34px;
+  padding-block: var(--space-1);
+}
+
+.delivery-inspector-modal .advanced-definition-list {
+  row-gap: var(--space-2);
 }
 
 .delivery-methods-card .card-body {
@@ -4535,20 +4611,19 @@ button:disabled {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .delivery-component-header,
-  .delivery-component-details {
+  .delivery-component-header {
     grid-template-columns: 1fr;
   }
 
   .delivery-component-kpis,
   .delivery-component-action,
-  .delivery-details-summary {
+  .delivery-detail-hub {
     justify-content: flex-start;
   }
 
-  .delivery-details-summary {
-    align-items: flex-start;
-    flex-direction: column;
+  .delivery-detail-button {
+    border-right-width: 1px;
+    border-radius: var(--radius-sm);
   }
 
   .delivery-log-layout {
