@@ -4400,6 +4400,7 @@ function DeliveryComponentCard({
                 <strong>{busy ? "Saving..." : enabled ? "Enabled" : "Disabled"}</strong>
               </label>
             ) : null}
+            {integration.manageActionSlot ? <div className="delivery-manage-action">{integration.manageActionSlot}</div> : null}
           </div>
           <div className="delivery-detail-hub" aria-label={`${integration.title} details`}>
             <button type="button" className="delivery-detail-button" aria-label={`Open ${integration.title} readiness checks`} onClick={() => setDetailView("readiness")}>
@@ -5188,6 +5189,7 @@ type IntegrationStatusView = {
   diagnosticRows: StatusTechnicalRow[];
   technicalRows: StatusTechnicalRow[];
   primaryActionSlot?: ReactNode;
+  manageActionSlot?: ReactNode;
 };
 
 function buildBotIntegrationView(readiness: AdminReadinessOut, onCopy: (value: string, label: string) => void): IntegrationStatusView {
@@ -5351,6 +5353,15 @@ function buildGraphDeliveryIntegrationView(
     attentionItems: graphDeliveryAttentionItems(readiness),
     primaryActionSlot: (
       <GraphDeliveryActionBar
+        busy={busy}
+        configured={readiness.configured}
+        enabled={readiness.enabled}
+        onConnect={onConnect}
+        onDisconnect={onDisconnect}
+      />
+    ),
+    manageActionSlot: (
+      <GraphDeliveryManageMenu
         busy={busy}
         configured={readiness.configured}
         enabled={readiness.enabled}
@@ -5564,6 +5575,48 @@ function GraphDeliveryActionBar({
       ) : null}
     </div>
   );
+}
+
+function GraphDeliveryManageMenu({
+  busy,
+  configured,
+  enabled,
+  onConnect,
+  onDisconnect,
+}: {
+  busy: boolean;
+  configured: boolean;
+  enabled: boolean;
+  onConnect: () => void;
+  onDisconnect: () => void;
+}) {
+  const items: RowActionItem[] = configured
+    ? [
+        {
+          label: "Reconnect service user",
+          icon: RefreshCw,
+          onClick: onConnect,
+          disabled: busy || !enabled,
+          spinning: busy,
+        },
+        {
+          label: "Disconnect service user",
+          icon: PowerOff,
+          onClick: onDisconnect,
+          disabled: busy,
+          separated: true,
+        },
+      ]
+    : [
+        {
+          label: "Connect service user",
+          icon: Power,
+          onClick: onConnect,
+          disabled: busy || !enabled,
+        },
+      ];
+
+  return <RowActionMenu label="Manage Graph delivery connection" items={items} />;
 }
 
 function RuntimeSnapshotCard({ onCopy, readiness }: { onCopy: (value: string, label: string) => void; readiness: AdminReadinessOut }) {

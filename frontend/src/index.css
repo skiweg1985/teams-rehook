@@ -1994,14 +1994,15 @@ button:disabled {
 .delivery-component-header {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(240px, 0.78fr) minmax(330px, 1fr) max-content;
+  grid-template-columns: minmax(240px, 0.52fr) minmax(0, 1fr);
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--space-2) var(--space-4);
 }
 
 .delivery-component-title {
   min-width: 0;
   display: grid;
+  grid-row: 1 / span 2;
   grid-template-columns: 42px minmax(0, 1fr);
   align-items: center;
   gap: var(--space-3);
@@ -2072,6 +2073,16 @@ button:disabled {
   align-items: center;
   flex-wrap: wrap;
   gap: 8px 12px;
+}
+
+.delivery-manage-action {
+  display: inline-flex;
+  align-items: center;
+}
+
+.delivery-manage-action .icon-button {
+  width: 32px;
+  height: 32px;
 }
 
 .delivery-status-group {
@@ -2179,15 +2190,18 @@ button:disabled {
 
 .delivery-detail-hub {
   min-width: 0;
+  max-width: 100%;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  flex-wrap: nowrap;
+  grid-column: 2;
+  justify-content: flex-start;
+  flex-wrap: wrap;
   gap: 0;
 }
 
 .delivery-detail-button {
   min-height: 34px;
+  flex: 0 1 auto;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -2282,22 +2296,6 @@ button:disabled {
 
 .delivery-inspector-modal .advanced-definition-list {
   row-gap: var(--space-2);
-}
-
-@media (max-width: 1280px) {
-  .delivery-component-header {
-    grid-template-columns: minmax(230px, 0.72fr) minmax(0, 1fr);
-    row-gap: var(--space-2);
-  }
-
-  .delivery-component-title {
-    grid-row: 1 / span 2;
-  }
-
-  .delivery-detail-hub {
-    grid-column: 2;
-    justify-content: flex-start;
-  }
 }
 
 .delivery-methods-card .card-body {
@@ -4529,6 +4527,10 @@ button:disabled {
     grid-template-columns: minmax(220px, 0.72fr) minmax(300px, 1fr);
   }
 
+  .delivery-component-title {
+    grid-row: auto;
+  }
+
   .delivery-detail-hub {
     grid-column: 1 / -1;
     justify-content: flex-start;
@@ -4637,6 +4639,8 @@ button:disabled {
   }
 
   .delivery-detail-button {
+    flex: 1 1 148px;
+    justify-content: center;
     border-right-width: 1px;
     border-radius: var(--radius-sm);
   }
@@ -4741,6 +4745,11 @@ button:disabled {
   .delivery-component-kpis,
   .delivery-detail-hub {
     align-items: flex-start;
+  }
+
+  .delivery-detail-hub {
+    width: 100%;
+    gap: var(--space-1);
   }
 
   .delivery-inline-issue {
