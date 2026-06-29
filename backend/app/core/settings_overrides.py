@@ -76,8 +76,6 @@ OVERRIDABLE_SETTINGS: dict[str, SettingDefinition] = {
     "ms_app_client_secret": SettingDefinition(
         "ms_app_client_secret", "Microsoft client secret", "secret", True
     ),
-    "botframework_scope": SettingDefinition("botframework_scope", "Bot Framework scope", "string", False),
-    "graph_scope": SettingDefinition("graph_scope", "Microsoft Graph scope", "string", False),
 }
 
 SETTING_DEFINITIONS: dict[str, SettingDefinition] = {

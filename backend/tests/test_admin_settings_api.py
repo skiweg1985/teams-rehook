@@ -12,7 +12,7 @@ from sqlalchemy.pool import StaticPool
 from app.core.settings_overrides import load_overrides, reset_override_state
 from app.database import Base, get_db
 from app.main import create_app
-from app.models import Organization, User
+from app.models import AppSetting, Organization, User
 from app.security import hash_secret
 
 
@@ -155,6 +155,41 @@ def test_secret_override_is_masked(db_session: Session, monkeypatch: pytest.Monk
         updated = put.json()
         assert updated["effective_value"] == "configured"
         assert "example-secret-value" not in str(updated)
+
+
+def test_token_scopes_are_env_only_settings(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_session.add(
+        AppSetting(key="botframework_scope", value="https://wrong.example.com/.default", is_secret=False)
+    )
+    db_session.add(AppSetting(key="graph_scope", value="https://wrong.example.com/.default", is_secret=False))
+    db_session.commit()
+
+    with make_client(db_session, monkeypatch) as client:
+        from app.core.settings_overrides import get_effective_settings
+
+        csrf = login_admin(client)
+        response = client.get("/api/v1/admin/settings", headers={"X-CSRF-Token": csrf})
+        assert response.status_code == 200
+        keys = {item["key"] for item in response.json()}
+        assert "botframework_scope" not in keys
+        assert "graph_scope" not in keys
+
+        for key in ("botframework_scope", "graph_scope"):
+            put = client.put(
+                f"/api/v1/admin/settings/{key}",
+                headers={"X-CSRF-Token": csrf},
+                json={"value": "https://override.example.com/.default"},
+            )
+            assert put.status_code == 404
+            assert put.json()["detail"] == "Unknown setting"
+
+            delete = client.delete(f"/api/v1/admin/settings/{key}", headers={"X-CSRF-Token": csrf})
+            assert delete.status_code == 404
+            assert delete.json()["detail"] == "Unknown setting"
+
+        effective = get_effective_settings()
+        assert effective.botframework_scope == "https://api.botframework.com/.default"
+        assert effective.graph_scope == "https://graph.microsoft.com/.default"
 
 
 def test_trust_x_forwarded_for_can_be_overridden(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:

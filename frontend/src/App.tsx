@@ -25,6 +25,7 @@ import {
   RotateCcwKey,
   Search,
   Send,
+  Settings as SettingsIcon,
   ShieldAlert,
   Trash2,
   Wrench,
@@ -4045,18 +4046,6 @@ const SETTING_META: Record<string, SettingMeta> = {
     description: "Used for Bot Framework delivery and Graph lookup.",
     display: "secret",
   },
-  botframework_scope: {
-    section: "advancedIdentity",
-    label: "Bot Framework scope",
-    description: "OAuth scope requested for Bot Framework tokens.",
-    display: "technical",
-  },
-  graph_scope: {
-    section: "advancedIdentity",
-    label: "Graph scope",
-    description: "OAuth scope requested for Microsoft Graph tokens.",
-    display: "technical",
-  },
 };
 
 const DELIVERY_SETTING_KEYS = [
@@ -4086,12 +4075,10 @@ const ABUSE_SETTING_KEYS = [
   "webhook_abuse_window_minutes",
 ] as const;
 
-const ADVANCED_IDENTITY_SETTING_KEYS = [
+const DELIVERY_IDENTITY_SETTING_KEYS = [
   "ms_app_tenant_id",
   "ms_app_client_id",
   "ms_app_client_secret",
-  "botframework_scope",
-  "graph_scope",
 ] as const;
 
 function StatusPage() {
@@ -4207,10 +4194,12 @@ function DeliveryMethodsPage() {
   const [error, setError] = useState("");
   const [graphOAuthBusy, setGraphOAuthBusy] = useState(false);
   const [authRefreshBusy, setAuthRefreshBusy] = useState(false);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  const refresh = useCallback(async (options?: { showLoading?: boolean }) => {
+    const showLoading = options?.showLoading !== false;
+    if (showLoading) setLoading(true);
     setError("");
     try {
       const [nextReadiness, nextSettings] = await Promise.all([api.adminReadiness(csrfToken), api.adminSettings(csrfToken)]);
@@ -4219,7 +4208,7 @@ function DeliveryMethodsPage() {
     } catch (err) {
       setError(isApiError(err) ? err.message : "Delivery data could not be loaded.");
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   }, [csrfToken]);
 
@@ -4278,9 +4267,11 @@ function DeliveryMethodsPage() {
 
   const settingsByKey = useMemo(() => new Map(settings.map((item) => [item.key, item])), [settings]);
   const deliverySettings = orderedSettings(DELIVERY_SETTING_KEYS, settingsByKey);
+  const identitySettings = orderedSettings(DELIVERY_IDENTITY_SETTING_KEYS, settingsByKey);
   const enabledCount = deliverySettings.filter((item) => item.effective_value === "true").length;
   const deliveryMethodCount = deliverySettings.length || DELIVERY_SETTING_KEYS.length;
   const graphLookupEnabled = settingEnabled(settingsByKey, "graph_lookup_enabled");
+  const refreshSilently = useCallback(() => refresh({ showLoading: false }), [refresh]);
   const integrationViews = readiness
     ? [
         buildBotIntegrationView(readiness, copyDiagnosticValue),
@@ -4299,8 +4290,7 @@ function DeliveryMethodsPage() {
         description="Operate the complete delivery pipeline from one place."
         actions={
           readiness ? (
-            <div className="row-actions">
-              <StatusBadge label={overallLabel} tone={overallTone} />
+            <div className="row-actions delivery-page-actions">
               <button
                 className="secondary-button secondary-button--small button-with-icon"
                 type="button"
@@ -4310,6 +4300,15 @@ function DeliveryMethodsPage() {
               >
                 <RefreshCw aria-hidden="true" className={classNames("button-icon", authRefreshBusy && "button-icon--spin")} focusable="false" />
                 {authRefreshBusy ? "Refreshing..." : "Refresh auth tokens"}
+              </button>
+              <button
+                className="icon-button delivery-settings-trigger"
+                type="button"
+                onClick={() => setSettingsModalOpen(true)}
+                aria-label="Configure delivery settings"
+                title="Configure delivery settings"
+              >
+                <SettingsIcon aria-hidden="true" focusable="false" />
               </button>
             </div>
           ) : null
@@ -4358,6 +4357,16 @@ function DeliveryMethodsPage() {
           <section className="status-operations-grid" aria-label="Runtime context">
             <RuntimeSnapshotCard readiness={readiness} onCopy={copyDiagnosticValue} />
           </section>
+          {settingsModalOpen ? (
+            <DeliverySettingsModal
+              settings={identitySettings}
+              settingsByKey={settingsByKey}
+              csrfToken={csrfToken}
+              onChanged={refreshSilently}
+              notify={notify}
+              onClose={() => setSettingsModalOpen(false)}
+            />
+          ) : null}
         </div>
       ) : null}
     </>
@@ -4538,6 +4547,66 @@ function DeliveryMethodIcon({ integrationId }: { integrationId: string }) {
 
 type DeliveryDetailView = "readiness" | "configuration" | "diagnostics" | "technical";
 
+function DeliverySettingsModal({
+  csrfToken,
+  notify,
+  onChanged,
+  onClose,
+  settings,
+  settingsByKey,
+}: SettingsCardProps & { onClose: () => void }) {
+  const tenantConfigured = Boolean(settingValue(settingsByKey, "ms_app_tenant_id"));
+  const clientConfigured = Boolean(settingValue(settingsByKey, "ms_app_client_id"));
+  const secretConfigured = settingValue(settingsByKey, "ms_app_client_secret") === "configured";
+  const configuredCount = [tenantConfigured, clientConfigured, secretConfigured].filter(Boolean).length;
+  const identityReady = configuredCount === 3;
+  const overrideCount = settings.filter((item) => item.is_overridden).length;
+
+  return (
+    <Modal
+      title="Delivery settings"
+      description="Microsoft identity values used by Bot Framework and Graph delivery."
+      onClose={onClose}
+      panelClassName="delivery-settings-modal"
+    >
+      <div className="delivery-settings-modal-body">
+        <section className={classNames("delivery-settings-summary", identityReady ? "delivery-settings-summary--ready" : "delivery-settings-summary--warn")}>
+          <span className={classNames("delivery-status-dot", identityReady ? "delivery-status-dot--success" : "delivery-status-dot--warn")} aria-hidden="true" />
+          <div>
+            <strong>{configuredCount}/3 identity values configured</strong>
+            <p>{identityReady ? "Tenant, client and secret are ready for delivery auth." : "Complete the missing identity values before refreshing auth tokens."}</p>
+          </div>
+          <StatusBadge label={overrideCount > 0 ? `${overrideCount} overrides` : "ENV"} tone={overrideCount > 0 ? "warn" : "neutral"} />
+        </section>
+        <div className="delivery-settings-list">
+          {settings.length ? (
+            settings.map((item) => (
+              <RuntimeSettingControl
+                key={item.key}
+                item={item}
+                csrfToken={csrfToken}
+                onChanged={onChanged}
+                notify={notify}
+                settingsByKey={settingsByKey}
+              />
+            ))
+          ) : (
+            <EmptyState title="No identity settings available" body="Delivery identity settings could not be loaded." />
+          )}
+        </div>
+        <p className="delivery-settings-footnote">
+          OAuth scopes use the built-in Bot Framework and Microsoft Graph defaults. Override them only through environment variables when needed.
+        </p>
+      </div>
+      <div className="form-actions">
+        <button className="secondary-button secondary-button--small" type="button" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 function DeliveryDetailModal({ integration, onClose, view }: { integration: IntegrationStatusView; onClose: () => void; view: DeliveryDetailView }) {
   const titleByView: Record<DeliveryDetailView, string> = {
     readiness: "Readiness Checks",
@@ -4651,7 +4720,6 @@ function SettingsPage() {
   const [settings, setSettings] = useState<SettingItemOut[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [identityOpen, setIdentityOpen] = useState(false);
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
 
   const refresh = useCallback(async () => {
@@ -4671,18 +4739,17 @@ function SettingsPage() {
   }, [refresh]);
 
   const settingsByKey = useMemo(() => new Map(settings.map((item) => [item.key, item])), [settings]);
-  const overrideCount = settings.filter((item) => item.is_overridden).length;
   const runtimeSettings = orderedSettings(RUNTIME_SETTING_KEYS, settingsByKey);
-  const identitySettings = orderedSettings(ADVANCED_IDENTITY_SETTING_KEYS, settingsByKey);
-  const overrideBadge = overrideCount > 0 ? `${overrideCount} ${overrideCount === 1 ? "override" : "overrides"}` : "All defaults";
+  const runtimeOverrideCount = runtimeSettings.filter((item) => item.is_overridden).length;
+  const overrideBadge = runtimeOverrideCount > 0 ? `${runtimeOverrideCount} ${runtimeOverrideCount === 1 ? "override" : "overrides"}` : "All defaults";
 
   return (
     <>
       <PageIntro
         eyebrow="Configuration"
         title="Settings"
-        description="Manage runtime defaults and Microsoft identity values."
-        actions={<StatusBadge label={overrideBadge} tone={overrideCount > 0 ? "warn" : "neutral"} />}
+        description="Manage runtime defaults used by relay operations."
+        actions={<StatusBadge label={overrideBadge} tone={runtimeOverrideCount > 0 ? "warn" : "neutral"} />}
       />
       {loading ? (
         <Card>
@@ -4703,22 +4770,13 @@ function SettingsPage() {
         </Card>
       ) : (
         <div className="settings-page">
-          <SettingsOverviewStrip settingsByKey={settingsByKey} overrideCount={overrideCount} />
+          <SettingsOverviewStrip settingsByKey={settingsByKey} overrideCount={runtimeOverrideCount} />
           <RuntimeDefaultsCard
             settings={runtimeSettings}
             settingsByKey={settingsByKey}
             csrfToken={csrfToken}
             onChanged={refresh}
             notify={notify}
-          />
-          <AdvancedIdentityCard
-            settings={identitySettings}
-            settingsByKey={settingsByKey}
-            csrfToken={csrfToken}
-            onChanged={refresh}
-            notify={notify}
-            open={identityOpen}
-            onToggle={() => setIdentityOpen((value) => !value)}
           />
         </div>
       )}
@@ -4745,10 +4803,6 @@ function SettingsOverviewStrip({
   overrideCount: number;
   settingsByKey: Map<string, SettingItemOut>;
 }) {
-  const tenantConfigured = Boolean(settingValue(settingsByKey, "ms_app_tenant_id"));
-  const clientConfigured = Boolean(settingValue(settingsByKey, "ms_app_client_id"));
-  const secretConfigured = settingValue(settingsByKey, "ms_app_client_secret") === "configured";
-  const identityReady = tenantConfigured && clientConfigured && secretConfigured;
   const runtimeOverrideCount = RUNTIME_SETTING_KEYS.filter((key) => settingsByKey.get(key)?.is_overridden).length;
 
   return (
@@ -4763,12 +4817,6 @@ function SettingsOverviewStrip({
         value={runtimeOverrideCount > 0 ? `${runtimeOverrideCount} overrides` : "Defaults"}
         detail={runtimeOverrideCount > 0 ? "URL, retention or proxy values are overridden." : "Runtime values inherit from environment config."}
         tone={runtimeOverrideCount > 0 ? "warn" : "neutral"}
-      />
-      <OverviewMetric
-        label="Identity"
-        value={identityReady ? "Configured" : "Needs attention"}
-        detail={identityReady ? "Tenant, client and secret are present." : "Check Microsoft Entra values."}
-        tone={identityReady ? "success" : "warn"}
       />
     </section>
   );
@@ -4878,62 +4926,6 @@ function RuntimeDefaultsCard({
             />
           ))}
         </div>
-      </div>
-    </Card>
-  );
-}
-
-function AdvancedIdentityCard({
-  csrfToken,
-  notify,
-  onChanged,
-  onToggle,
-  open,
-  settings,
-  settingsByKey,
-}: SettingsCardProps & { open: boolean; onToggle: () => void }) {
-  const overriddenCount = settings.filter((item) => item.is_overridden).length;
-  const secret = settingsByKey.get("ms_app_client_secret");
-  const secretReady = secret?.effective_value === "configured";
-
-  return (
-    <Card className="settings-card settings-card--identity">
-      <div className="settings-disclosure">
-        <button
-          className="settings-disclosure-trigger"
-          type="button"
-          aria-expanded={open}
-          aria-controls="advanced-identity-settings"
-          onClick={onToggle}
-        >
-          <span>
-            <span className="settings-disclosure-kicker">Advanced</span>
-            <strong>Microsoft identity</strong>
-            <small>Tenant, client secret and OAuth scopes for Bot Framework and Graph.</small>
-          </span>
-          <span className="settings-disclosure-badges">
-            <StatusBadge label={secretReady ? "Secret configured" : "Secret missing"} tone={secretReady ? "success" : "warn"} />
-            {overriddenCount > 0 ? <StatusBadge label={`${overriddenCount} overrides`} tone="warn" /> : <StatusBadge label="ENV" />}
-            <ChevronDown aria-hidden="true" className="settings-disclosure-icon" focusable="false" />
-          </span>
-        </button>
-        {open ? (
-          <div className="settings-advanced-list" id="advanced-identity-settings">
-            <p className="settings-advanced-intro">
-              Microsoft Entra app registration used for Bot Framework and Graph. These values apply immediately after saving.
-            </p>
-            {settings.map((item) => (
-              <RuntimeSettingControl
-                key={item.key}
-                item={item}
-                csrfToken={csrfToken}
-                onChanged={onChanged}
-                notify={notify}
-                settingsByKey={settingsByKey}
-              />
-            ))}
-          </div>
-        ) : null}
       </div>
     </Card>
   );

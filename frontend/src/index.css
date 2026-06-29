@@ -2010,6 +2010,20 @@ button:disabled {
   align-items: start;
 }
 
+.delivery-page-actions {
+  flex-wrap: nowrap;
+}
+
+.delivery-settings-trigger {
+  width: 32px;
+  height: 32px;
+}
+
+.delivery-settings-trigger svg {
+  width: 16px;
+  height: 16px;
+}
+
 .delivery-component-grid {
   display: grid;
   gap: var(--space-2);
@@ -2532,6 +2546,123 @@ button:disabled {
 
 .delivery-inspector-modal .modal-panel-body .form-actions {
   flex: none;
+  position: static;
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+}
+
+.modal-panel.delivery-settings-modal {
+  width: min(100%, 700px);
+}
+
+.delivery-settings-modal .modal-panel-header {
+  padding: 18px var(--space-4) 16px;
+}
+
+.delivery-settings-modal .modal-panel-header h2 {
+  font-size: 1.42rem;
+  line-height: 1.15;
+}
+
+.delivery-settings-modal .modal-panel-body {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.delivery-settings-modal .modal-panel-desc {
+  flex: none;
+  padding: 14px var(--space-4) 0;
+  font-size: 0.8125rem;
+}
+
+.delivery-settings-modal-body {
+  min-height: 0;
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  overflow: visible;
+}
+
+.delivery-settings-summary {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface) 94%, var(--surface-muted));
+}
+
+.delivery-settings-summary--ready {
+  border-color: color-mix(in srgb, var(--status-ready-dot) 20%, var(--line));
+}
+
+.delivery-settings-summary--warn {
+  border-color: color-mix(in srgb, var(--status-warn-dot) 24%, var(--line));
+}
+
+.delivery-settings-summary div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.delivery-settings-summary strong,
+.delivery-settings-summary p {
+  margin: 0;
+}
+
+.delivery-settings-summary strong {
+  color: var(--ink);
+  font-size: 0.9rem;
+  line-height: 1.25;
+}
+
+.delivery-settings-summary p,
+.delivery-settings-footnote {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.35;
+}
+
+.delivery-settings-list {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.delivery-settings-modal .settings-control {
+  grid-template-columns: minmax(150px, 0.58fr) minmax(0, 1.42fr);
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.delivery-settings-modal .settings-control-copy p,
+.delivery-settings-modal .settings-secret-state span:not(.status-badge),
+.delivery-settings-modal .settings-source-row {
+  font-size: 0.78rem;
+}
+
+.delivery-settings-modal .settings-input-action input {
+  min-width: 0;
+}
+
+.delivery-settings-footnote {
+  margin: 0;
+  padding: 0 var(--space-1);
+}
+
+.delivery-settings-modal .modal-panel-body .form-actions {
+  flex: none;
+  align-items: center;
+  flex-direction: row;
+  justify-content: flex-end;
   position: static;
   margin: 0;
   padding: var(--space-3) var(--space-4);
@@ -5197,6 +5328,25 @@ button:disabled {
   .row-actions {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .delivery-page-actions {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .delivery-page-actions .secondary-button {
+    min-width: 0;
+    white-space: nowrap;
+  }
+
+  .delivery-settings-summary {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .delivery-settings-summary .status-badge {
+    grid-column: 2;
+    justify-self: start;
   }
 
   .system-logs-actions,
