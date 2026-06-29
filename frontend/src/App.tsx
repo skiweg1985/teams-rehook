@@ -12,6 +12,7 @@ import {
   EyeOff,
   FileClock,
   Info,
+  Menu,
   MessageSquareText,
   MessagesSquare,
   MoreHorizontal,
@@ -28,6 +29,7 @@ import {
   Trash2,
   Wrench,
   Webhook,
+  X,
   type LucideIcon,
 } from "lucide-react";
 
@@ -513,29 +515,56 @@ function WebhookCopyPage() {
 function AppShell() {
   const { session, logout } = useAppContext();
   const [route, setRoute] = useState<RouteName>(() => routeFromPath(window.location.pathname));
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
-    const onPop = () => setRoute(routeFromPath(window.location.pathname));
+    const onPop = () => {
+      setRoute(routeFromPath(window.location.pathname));
+      setSidebarOpen(false);
+    };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
+  useEffect(() => {
+    if (!sidebarOpen) return undefined;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSidebarOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [sidebarOpen]);
+
   function navigate(next: RouteName, path: string) {
     window.history.pushState(null, "", path);
     setRoute(next);
+    setSidebarOpen(false);
   }
 
   if (session.status !== "authenticated") return null;
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
+      <button
+        className={classNames("sidebar-backdrop", sidebarOpen && "sidebar-backdrop--open")}
+        type="button"
+        aria-label="Dismiss menu overlay"
+        onClick={() => setSidebarOpen(false)}
+      />
+      <aside className={classNames("sidebar", sidebarOpen && "sidebar--open")} id="app-sidebar">
         <div className="brand-row">
           <div className="app-mark">T</div>
           <div>
             <strong>Teams Rehook</strong>
             <span>Webhook Relay</span>
           </div>
+          <button className="sidebar-close" type="button" aria-label="Close navigation" onClick={() => setSidebarOpen(false)}>
+            <X aria-hidden="true" />
+          </button>
         </div>
         <nav className="nav-list" aria-label="Primary navigation">
           {NAV.map((item) => (
@@ -562,7 +591,17 @@ function AppShell() {
       </aside>
       <main className="main-content">
         <header className="topbar">
-          <div />
+          <div className="topbar-spacer" />
+          <button
+            className="sidebar-toggle"
+            type="button"
+            aria-controls="app-sidebar"
+            aria-expanded={sidebarOpen}
+            onClick={() => setSidebarOpen(true)}
+          >
+            <Menu aria-hidden="true" />
+            <span>Menu</span>
+          </button>
           <ThemeToggle />
         </header>
         {route === "dashboard" ? <DashboardPage /> : null}
@@ -4425,28 +4464,32 @@ function DeliveryComponentCard({
               onClick={() => setDetailView("readiness")}
             >
               <Check aria-hidden="true" className="button-icon" focusable="false" />
-              <span className="delivery-action-label" data-short="Checks" data-icon="Checks">
-                Checks
+              <span className="delivery-action-label" aria-hidden="true">
+                <span className="delivery-action-label-full">Checks</span>
+                <span className="delivery-action-label-short">Checks</span>
               </span>
               <strong>{readyChecks}/{integration.healthChecks.length}</strong>
             </button>
             <button type="button" className="delivery-detail-button delivery-detail-button--primary" aria-label={`Open ${integration.title} configuration`} onClick={() => setDetailView("configuration")}>
               <Wrench aria-hidden="true" className="button-icon" focusable="false" />
-              <span className="delivery-action-label" data-short="Config" data-icon="Config">
-                Config
+              <span className="delivery-action-label" aria-hidden="true">
+                <span className="delivery-action-label-full">Config</span>
+                <span className="delivery-action-label-short">Config</span>
               </span>
               <strong>{configuredCount}/{integration.credentials.length}</strong>
             </button>
             <button type="button" className="delivery-detail-button delivery-detail-button--secondary" aria-label={`Open ${integration.title} diagnostics`} onClick={() => setDetailView("diagnostics")}>
               <Activity aria-hidden="true" className="button-icon" focusable="false" />
-              <span className="delivery-action-label" data-short="Diag" data-icon="Diag">
-                Diagnostics
+              <span className="delivery-action-label" aria-hidden="true">
+                <span className="delivery-action-label-full">Diagnostics</span>
+                <span className="delivery-action-label-short">Diag</span>
               </span>
             </button>
             <button type="button" className="delivery-detail-button delivery-detail-button--secondary" aria-label={`Open ${integration.title} technical information`} onClick={() => setDetailView("technical")}>
               <Info aria-hidden="true" className="button-icon" focusable="false" />
-              <span className="delivery-action-label" data-short="Tech" data-icon="Tech">
-                Technical
+              <span className="delivery-action-label" aria-hidden="true">
+                <span className="delivery-action-label-full">Technical</span>
+                <span className="delivery-action-label-short">Tech</span>
               </span>
             </button>
           </div>
