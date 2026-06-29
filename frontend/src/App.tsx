@@ -4057,9 +4057,6 @@ function StatusPage() {
   const [readiness, setReadiness] = useState<AdminReadinessOut | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [graphOAuthBusy, setGraphOAuthBusy] = useState(false);
-  const [authRefreshBusy, setAuthRefreshBusy] = useState(false);
-  const [selectedComponentId, setSelectedComponentId] = useState("");
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
 
   const refresh = useCallback(async () => {
@@ -4069,6 +4066,116 @@ function StatusPage() {
       setReadiness(await api.adminReadiness(csrfToken));
     } catch (err) {
       setError(isApiError(err) ? err.message : "Status data could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
+  }, [csrfToken]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  async function copyDiagnosticValue(value: string, label: string) {
+    await navigator.clipboard.writeText(value);
+    notify({ tone: "success", title: `${label} copied` });
+  }
+
+  return (
+    <>
+      <PageIntro
+        eyebrow="System"
+        title="Status"
+        description="General runtime information for the application. Delivery operations now live on the Delivery page."
+        actions={readiness ? <StatusBadge label={readiness.app_version} tone="neutral" /> : null}
+      />
+      {loading ? (
+        <Card>
+          <div className="table-state" role="status" aria-live="polite">
+            <div className="spinner spinner--small" aria-hidden="true" />
+            <p>Loading status...</p>
+          </div>
+        </Card>
+      ) : error ? (
+        <Card>
+          <div className="table-state table-state--error" role="alert">
+            <h3>Could not load status</h3>
+            <p>{error}</p>
+            <button className="secondary-button secondary-button--small" type="button" onClick={() => void refresh()}>
+              Retry
+            </button>
+          </div>
+        </Card>
+      ) : readiness ? (
+        <div className="status-command-center">
+          <section className="status-overview" aria-label="System overview">
+            <StatusOverviewMetric label="Application" value={readiness.app_name} detail={`Version ${readiness.app_version}`} />
+            <StatusOverviewMetric
+              label="Settings"
+              value={settingsEncryptionLabel(readiness.runtime.settings_encryption_key_source, readiness.runtime.settings_encryption_ready)}
+              detail="Encryption state for stored runtime settings."
+              tone={readiness.runtime.settings_encryption_ready ? "success" : "warn"}
+            />
+            <StatusOverviewMetric label="Payload limit" value={formatBytes(readiness.runtime.webhook_max_payload_bytes)} detail="Maximum accepted webhook request body." />
+            <StatusOverviewMetric label="Retention" value={`${readiness.runtime.log_retention_days} days`} detail="Event and audit data retention window." />
+          </section>
+          <section className="status-operations-grid" aria-label="Operational context">
+            <RuntimeSnapshotCard readiness={readiness} onCopy={copyDiagnosticValue} />
+          </section>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function deliveryAuthRefreshToastTone(result: DeliveryAuthRefreshOut): "success" | "info" {
+  return deliveryAuthRefreshComponents(result).some((component) => component.status === "skipped") ? "info" : "success";
+}
+
+function deliveryAuthRefreshToastDescription(result: DeliveryAuthRefreshOut): string {
+  const components = deliveryAuthRefreshComponents(result);
+  const failed = components.filter((component) => component.status === "failed");
+  if (failed.length) {
+    return failed.map((component) => `${component.label}: ${component.message}`).join(" ");
+  }
+  const refreshed = components.filter((component) => component.status === "refreshed").length;
+  const cleared = components.filter((component) => component.status === "cleared").length;
+  const skipped = components.filter((component) => component.status === "skipped").length;
+  const parts = [
+    refreshed ? `${refreshed} refreshed` : "",
+    cleared ? `${cleared} cache${cleared === 1 ? "" : "s"} cleared` : "",
+    skipped ? `${skipped} skipped` : "",
+  ].filter(Boolean);
+  return parts.join(", ") || "Delivery authentication state was checked.";
+}
+
+function deliveryAuthRefreshComponents(result: DeliveryAuthRefreshOut) {
+  return [
+    { label: "Bot delivery", ...result.bot_delivery },
+    { label: "Graph lookup", ...result.graph_lookup },
+    { label: "Graph delivery", ...result.graph_delivery },
+    { label: "Bot inbound auth", ...result.bot_inbound_auth },
+  ];
+}
+
+function DeliveryMethodsPage() {
+  const { notify, session } = useAppContext();
+  const [readiness, setReadiness] = useState<AdminReadinessOut | null>(null);
+  const [settings, setSettings] = useState<SettingItemOut[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [graphOAuthBusy, setGraphOAuthBusy] = useState(false);
+  const [authRefreshBusy, setAuthRefreshBusy] = useState(false);
+  const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const [nextReadiness, nextSettings] = await Promise.all([api.adminReadiness(csrfToken), api.adminSettings(csrfToken)]);
+      setReadiness(nextReadiness);
+      setSettings(nextSettings);
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Delivery data could not be loaded.");
     } finally {
       setLoading(false);
     }
@@ -4127,6 +4234,11 @@ function StatusPage() {
     }
   }
 
+  const settingsByKey = useMemo(() => new Map(settings.map((item) => [item.key, item])), [settings]);
+  const deliverySettings = orderedSettings(DELIVERY_SETTING_KEYS, settingsByKey);
+  const enabledCount = deliverySettings.filter((item) => item.effective_value === "true").length;
+  const deliveryMethodCount = deliverySettings.length || DELIVERY_SETTING_KEYS.length;
+  const graphLookupEnabled = settingEnabled(settingsByKey, "graph_lookup_enabled");
   const integrationViews = readiness
     ? [
         buildBotIntegrationView(readiness, copyDiagnosticValue),
@@ -4136,15 +4248,15 @@ function StatusPage() {
     : [];
   const overallTone = integrationViews.some((view) => view.tone === "danger") ? "danger" : integrationViews.some((view) => view.tone === "warn") ? "warn" : "success";
   const overallLabel = overallTone === "danger" ? "Degraded" : overallTone === "warn" ? "Attention" : "Ready";
-  const defaultSelectedComponentId = integrationViews.find((view) => view.tone === "danger" || view.tone === "warn")?.id ?? integrationViews.find((view) => view.id === "graph-delivery")?.id ?? integrationViews[0]?.id ?? "";
-  const selectedIntegration = integrationViews.find((view) => view.id === selectedComponentId) ?? integrationViews.find((view) => view.id === defaultSelectedComponentId) ?? integrationViews[0] ?? null;
+  const readyCount = integrationViews.filter((view) => view.tone === "success").length;
+  const attentionCount = integrationViews.reduce((count, view) => count + view.attentionItems.length, 0);
 
   return (
     <>
       <PageIntro
         eyebrow="Operations"
-        title="Status"
-        description="See whether Teams Rehook is ready, what needs attention and the next operational step."
+        title="Delivery"
+        description="Operate the complete delivery pipeline from one place: status, configuration, diagnostics and required actions per component."
         actions={
           readiness ? (
             <div className="row-actions">
@@ -4167,13 +4279,13 @@ function StatusPage() {
         <Card>
           <div className="table-state" role="status" aria-live="polite">
             <div className="spinner spinner--small" aria-hidden="true" />
-            <p>Loading status...</p>
+            <p>Loading delivery operations...</p>
           </div>
         </Card>
       ) : error ? (
         <Card>
           <div className="table-state table-state--error" role="alert">
-            <h3>Could not load status</h3>
+            <h3>Could not load delivery operations</h3>
             <p>{error}</p>
             <button className="secondary-button secondary-button--small" type="button" onClick={() => void refresh()}>
               Retry
@@ -4181,15 +4293,48 @@ function StatusPage() {
           </div>
         </Card>
       ) : readiness ? (
-        <div className="status-command-center">
+        <div className="delivery-page delivery-operations-page">
           <RelayHealthHero readiness={readiness} integrations={integrationViews} overallLabel={overallLabel} overallTone={overallTone} />
-          <RelayPipelineLayout
-            integrations={integrationViews}
-            selectedIntegration={selectedIntegration}
-            selectedComponentId={selectedIntegration?.id ?? defaultSelectedComponentId}
-            onSelectComponent={setSelectedComponentId}
-          />
-          <section className="status-operations-grid" aria-label="Operational context">
+          <section className="status-overview" aria-label="Delivery overview">
+            <StatusOverviewMetric
+              label="Methods"
+              value={`${enabledCount}/${deliveryMethodCount} enabled`}
+              detail="Delivery components currently available to routes."
+              tone={enabledCount === deliveryMethodCount ? "success" : enabledCount ? "warn" : "danger"}
+            />
+            <StatusOverviewMetric
+              label="Health"
+              value={`${readyCount}/${integrationViews.length} ready`}
+              detail="Component readiness from the latest check."
+              tone={readyCount === integrationViews.length ? "success" : readyCount > 0 ? "warn" : "danger"}
+            />
+            <StatusOverviewMetric
+              label="Action"
+              value={attentionCount ? `${attentionCount} item${attentionCount === 1 ? "" : "s"}` : "None"}
+              detail={attentionCount ? "Review the affected component below." : "No immediate delivery action required."}
+              tone={attentionCount ? (integrationViews.some((view) => view.attentionItems.some((item) => item.tone === "danger")) ? "danger" : "warn") : "success"}
+            />
+            <StatusOverviewMetric
+              label="Auth"
+              value={`${integrationViews.filter((view) => view.facts.some((fact) => fact.label === "Token" && fact.tone === "success")).length}/${integrationViews.length} valid`}
+              detail="Token checks that currently pass."
+              tone={overallTone}
+            />
+          </section>
+          <section className="delivery-component-grid" aria-label="Delivery methods">
+            {integrationViews.map((integration) => (
+              <DeliveryComponentCard
+                key={integration.id}
+                csrfToken={csrfToken}
+                graphLookupEnabled={graphLookupEnabled}
+                integration={integration}
+                item={settingsByKey.get(deliverySettingKeyForIntegration(integration.id))}
+                notify={notify}
+                onChanged={refresh}
+              />
+            ))}
+          </section>
+          <section className="status-operations-grid" aria-label="Runtime context">
             <RuntimeSnapshotCard readiness={readiness} onCopy={copyDiagnosticValue} />
           </section>
         </div>
@@ -4198,141 +4343,37 @@ function StatusPage() {
   );
 }
 
-function deliveryAuthRefreshToastTone(result: DeliveryAuthRefreshOut): "success" | "info" {
-  return deliveryAuthRefreshComponents(result).some((component) => component.status === "skipped") ? "info" : "success";
+function deliverySettingKeyForIntegration(integrationId: string): (typeof DELIVERY_SETTING_KEYS)[number] {
+  if (integrationId === "graph-lookup") return "graph_lookup_enabled";
+  if (integrationId === "graph-delivery") return "graph_delivery_enabled";
+  return "bot_framework_enabled";
 }
 
-function deliveryAuthRefreshToastDescription(result: DeliveryAuthRefreshOut): string {
-  const components = deliveryAuthRefreshComponents(result);
-  const failed = components.filter((component) => component.status === "failed");
-  if (failed.length) {
-    return failed.map((component) => `${component.label}: ${component.message}`).join(" ");
-  }
-  const refreshed = components.filter((component) => component.status === "refreshed").length;
-  const cleared = components.filter((component) => component.status === "cleared").length;
-  const skipped = components.filter((component) => component.status === "skipped").length;
-  const parts = [
-    refreshed ? `${refreshed} refreshed` : "",
-    cleared ? `${cleared} cache${cleared === 1 ? "" : "s"} cleared` : "",
-    skipped ? `${skipped} skipped` : "",
-  ].filter(Boolean);
-  return parts.join(", ") || "Delivery authentication state was checked.";
-}
-
-function deliveryAuthRefreshComponents(result: DeliveryAuthRefreshOut) {
-  return [
-    { label: "Bot delivery", ...result.bot_delivery },
-    { label: "Graph lookup", ...result.graph_lookup },
-    { label: "Graph delivery", ...result.graph_delivery },
-    { label: "Bot inbound auth", ...result.bot_inbound_auth },
-  ];
-}
-
-function DeliveryMethodsPage() {
-  const { notify, session } = useAppContext();
-  const [settings, setSettings] = useState<SettingItemOut[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
-
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      setSettings(await api.adminSettings(csrfToken));
-    } catch (err) {
-      setError(isApiError(err) ? err.message : "Delivery settings could not be loaded.");
-    } finally {
-      setLoading(false);
-    }
-  }, [csrfToken]);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  const settingsByKey = useMemo(() => new Map(settings.map((item) => [item.key, item])), [settings]);
-  const deliverySettings = orderedSettings(DELIVERY_SETTING_KEYS, settingsByKey);
-  const enabledCount = deliverySettings.filter((item) => item.effective_value === "true").length;
-  const deliveryMethodCount = deliverySettings.length || DELIVERY_SETTING_KEYS.length;
-  const graphLookupEnabled = settingEnabled(settingsByKey, "graph_lookup_enabled");
-  const graphDeliveryEnabled = settingEnabled(settingsByKey, "graph_delivery_enabled");
-  const deliveryWarning = graphDeliveryEnabled && !graphLookupEnabled;
-
-  return (
-    <>
-      <PageIntro
-        eyebrow="Operations"
-        title="Delivery"
-        description="Enable or pause the delivery methods available to webhook routes."
-        actions={<StatusBadge label={`${enabledCount}/${deliveryMethodCount} enabled`} tone={enabledCount === deliveryMethodCount ? "success" : enabledCount ? "warn" : "danger"} />}
-      />
-      {loading ? (
-        <Card>
-          <div className="table-state" role="status" aria-live="polite">
-            <div className="spinner spinner--small" aria-hidden="true" />
-            <p>Loading delivery methods...</p>
-          </div>
-        </Card>
-      ) : error ? (
-        <Card>
-          <div className="table-state table-state--error" role="alert">
-            <h3>Could not load delivery methods</h3>
-            <p>{error}</p>
-            <button className="secondary-button secondary-button--small" type="button" onClick={() => void refresh()}>
-              Retry
-            </button>
-          </div>
-        </Card>
-      ) : (
-        <div className="delivery-page">
-          {deliveryWarning ? (
-            <div className="status-detail-alert">
-              <strong>Graph delivery needs Graph lookup</strong>
-              <span>Enable Graph lookup before relying on delegated Microsoft Graph delivery.</span>
-            </div>
-          ) : null}
-          <Card className="delivery-methods-card" title="Delivery methods" description="Changes are saved immediately when a switch is toggled.">
-            <div className="delivery-method-list">
-              {deliverySettings.map((item) => (
-                <DeliveryMethodRow
-                  key={item.key}
-                  item={item}
-                  csrfToken={csrfToken}
-                  graphLookupEnabled={graphLookupEnabled}
-                  notify={notify}
-                  onChanged={refresh}
-                />
-              ))}
-            </div>
-          </Card>
-        </div>
-      )}
-    </>
-  );
-}
-
-function DeliveryMethodRow({
+function DeliveryComponentCard({
   csrfToken,
   graphLookupEnabled,
   item,
+  integration,
   notify,
   onChanged,
 }: {
   csrfToken: string;
   graphLookupEnabled: boolean;
-  item: SettingItemOut;
+  item?: SettingItemOut;
+  integration: IntegrationStatusView;
   notify: SettingsNotify;
   onChanged: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const inputId = useId();
-  const meta = SETTING_META[item.key];
-  const enabled = item.effective_value === "true";
-  const graphDeliveryBlocked = item.key === "graph_delivery_enabled" && !enabled && !graphLookupEnabled;
+  const enabled = item?.effective_value === "true";
+  const graphDeliveryBlocked = item?.key === "graph_delivery_enabled" && !enabled && !graphLookupEnabled;
+  const readyChecks = integration.healthChecks.filter((check) => check.tone === "success").length;
+  const keyFacts = integration.facts.filter((fact) => fact.label !== "Scope").slice(0, 3);
 
   async function toggle(nextEnabled: boolean) {
+    if (!item) return;
     setBusy(true);
     setError("");
     try {
@@ -4347,33 +4388,130 @@ function DeliveryMethodRow({
   }
 
   return (
-    <div className={classNames("delivery-method-row", enabled && "delivery-method-row--enabled")}>
-      <div className="delivery-method-main">
+    <Card className={classNames("delivery-component-card", `delivery-component-card--${integration.tone}`)}>
+      <div className="delivery-component-header">
+        <div className={classNames("status-dot", `status-dot--${integration.tone}`)} aria-hidden="true" />
         <div>
-          <strong>{meta?.label ?? item.label}</strong>
-          <p>{meta?.description ?? item.label}</p>
+          <p className="integration-kicker">Delivery method</p>
+          <h2>{integration.title}</h2>
+          <p>{integration.description}</p>
         </div>
-        <div className="delivery-method-meta">
-          <SourceBadge overridden={item.is_overridden} />
-        </div>
+        <DeliveryStatusGroup enabled={enabled} integration={integration} overridden={Boolean(item?.is_overridden)} />
       </div>
-      <label className="settings-switch delivery-method-switch" htmlFor={inputId}>
-        <input
-          id={inputId}
-          type="checkbox"
-          checked={enabled}
-          disabled={busy || graphDeliveryBlocked}
-          onChange={(event) => void toggle(event.target.checked)}
-          aria-describedby={error ? `${inputId}-error` : undefined}
-        />
-        <span aria-hidden="true" />
-        <strong>{busy ? "Saving..." : enabled ? "Enabled" : "Disabled"}</strong>
-      </label>
+
+      {integration.attentionItems.length ? (
+        <div className={classNames("status-detail-alert", `status-detail-alert--${integration.attentionItems[0].tone}`)}>
+          <strong>{integration.attentionItems[0].title}</strong>
+          <span>{integration.attentionItems[0].description}</span>
+        </div>
+      ) : null}
       {graphDeliveryBlocked ? <p className="settings-warning">Enable Graph lookup first.</p> : null}
       {error ? (
         <p className="form-error" id={`${inputId}-error`}>
           {error}
         </p>
+      ) : null}
+
+      <section className="status-detail-section">
+        <h3>Status</h3>
+        <p>{integration.summary}</p>
+        <StatusFactList facts={keyFacts} />
+      </section>
+
+      <section className="status-detail-section status-next-step">
+        <h3>Configure</h3>
+        <div className="delivery-config-row">
+          {item ? (
+            <label className="settings-switch delivery-method-switch" htmlFor={inputId}>
+              <input
+                id={inputId}
+                type="checkbox"
+                checked={enabled}
+                disabled={busy || graphDeliveryBlocked}
+                onChange={(event) => void toggle(event.target.checked)}
+                aria-describedby={error ? `${inputId}-error` : undefined}
+              />
+              <span aria-hidden="true" />
+              <strong>{busy ? "Saving..." : enabled ? "Enabled" : "Disabled"}</strong>
+            </label>
+          ) : null}
+          {integration.primaryActionSlot ? (
+            <div className="status-detail-actions">{integration.primaryActionSlot}</div>
+          ) : (
+            <p>{integration.attentionItems.length ? "Resolve the attention item above, then refresh auth tokens." : "No configuration action is required right now."}</p>
+          )}
+        </div>
+      </section>
+
+      <details className="status-detail-disclosure delivery-component-details">
+        <summary>
+          <span>Details</span>
+          <small>
+            {readyChecks}/{integration.healthChecks.length} checks passing, diagnostics and technical information
+          </small>
+        </summary>
+        <div className="status-detail-disclosure-body">
+          <div className="status-detail-section">
+            <h3>Readiness checks</h3>
+            <StatusCheckList checks={integration.healthChecks} />
+          </div>
+          <div className="status-detail-section">
+            <h3>Capabilities</h3>
+            <StatusFactList facts={integration.capabilities} />
+          </div>
+          <div className="status-detail-section">
+            <h3>Configuration</h3>
+            <div className="credential-check-grid">
+              {integration.credentials.map(([label, value]) => (
+                <CredentialCheck key={label} label={label} value={value} />
+              ))}
+            </div>
+          </div>
+          <div className="status-detail-section">
+            <h3>Permissions</h3>
+            <p>{integration.permissionSummary}</p>
+            <div className="permission-badge-list">
+              {integration.permissionBadges.map((badge) => (
+                <span className={classNames("permission-badge", `permission-badge--${badge.tone}`)} key={badge.label}>
+                  {badge.label}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div className="status-detail-section">
+            <h3>Diagnostics</h3>
+            <dl className="definition-list definition-list--compact advanced-definition-list">
+              {integration.diagnosticRows.map((row) => (
+                <FragmentPair key={row.label} label={row.label} value={row.value} />
+              ))}
+            </dl>
+          </div>
+          <div className="status-detail-section">
+            <h3>Technical information</h3>
+            <dl className="definition-list definition-list--compact advanced-definition-list">
+              {integration.technicalRows.map((row) => (
+                <FragmentPair key={row.label} label={row.label} value={row.value} />
+              ))}
+            </dl>
+          </div>
+        </div>
+      </details>
+    </Card>
+  );
+}
+
+function DeliveryStatusGroup({ enabled, integration, overridden }: { enabled: boolean; integration: IntegrationStatusView; overridden: boolean }) {
+  return (
+    <div className="delivery-status-group" aria-label={`${integration.title}: ${integration.statusLabel}, ${enabled ? "Enabled" : "Disabled"}${overridden ? ", Override active" : ""}`}>
+      <span className={classNames("delivery-status-dot", `delivery-status-dot--${integration.tone}`)} aria-hidden="true" />
+      <strong>{integration.statusLabel}</strong>
+      <span aria-hidden="true">·</span>
+      <span>{enabled ? "Enabled" : "Disabled"}</span>
+      {overridden ? (
+        <>
+          <span aria-hidden="true">·</span>
+          <span>Override</span>
+        </>
       ) : null}
     </div>
   );
@@ -5267,176 +5405,6 @@ function RelayHealthHero({
         />
       </div>
     </section>
-  );
-}
-
-function RelayPipelineLayout({
-  integrations,
-  onSelectComponent,
-  selectedComponentId,
-  selectedIntegration,
-}: {
-  integrations: IntegrationStatusView[];
-  onSelectComponent: (componentId: string) => void;
-  selectedComponentId: string;
-  selectedIntegration: IntegrationStatusView | null;
-}) {
-  return (
-    <section className="status-master-detail" aria-label="Delivery pipeline status">
-      <div className="status-master-pane">
-        <div className="status-pane-header">
-          <div>
-            <p className="integration-kicker">Delivery pipeline</p>
-            <h2>Components</h2>
-          </div>
-          <span>{integrations.length} checks</span>
-        </div>
-        <ComponentList integrations={integrations} onSelectComponent={onSelectComponent} selectedComponentId={selectedComponentId} />
-      </div>
-      <ComponentDetailPane integration={selectedIntegration} />
-    </section>
-  );
-}
-
-function ComponentList({
-  integrations,
-  onSelectComponent,
-  selectedComponentId,
-}: {
-  integrations: IntegrationStatusView[];
-  onSelectComponent: (componentId: string) => void;
-  selectedComponentId: string;
-}) {
-  return (
-    <div className="status-component-list" role="list">
-      {integrations.map((integration) => {
-        const topIssue = integration.attentionItems[0];
-        return (
-          <button
-            aria-pressed={selectedComponentId === integration.id}
-            className={classNames("status-component-row", `status-component-row--${integration.tone}`, selectedComponentId === integration.id && "status-component-row--selected")}
-            key={integration.id}
-            onClick={() => onSelectComponent(integration.id)}
-            type="button"
-          >
-            <span className={classNames("status-dot", `status-dot--${integration.tone}`)} aria-hidden="true" />
-            <span className="status-component-row-main">
-              <span className="status-component-row-title">
-                <strong>{integration.title}</strong>
-                <small>{integration.statusLabel}</small>
-              </span>
-              <span>{topIssue ? topIssue.title : integration.summary}</span>
-            </span>
-            <span className="status-component-row-meta">
-              <span className={classNames("status-mini-badge", `status-mini-badge--${integration.tone}`)}>
-                {integration.statusLabel}
-              </span>
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function ComponentDetailPane({ integration }: { integration: IntegrationStatusView | null }) {
-  if (!integration) return null;
-  const keyFacts = integration.facts.filter((fact) => fact.label !== "Scope").slice(0, 3);
-  const readyChecks = integration.healthChecks.filter((check) => check.tone === "success").length;
-
-  return (
-    <aside className="status-detail-pane" aria-label={`${integration.title} details`}>
-      <div className="status-detail-header">
-        <div>
-          <p className="integration-kicker">Current focus</p>
-          <h2>{integration.title}</h2>
-          <p>{integration.description}</p>
-        </div>
-        <div className={classNames("status-health-pill", `status-health-pill--${integration.tone}`)}>
-          <span aria-hidden="true" />
-          <strong>{integration.statusLabel}</strong>
-        </div>
-      </div>
-
-      {integration.attentionItems.length ? (
-        <div className={classNames("status-detail-alert", `status-detail-alert--${integration.attentionItems[0].tone}`)}>
-          <strong>{integration.attentionItems[0].title}</strong>
-          <span>{integration.attentionItems[0].description}</span>
-        </div>
-      ) : null}
-
-      <section className="status-detail-section status-next-step">
-        <h3>Next step</h3>
-        {integration.primaryActionSlot ? (
-          <div className="status-detail-actions">{integration.primaryActionSlot}</div>
-        ) : (
-          <p>{integration.attentionItems.length ? "Review and resolve the attention item above." : "No action is needed for this component right now."}</p>
-        )}
-      </section>
-
-      <section className="status-detail-section">
-        <h3>What matters now</h3>
-        <p>{integration.summary}</p>
-        <StatusFactList facts={keyFacts} />
-      </section>
-
-      <details className="status-detail-disclosure">
-        <summary>
-          <span>Readiness checks</span>
-          <small>
-            {readyChecks}/{integration.healthChecks.length} checks passing, capabilities and delivery scope
-          </small>
-        </summary>
-        <div className="status-detail-disclosure-body">
-          <StatusCheckList checks={integration.healthChecks} />
-          <div className="status-detail-section">
-            <h3>Capabilities</h3>
-            <StatusFactList facts={integration.capabilities} />
-          </div>
-        </div>
-      </details>
-
-      <details className="status-detail-disclosure">
-        <summary>
-          <span>Diagnostics</span>
-          <small>Credentials, permissions and check output</small>
-        </summary>
-        <div className="status-detail-disclosure-body">
-          <div className="credential-check-grid">
-            {integration.credentials.map(([label, value]) => (
-              <CredentialCheck key={label} label={label} value={value} />
-            ))}
-          </div>
-          <p>{integration.permissionSummary}</p>
-          <div className="permission-badge-list">
-            {integration.permissionBadges.map((badge) => (
-              <span className={classNames("permission-badge", `permission-badge--${badge.tone}`)} key={badge.label}>
-                {badge.label}
-              </span>
-            ))}
-          </div>
-          <dl className="definition-list definition-list--compact advanced-definition-list">
-            {integration.diagnosticRows.map((row) => (
-              <FragmentPair key={row.label} label={row.label} value={row.value} />
-            ))}
-          </dl>
-        </div>
-      </details>
-
-      <details className="status-detail-disclosure">
-        <summary>
-          <span>Technical information</span>
-          <small>IDs, claims and copyable values</small>
-        </summary>
-        <div className="status-detail-disclosure-body">
-          <dl className="definition-list definition-list--compact advanced-definition-list">
-            {integration.technicalRows.map((row) => (
-              <FragmentPair key={row.label} label={row.label} value={row.value} />
-            ))}
-          </dl>
-        </div>
-      </details>
-    </aside>
   );
 }
 
