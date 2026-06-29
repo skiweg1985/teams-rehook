@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="", extra="ignore")
     _session_secret_generated: bool = PrivateAttr(default=False)
     _settings_enc_key_generated: bool = PrivateAttr(default=False)
+    _bot_framework_enabled: bool = PrivateAttr(default=True)
+    _graph_lookup_enabled: bool = PrivateAttr(default=True)
+    _graph_delivery_enabled: bool = PrivateAttr(default=True)
 
     app_name: str = "Teams Rehook"
     app_version: str = "0.1.0"
@@ -42,9 +45,6 @@ class Settings(BaseSettings):
     ms_app_client_secret: str = ""
     botframework_scope: str = "https://api.botframework.com/.default"
     graph_scope: str = "https://graph.microsoft.com/.default"
-    bot_framework_enabled: bool = True
-    graph_lookup_enabled: bool = True
-    graph_delivery_enabled: bool = True
     bot_delivery_mode: str = "real"
     bot_default_service_url: str = ""
     webhook_max_payload_bytes: int = 64_000
@@ -62,6 +62,32 @@ class Settings(BaseSettings):
     trusted_proxy_ips: str = ""
     settings_enc_key: str = ""
     monitoring_api_key: str = ""
+
+    @property
+    def bot_framework_enabled(self) -> bool:
+        return self._bot_framework_enabled
+
+    @property
+    def graph_lookup_enabled(self) -> bool:
+        return self._graph_lookup_enabled
+
+    @property
+    def graph_delivery_enabled(self) -> bool:
+        return self._graph_delivery_enabled
+
+    def use_delivery_feature_settings(
+        self,
+        *,
+        bot_framework_enabled: bool | None = None,
+        graph_lookup_enabled: bool | None = None,
+        graph_delivery_enabled: bool | None = None,
+    ) -> None:
+        if bot_framework_enabled is not None:
+            self._bot_framework_enabled = bot_framework_enabled
+        if graph_lookup_enabled is not None:
+            self._graph_lookup_enabled = graph_lookup_enabled
+        if graph_delivery_enabled is not None:
+            self._graph_delivery_enabled = graph_delivery_enabled
 
     @property
     def cors_origin_list(self) -> list[str]:

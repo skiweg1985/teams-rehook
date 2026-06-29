@@ -185,15 +185,26 @@ def test_readiness_reports_mock_delivery_ready_without_bot_credentials(db_sessio
     assert body["runtime"]["settings_encryption_ready"] is True
 
 
-def test_readiness_marks_disabled_features_without_token_checks(db_session: Session, monkeypatch: pytest.MonkeyPatch):
-    with make_client(
-        db_session,
-        monkeypatch,
-        BOT_FRAMEWORK_ENABLED="false",
-        GRAPH_LOOKUP_ENABLED="false",
-        GRAPH_DELIVERY_ENABLED="false",
-    ) as client:
+def test_readiness_marks_disabled_application_features_without_token_checks(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+):
+    with make_client(db_session, monkeypatch) as client:
         csrf_token = login_admin(client)
+        assert client.put(
+            "/api/v1/admin/settings/graph_delivery_enabled",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"value": "false"},
+        ).status_code == 200
+        assert client.put(
+            "/api/v1/admin/settings/graph_lookup_enabled",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"value": "false"},
+        ).status_code == 200
+        assert client.put(
+            "/api/v1/admin/settings/bot_framework_enabled",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"value": "false"},
+        ).status_code == 200
         response = client.get("/api/v1/admin/readiness", headers={"X-CSRF-Token": csrf_token})
 
     assert response.status_code == 200
@@ -749,15 +760,23 @@ def test_delivery_auth_refresh_resets_enabled_token_managers_and_returns_readine
     }
 
 
-def test_delivery_auth_refresh_skips_disabled_and_mock_components(db_session: Session, monkeypatch: pytest.MonkeyPatch):
+def test_delivery_auth_refresh_skips_mock_and_unconfigured_components(db_session: Session, monkeypatch: pytest.MonkeyPatch):
     with make_client(
         db_session,
         monkeypatch,
         BOT_DELIVERY_MODE="mock",
-        GRAPH_LOOKUP_ENABLED="false",
-        GRAPH_DELIVERY_ENABLED="false",
     ) as client:
         csrf_token = login_admin(client)
+        assert client.put(
+            "/api/v1/admin/settings/graph_delivery_enabled",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"value": "false"},
+        ).status_code == 200
+        assert client.put(
+            "/api/v1/admin/settings/graph_lookup_enabled",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"value": "false"},
+        ).status_code == 200
         response = client.post("/api/v1/admin/delivery-auth/refresh", headers={"X-CSRF-Token": csrf_token})
 
     assert response.status_code == 200

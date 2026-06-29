@@ -3893,12 +3893,14 @@ const SETTING_META: Record<string, SettingMeta> = {
     label: "Bot Framework",
     description: "Route messages through captured Teams conversations.",
     display: "switch",
+    sourceLabel: "App",
   },
   graph_lookup_enabled: {
     section: "delivery",
     label: "Graph lookup",
     description: "Resolve Teams users, chats and channels from Microsoft Graph.",
     display: "switch",
+    sourceLabel: "App",
   },
   graph_delivery_enabled: {
     section: "delivery",
@@ -3906,6 +3908,7 @@ const SETTING_META: Record<string, SettingMeta> = {
     description: "Send delegated Teams messages through the connected service user.",
     help: "Requires Graph lookup to stay enabled.",
     display: "switch",
+    sourceLabel: "App",
   },
   bot_default_service_url: {
     section: "runtime",
@@ -4380,7 +4383,7 @@ function DeliveryComponentCard({
             </span>
           </div>
           <div className="delivery-component-kpis" aria-label={`${integration.title} summary`}>
-            <DeliveryStatusGroup integration={integration} overridden={Boolean(item?.is_overridden)} />
+            <DeliveryStatusGroup integration={integration} overridden={Boolean(item?.source === "environment" && item.is_overridden)} />
             <CompactStatusValue label="Checks" tone={readyChecks === integration.healthChecks.length ? "success" : readyChecks > 0 ? "warn" : "danger"} value={`${readyChecks}/${integration.healthChecks.length}`} />
             <CompactStatusValue label="Token" tone={tokenFactValue?.tone ?? "neutral"} value={tokenFactValue?.value ?? "Unknown"} />
             {item ? (
@@ -4907,8 +4910,6 @@ function RuntimeSettingControl({
   const meta = SETTING_META[item.key];
   const display = meta?.display ?? (item.type === "bool" ? "switch" : item.type === "int" ? "number" : item.type === "secret" ? "secret" : "technical");
   const label = meta?.label ?? item.label;
-  const graphLookupEnabled = settingEnabled(settingsByKey, "graph_lookup_enabled");
-  const dependencyWarning = item.key === "graph_delivery_enabled" && draft === "true" && !graphLookupEnabled;
   const autoSavePending = item.type !== "secret" && canSave;
 
   async function save(nextValue = draft) {
@@ -5084,10 +5085,9 @@ function RuntimeSettingControl({
             </button>
           </div>
         )}
-        {dependencyWarning ? <p className="settings-warning">Graph delivery requires Graph lookup. Enable lookup first or save will fail.</p> : null}
         <div className="settings-control-footer">
           <div className="settings-source-row">
-            <SourceBadge overridden={item.is_overridden} />
+            <SourceBadge label={meta?.sourceLabel} overridden={item.is_overridden} source={item.source} />
             {autoSavePending ? <StatusBadge label="Unsaved" tone="warn" /> : null}
             {item.is_overridden ? (
               <span>
@@ -5134,8 +5134,18 @@ function RuntimeSettingControl({
   );
 }
 
-function SourceBadge({ overridden }: { overridden: boolean }) {
-  return <span className={classNames("settings-source-badge", overridden && "settings-source-badge--override")}>{overridden ? "Override" : "ENV"}</span>;
+function SourceBadge({
+  label,
+  overridden,
+  source,
+}: {
+  label?: string;
+  overridden: boolean;
+  source: SettingItemOut["source"];
+}) {
+  const isOverride = source === "environment" && overridden;
+  const sourceLabel = label ?? (source === "application" ? "App" : "ENV");
+  return <span className={classNames("settings-source-badge", isOverride && "settings-source-badge--override")}>{isOverride ? "Override" : sourceLabel}</span>;
 }
 
 type StatusTone = "neutral" | "success" | "warn" | "danger";
@@ -5162,6 +5172,7 @@ type IntegrationStatusView = {
   id: string;
   title: string;
   description: string;
+  enabled: boolean;
   statusLabel: string;
   tone: StatusTone;
   summary: string;
@@ -5187,6 +5198,7 @@ function buildBotIntegrationView(readiness: AdminReadinessOut, onCopy: (value: s
     id: "bot-framework",
     title: "Bot Framework",
     description: "Teams conversation delivery",
+    enabled: readiness.bot.enabled,
     statusLabel: healthStateLabel(authStatus),
     tone: authStatusTone(authStatus),
     summary: readinessSummary(authStatus, readiness.bot.message, oauth),
@@ -5200,7 +5212,7 @@ function buildBotIntegrationView(readiness: AdminReadinessOut, onCopy: (value: s
     ],
     facts: oauthFacts(oauth),
     healthChecks: [
-      { label: "Feature policy", value: readiness.bot.enabled ? "Enabled" : "Disabled", tone: readiness.bot.enabled ? "success" : "neutral" },
+      { label: "Availability", value: readiness.bot.enabled ? "Enabled" : "Disabled", tone: readiness.bot.enabled ? "success" : "neutral" },
       { label: "App credentials", value: readiness.bot.credentials_configured ? "Configured" : "Missing", tone: readiness.bot.credentials_configured ? "success" : "warn" },
       { label: "Token request", value: tokenFact(oauth), tone: oauth.token.succeeded ? "success" : oauth.token.checked ? "danger" : "neutral" },
       {
@@ -5235,6 +5247,7 @@ function buildGraphLookupIntegrationView(readiness: AdminReadinessOut, onCopy: (
     id: "graph-lookup",
     title: "Graph lookup",
     description: "Target discovery and names",
+    enabled: readiness.graph_lookup.enabled,
     statusLabel: healthStateLabel(authStatus),
     tone: authStatusTone(authStatus),
     summary: readinessSummary(authStatus, readiness.graph_lookup.message, oauth),
@@ -5248,7 +5261,7 @@ function buildGraphLookupIntegrationView(readiness: AdminReadinessOut, onCopy: (
     ],
     facts: oauthFacts(oauth),
     healthChecks: [
-      { label: "Feature policy", value: readiness.graph_lookup.enabled ? "Enabled" : "Disabled", tone: readiness.graph_lookup.enabled ? "success" : "neutral" },
+      { label: "Availability", value: readiness.graph_lookup.enabled ? "Enabled" : "Disabled", tone: readiness.graph_lookup.enabled ? "success" : "neutral" },
       { label: "App credentials", value: readiness.graph_lookup.configured ? "Configured" : "Missing", tone: readiness.graph_lookup.configured ? "success" : "warn" },
       { label: "Token request", value: tokenFact(oauth), tone: oauth.token.succeeded ? "success" : oauth.token.checked ? "danger" : "neutral" },
       { label: "Directory metadata", value: oauth.app.available || oauth.tenant.available ? "Available" : "Limited", tone: oauth.app.available || oauth.tenant.available ? "success" : "warn" },
@@ -5284,6 +5297,7 @@ function buildGraphDeliveryIntegrationView(
     id: "graph-delivery",
     title: "Graph delivery",
     description: "Delegated Teams sends",
+    enabled: readiness.enabled,
     statusLabel: healthStateLabel(readiness.auth_status),
     tone: authStatusTone(readiness.auth_status),
     summary: graphDeliverySummary(readiness),
@@ -5310,7 +5324,7 @@ function buildGraphDeliveryIntegrationView(
       { label: "Last checked", value: readiness.refresh_checked_at ? formatDateTime(readiness.refresh_checked_at) : "Not checked" },
     ],
     healthChecks: [
-      { label: "Feature policy", value: readiness.enabled ? "Enabled" : "Disabled", tone: readiness.enabled ? "success" : "neutral" },
+      { label: "Availability", value: readiness.enabled ? "Enabled" : "Disabled", tone: readiness.enabled ? "success" : "neutral" },
       { label: "Service user", value: readiness.configured ? "Connected" : "Not connected", tone: readiness.configured ? "success" : readiness.enabled ? "warn" : "neutral" },
       { label: "Token refresh", value: delegatedTokenFact(readiness), tone: readiness.token_request_succeeded ? "success" : readiness.token_checked ? "danger" : "neutral" },
       {

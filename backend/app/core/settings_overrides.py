@@ -14,6 +14,7 @@ from app.core.encrypted_secrets import decrypt_secret, encrypt_secret
 from app.models import AppSetting, utc_now
 
 SettingType = Literal["string", "int", "url", "enum", "secret", "bool"]
+SettingSource = Literal["environment", "application"]
 
 
 @dataclass(frozen=True)
@@ -23,18 +24,22 @@ class SettingDefinition:
     type: SettingType
     is_secret: bool
     enum_values: tuple[str, ...] = ()
+    source: SettingSource = "environment"
 
 
-OVERRIDABLE_SETTINGS: dict[str, SettingDefinition] = {
+APPLICATION_SETTINGS: dict[str, SettingDefinition] = {
     "bot_framework_enabled": SettingDefinition(
-        "bot_framework_enabled", "Bot Framework enabled", "bool", False
+        "bot_framework_enabled", "Bot Framework enabled", "bool", False, source="application"
     ),
     "graph_lookup_enabled": SettingDefinition(
-        "graph_lookup_enabled", "Graph lookup enabled", "bool", False
+        "graph_lookup_enabled", "Graph lookup enabled", "bool", False, source="application"
     ),
     "graph_delivery_enabled": SettingDefinition(
-        "graph_delivery_enabled", "Graph delivery enabled", "bool", False
+        "graph_delivery_enabled", "Graph delivery enabled", "bool", False, source="application"
     ),
+}
+
+OVERRIDABLE_SETTINGS: dict[str, SettingDefinition] = {
     "bot_default_service_url": SettingDefinition(
         "bot_default_service_url", "Bot default service URL", "url", False
     ),
@@ -75,6 +80,11 @@ OVERRIDABLE_SETTINGS: dict[str, SettingDefinition] = {
     "graph_scope": SettingDefinition("graph_scope", "Microsoft Graph scope", "string", False),
 }
 
+SETTING_DEFINITIONS: dict[str, SettingDefinition] = {
+    **APPLICATION_SETTINGS,
+    **OVERRIDABLE_SETTINGS,
+}
+
 _override_cache: dict[str, str] = {}
 _cache_lock = threading.Lock()
 
@@ -103,7 +113,7 @@ def _stored_value(row: AppSetting) -> str:
 
 
 def _serialize_for_storage(key: str, value: str) -> str:
-    definition = OVERRIDABLE_SETTINGS[key]
+    definition = SETTING_DEFINITIONS[key]
     normalized = _validate_and_normalize(key, value)
     if definition.is_secret:
         return _encrypt_secret(normalized)
@@ -111,7 +121,7 @@ def _serialize_for_storage(key: str, value: str) -> str:
 
 
 def _validate_and_normalize(key: str, value: str) -> str:
-    definition = OVERRIDABLE_SETTINGS.get(key)
+    definition = SETTING_DEFINITIONS.get(key)
     if definition is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown setting")
 
@@ -201,7 +211,7 @@ def _normalize_cors_origins(value: str) -> str:
 
 
 def _coerce_for_settings(key: str, value: str) -> Any:
-    definition = OVERRIDABLE_SETTINGS[key]
+    definition = SETTING_DEFINITIONS[key]
     if definition.type == "int":
         return int(value)
     if definition.type == "bool":
@@ -216,7 +226,7 @@ def _mask_secret(value: str) -> str:
 
 
 def _display_value(key: str, value: str) -> str:
-    definition = OVERRIDABLE_SETTINGS[key]
+    definition = SETTING_DEFINITIONS[key]
     if definition.is_secret:
         return _mask_secret(value)
     if definition.type == "bool":
@@ -236,7 +246,7 @@ def load_overrides(db: Session) -> None:
     rows = db.scalars(select(AppSetting)).all()
     loaded: dict[str, str] = {}
     for row in rows:
-        if row.key not in OVERRIDABLE_SETTINGS:
+        if row.key not in SETTING_DEFINITIONS:
             continue
         loaded[row.key] = _stored_value(row)
     with _cache_lock:
@@ -252,22 +262,38 @@ def reset_override_state() -> None:
 def get_effective_settings() -> Settings:
     base = get_settings()
     with _cache_lock:
-        overrides = dict(_override_cache)
-    if not overrides:
+        cached_settings = dict(_override_cache)
+    if not cached_settings:
         return base
-    updates = {key: _coerce_for_settings(key, value) for key, value in overrides.items()}
-    return base.model_copy(update=updates)
+    env_updates = {
+        key: _coerce_for_settings(key, value)
+        for key, value in cached_settings.items()
+        if key in OVERRIDABLE_SETTINGS
+    }
+    effective = base.model_copy(update=env_updates)
+    effective.use_delivery_feature_settings(
+        bot_framework_enabled=_coerce_for_settings("bot_framework_enabled", cached_settings["bot_framework_enabled"])
+        if "bot_framework_enabled" in cached_settings
+        else None,
+        graph_lookup_enabled=_coerce_for_settings("graph_lookup_enabled", cached_settings["graph_lookup_enabled"])
+        if "graph_lookup_enabled" in cached_settings
+        else None,
+        graph_delivery_enabled=_coerce_for_settings("graph_delivery_enabled", cached_settings["graph_delivery_enabled"])
+        if "graph_delivery_enabled" in cached_settings
+        else None,
+    )
+    return effective
 
 
 def set_override(db: Session, *, key: str, value: str, updated_by_id: str | None) -> None:
-    if key not in OVERRIDABLE_SETTINGS:
+    if key not in SETTING_DEFINITIONS:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown setting")
 
     previous_frontend_url = get_effective_settings().frontend_base_url.rstrip("/") if key == "frontend_base_url" else ""
-    definition = OVERRIDABLE_SETTINGS[key]
+    definition = SETTING_DEFINITIONS[key]
     normalized = _validate_and_normalize(key, value)
     stored = _serialize_for_storage(key, normalized)
-    _validate_feature_dependency(_hypothetical_overrides(key, normalized))
+    _validate_feature_dependency(_hypothetical_settings(key, normalized))
     row = db.get(AppSetting, key)
     if row is None:
         row = AppSetting(key=key, value=stored, is_secret=definition.is_secret, updated_by_id=updated_by_id)
@@ -303,10 +329,10 @@ def set_override(db: Session, *, key: str, value: str, updated_by_id: str | None
 
 
 def clear_override(db: Session, *, key: str) -> None:
-    if key not in OVERRIDABLE_SETTINGS:
+    if key not in SETTING_DEFINITIONS:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown setting")
 
-    _validate_feature_dependency(_hypothetical_overrides(key, None))
+    _validate_feature_dependency(_hypothetical_settings(key, None))
     row = db.get(AppSetting, key)
     if row is not None:
         db.delete(row)
@@ -316,24 +342,37 @@ def clear_override(db: Session, *, key: str) -> None:
 
 
 def is_overridden(key: str) -> bool:
+    if key not in OVERRIDABLE_SETTINGS:
+        return False
     return key in _override_cache
 
 
-def _hypothetical_overrides(key: str, value: str | None) -> dict[str, str]:
+def is_environment_override(key: str) -> bool:
+    return key in OVERRIDABLE_SETTINGS
+
+
+def _hypothetical_settings(key: str, value: str | None) -> dict[str, str]:
     with _cache_lock:
-        overrides = dict(_override_cache)
+        settings = dict(_override_cache)
     if value is None:
-        overrides.pop(key, None)
+        settings.pop(key, None)
     else:
-        overrides[key] = value
-    return overrides
+        settings[key] = value
+    return settings
 
 
-def _validate_feature_dependency(overrides: dict[str, str]) -> None:
-    settings = get_settings()
-    updates = {key: _coerce_for_settings(key, value) for key, value in overrides.items()}
-    effective = settings.model_copy(update=updates)
-    if effective.graph_delivery_enabled and not effective.graph_lookup_enabled:
+def _validate_feature_dependency(cached_settings: dict[str, str]) -> None:
+    graph_lookup_enabled = (
+        _coerce_for_settings("graph_lookup_enabled", cached_settings["graph_lookup_enabled"])
+        if "graph_lookup_enabled" in cached_settings
+        else True
+    )
+    graph_delivery_enabled = (
+        _coerce_for_settings("graph_delivery_enabled", cached_settings["graph_delivery_enabled"])
+        if "graph_delivery_enabled" in cached_settings
+        else True
+    )
+    if graph_delivery_enabled and not graph_lookup_enabled:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Graph delivery requires Graph lookup to be enabled",
@@ -344,7 +383,7 @@ def list_setting_items() -> list[dict[str, Any]]:
     env_settings = get_settings()
     effective = get_effective_settings()
     items: list[dict[str, Any]] = []
-    for key, definition in OVERRIDABLE_SETTINGS.items():
+    for key, definition in SETTING_DEFINITIONS.items():
         env_raw = _env_value(env_settings, key)
         effective_raw = _env_value(effective, key)
         items.append(
@@ -356,6 +395,7 @@ def list_setting_items() -> list[dict[str, Any]]:
                 "env_default": _display_value(key, env_raw),
                 "effective_value": _display_value(key, effective_raw),
                 "is_overridden": is_overridden(key),
+                "source": definition.source,
             }
         )
     return items

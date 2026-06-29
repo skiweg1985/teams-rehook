@@ -97,10 +97,13 @@ def test_list_settings_returns_env_defaults(db_session: Session, monkeypatch: py
         payload = response.json()
         bot_enabled = next(item for item in payload if item["key"] == "bot_framework_enabled")
         assert bot_enabled["type"] == "bool"
+        assert bot_enabled["source"] == "application"
         assert bot_enabled["env_default"] == "true"
         assert bot_enabled["effective_value"] == "true"
+        assert bot_enabled["is_overridden"] is False
         cors_origins = next(item for item in payload if item["key"] == "cors_origins")
         assert cors_origins["type"] == "string"
+        assert cors_origins["source"] == "environment"
         assert cors_origins["env_default"] == "http://localhost:5173,http://localhost"
         assert cors_origins["effective_value"] == "http://localhost:5173,http://localhost"
         session_cookie = next(item for item in payload if item["key"] == "session_secure_cookie")
@@ -294,7 +297,7 @@ def test_session_cookie_uses_effective_secure_flag(
         assert "Secure" in response.headers["set-cookie"]
 
 
-def test_graph_delivery_requires_graph_lookup_enabled(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_delivery_feature_settings_are_application_managed(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
     with make_client(db_session, monkeypatch) as client:
         csrf = login_admin(client)
         rejected = client.put(
@@ -311,6 +314,9 @@ def test_graph_delivery_requires_graph_lookup_enabled(db_session: Session, monke
             json={"value": "false"},
         )
         assert delivery.status_code == 200
+        assert delivery.json()["source"] == "application"
+        assert delivery.json()["effective_value"] == "false"
+        assert delivery.json()["is_overridden"] is False
 
         lookup = client.put(
             "/api/v1/admin/settings/graph_lookup_enabled",
@@ -319,3 +325,4 @@ def test_graph_delivery_requires_graph_lookup_enabled(db_session: Session, monke
         )
         assert lookup.status_code == 200
         assert lookup.json()["effective_value"] == "false"
+        assert lookup.json()["is_overridden"] is False

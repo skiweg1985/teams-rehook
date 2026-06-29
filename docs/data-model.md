@@ -17,7 +17,7 @@ The backend creates tables at startup and applies additive/backfill schema handl
 | BotConversationReference | `bot_conversation_references` | Sendable Bot Framework conversation references captured from Teams activities. |
 | GraphDelegatedCredential | `graph_delegated_credentials` | Delegated Graph delivery credential metadata and encrypted refresh material. |
 | AuditEvent | `audit_events` | Admin and system audit events. |
-| AppSetting | `app_settings` | Persisted runtime setting overrides, with optional encrypted secret values. |
+| AppSetting | `app_settings` | Persisted admin settings, including environment overrides and application-managed feature switches. |
 
 ## Relationships
 

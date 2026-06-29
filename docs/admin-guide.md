@@ -87,15 +87,7 @@ MS_APP_CLIENT_SECRET=
 BOT_DEFAULT_SERVICE_URL=
 ```
 
-Delivery feature policy is controlled separately:
-
-```text
-BOT_FRAMEWORK_ENABLED=true
-GRAPH_LOOKUP_ENABLED=true
-GRAPH_DELIVERY_ENABLED=true
-```
-
-Disabled integrations are shown as disabled in readiness, excluded from the global monitoring rollup, and cannot be used for route setup or delivery.
+Delivery feature switches default to enabled and are controlled from the app's Delivery page. Disabled integrations are shown as disabled in readiness, excluded from the global monitoring rollup, and cannot be used for route setup or delivery.
 
 ## Microsoft Graph Permissions
 
