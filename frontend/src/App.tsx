@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type FocusEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -12,6 +12,7 @@ import {
   EyeOff,
   FileClock,
   Info,
+  Menu,
   MessageSquareText,
   MessagesSquare,
   MoreHorizontal,
@@ -24,10 +25,12 @@ import {
   RotateCcwKey,
   Search,
   Send,
+  Settings as SettingsIcon,
   ShieldAlert,
   Trash2,
   Wrench,
   Webhook,
+  X,
   type LucideIcon,
 } from "lucide-react";
 
@@ -72,7 +75,7 @@ import type {
 } from "./types";
 import { classNames, compactJson, formatDateTime, formatRelativeTime } from "./utils";
 
-type RouteName = "dashboard" | "status" | "webhooks" | "payload-generator" | "users" | "settings" | "logs" | "system-logs";
+type RouteName = "dashboard" | "status" | "webhooks" | "payload-generator" | "delivery" | "users" | "settings" | "logs" | "system-logs";
 type DeliveryStatusFilter = "all" | WebhookDeliveryStatus;
 type PayloadGeneratorMode = "text" | "adaptive";
 type PayloadAccent = "neutral" | "success" | "warning" | "critical";
@@ -98,6 +101,7 @@ const NAV: Array<{ route: RouteName; label: string; path: string; icon: string }
   { route: "status", label: "Status", path: "/status", icon: "S" },
   { route: "webhooks", label: "Webhooks", path: "/webhooks", icon: "W" },
   { route: "payload-generator", label: "Payload Generator", path: "/payload-generator", icon: "P" },
+  { route: "delivery", label: "Delivery", path: "/delivery", icon: "D" },
   { route: "users", label: "Users", path: "/users", icon: "U" },
   { route: "settings", label: "Settings", path: "/settings", icon: "S" },
   { route: "logs", label: "Messages", path: "/logs", icon: "M" },
@@ -269,6 +273,7 @@ function routeFromPath(pathname: string): RouteName {
   if (pathname === "/status") return "status";
   if (pathname === "/webhooks") return "webhooks";
   if (pathname === "/payload-generator") return "payload-generator";
+  if (pathname === "/delivery") return "delivery";
   if (pathname === "/users") return "users";
   if (pathname === "/settings") return "settings";
   if (pathname === "/system-logs") return "system-logs";
@@ -511,29 +516,56 @@ function WebhookCopyPage() {
 function AppShell() {
   const { session, logout } = useAppContext();
   const [route, setRoute] = useState<RouteName>(() => routeFromPath(window.location.pathname));
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
-    const onPop = () => setRoute(routeFromPath(window.location.pathname));
+    const onPop = () => {
+      setRoute(routeFromPath(window.location.pathname));
+      setSidebarOpen(false);
+    };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
+  useEffect(() => {
+    if (!sidebarOpen) return undefined;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSidebarOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [sidebarOpen]);
+
   function navigate(next: RouteName, path: string) {
     window.history.pushState(null, "", path);
     setRoute(next);
+    setSidebarOpen(false);
   }
 
   if (session.status !== "authenticated") return null;
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
+      <button
+        className={classNames("sidebar-backdrop", sidebarOpen && "sidebar-backdrop--open")}
+        type="button"
+        aria-label="Dismiss menu overlay"
+        onClick={() => setSidebarOpen(false)}
+      />
+      <aside className={classNames("sidebar", sidebarOpen && "sidebar--open")} id="app-sidebar">
         <div className="brand-row">
           <div className="app-mark">T</div>
           <div>
             <strong>Teams Rehook</strong>
             <span>Webhook Relay</span>
           </div>
+          <button className="sidebar-close" type="button" aria-label="Close navigation" onClick={() => setSidebarOpen(false)}>
+            <X aria-hidden="true" />
+          </button>
         </div>
         <nav className="nav-list" aria-label="Primary navigation">
           {NAV.map((item) => (
@@ -560,13 +592,24 @@ function AppShell() {
       </aside>
       <main className="main-content">
         <header className="topbar">
-          <div />
+          <div className="topbar-spacer" />
+          <button
+            className="sidebar-toggle"
+            type="button"
+            aria-controls="app-sidebar"
+            aria-expanded={sidebarOpen}
+            onClick={() => setSidebarOpen(true)}
+          >
+            <Menu aria-hidden="true" />
+            <span>Menu</span>
+          </button>
           <ThemeToggle />
         </header>
         {route === "dashboard" ? <DashboardPage /> : null}
         {route === "status" ? <StatusPage /> : null}
         {route === "webhooks" ? <WebhooksPage /> : null}
         {route === "payload-generator" ? <PayloadGeneratorPage /> : null}
+        {route === "delivery" ? <DeliveryMethodsPage /> : null}
         {route === "users" ? <UsersPage /> : null}
         {route === "settings" ? <SettingsPage /> : null}
         {route === "logs" ? <MessageLogsPage /> : null}
@@ -3890,12 +3933,14 @@ const SETTING_META: Record<string, SettingMeta> = {
     label: "Bot Framework",
     description: "Route messages through captured Teams conversations.",
     display: "switch",
+    sourceLabel: "App",
   },
   graph_lookup_enabled: {
     section: "delivery",
     label: "Graph lookup",
     description: "Resolve Teams users, chats and channels from Microsoft Graph.",
     display: "switch",
+    sourceLabel: "App",
   },
   graph_delivery_enabled: {
     section: "delivery",
@@ -3903,6 +3948,7 @@ const SETTING_META: Record<string, SettingMeta> = {
     description: "Send delegated Teams messages through the connected service user.",
     help: "Requires Graph lookup to stay enabled.",
     display: "switch",
+    sourceLabel: "App",
   },
   bot_default_service_url: {
     section: "runtime",
@@ -4000,18 +4046,6 @@ const SETTING_META: Record<string, SettingMeta> = {
     description: "Used for Bot Framework delivery and Graph lookup.",
     display: "secret",
   },
-  botframework_scope: {
-    section: "advancedIdentity",
-    label: "Bot Framework scope",
-    description: "OAuth scope requested for Bot Framework tokens.",
-    display: "technical",
-  },
-  graph_scope: {
-    section: "advancedIdentity",
-    label: "Graph scope",
-    description: "OAuth scope requested for Microsoft Graph tokens.",
-    display: "technical",
-  },
 };
 
 const DELIVERY_SETTING_KEYS = [
@@ -4041,12 +4075,10 @@ const ABUSE_SETTING_KEYS = [
   "webhook_abuse_window_minutes",
 ] as const;
 
-const ADVANCED_IDENTITY_SETTING_KEYS = [
+const DELIVERY_IDENTITY_SETTING_KEYS = [
   "ms_app_tenant_id",
   "ms_app_client_id",
   "ms_app_client_secret",
-  "botframework_scope",
-  "graph_scope",
 ] as const;
 
 function StatusPage() {
@@ -4054,9 +4086,6 @@ function StatusPage() {
   const [readiness, setReadiness] = useState<AdminReadinessOut | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [graphOAuthBusy, setGraphOAuthBusy] = useState(false);
-  const [authRefreshBusy, setAuthRefreshBusy] = useState(false);
-  const [selectedComponentId, setSelectedComponentId] = useState("");
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
 
   const refresh = useCallback(async () => {
@@ -4068,6 +4097,118 @@ function StatusPage() {
       setError(isApiError(err) ? err.message : "Status data could not be loaded.");
     } finally {
       setLoading(false);
+    }
+  }, [csrfToken]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  async function copyDiagnosticValue(value: string, label: string) {
+    await navigator.clipboard.writeText(value);
+    notify({ tone: "success", title: `${label} copied` });
+  }
+
+  return (
+    <>
+      <PageIntro
+        eyebrow="System"
+        title="Status"
+        description="General runtime information for the application. Delivery operations now live on the Delivery page."
+        actions={readiness ? <StatusBadge label={readiness.app_version} tone="neutral" /> : null}
+      />
+      {loading ? (
+        <Card>
+          <div className="table-state" role="status" aria-live="polite">
+            <div className="spinner spinner--small" aria-hidden="true" />
+            <p>Loading status...</p>
+          </div>
+        </Card>
+      ) : error ? (
+        <Card>
+          <div className="table-state table-state--error" role="alert">
+            <h3>Could not load status</h3>
+            <p>{error}</p>
+            <button className="secondary-button secondary-button--small" type="button" onClick={() => void refresh()}>
+              Retry
+            </button>
+          </div>
+        </Card>
+      ) : readiness ? (
+        <div className="status-command-center">
+          <section className="status-overview" aria-label="System overview">
+            <StatusOverviewMetric label="Application" value={readiness.app_name} detail={`Version ${readiness.app_version}`} />
+            <StatusOverviewMetric
+              label="Settings"
+              value={settingsEncryptionLabel(readiness.runtime.settings_encryption_key_source, readiness.runtime.settings_encryption_ready)}
+              detail="Encryption state for stored runtime settings."
+              tone={readiness.runtime.settings_encryption_ready ? "success" : "warn"}
+            />
+            <StatusOverviewMetric label="Payload limit" value={formatBytes(readiness.runtime.webhook_max_payload_bytes)} detail="Maximum accepted webhook request body." />
+            <StatusOverviewMetric label="Retention" value={`${readiness.runtime.log_retention_days} days`} detail="Event and audit data retention window." />
+          </section>
+          <section className="status-operations-grid" aria-label="Operational context">
+            <RuntimeSnapshotCard readiness={readiness} onCopy={copyDiagnosticValue} />
+          </section>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function deliveryAuthRefreshToastTone(result: DeliveryAuthRefreshOut): "success" | "info" {
+  return deliveryAuthRefreshComponents(result).some((component) => component.status === "skipped") ? "info" : "success";
+}
+
+function deliveryAuthRefreshToastDescription(result: DeliveryAuthRefreshOut): string {
+  const components = deliveryAuthRefreshComponents(result);
+  const failed = components.filter((component) => component.status === "failed");
+  if (failed.length) {
+    return failed.map((component) => `${component.label}: ${component.message}`).join(" ");
+  }
+  const refreshed = components.filter((component) => component.status === "refreshed").length;
+  const cleared = components.filter((component) => component.status === "cleared").length;
+  const skipped = components.filter((component) => component.status === "skipped").length;
+  const parts = [
+    refreshed ? `${refreshed} refreshed` : "",
+    cleared ? `${cleared} cache${cleared === 1 ? "" : "s"} cleared` : "",
+    skipped ? `${skipped} skipped` : "",
+  ].filter(Boolean);
+  return parts.join(", ") || "Delivery authentication state was checked.";
+}
+
+function deliveryAuthRefreshComponents(result: DeliveryAuthRefreshOut) {
+  return [
+    { label: "Bot delivery", ...result.bot_delivery },
+    { label: "Graph lookup", ...result.graph_lookup },
+    { label: "Graph delivery", ...result.graph_delivery },
+    { label: "Bot inbound auth", ...result.bot_inbound_auth },
+  ];
+}
+
+function DeliveryMethodsPage() {
+  const { notify, session } = useAppContext();
+  const [readiness, setReadiness] = useState<AdminReadinessOut | null>(null);
+  const [settings, setSettings] = useState<SettingItemOut[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [graphOAuthBusy, setGraphOAuthBusy] = useState(false);
+  const [authRefreshBusy, setAuthRefreshBusy] = useState(false);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
+
+  const refresh = useCallback(async (options?: { showLoading?: boolean }) => {
+    const showLoading = options?.showLoading !== false;
+    if (showLoading) setLoading(true);
+    setError("");
+    try {
+      const [nextReadiness, nextSettings] = await Promise.all([api.adminReadiness(csrfToken), api.adminSettings(csrfToken)]);
+      setReadiness(nextReadiness);
+      setSettings(nextSettings);
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Delivery data could not be loaded.");
+    } finally {
+      if (showLoading) setLoading(false);
     }
   }, [csrfToken]);
 
@@ -4124,6 +4265,13 @@ function StatusPage() {
     }
   }
 
+  const settingsByKey = useMemo(() => new Map(settings.map((item) => [item.key, item])), [settings]);
+  const deliverySettings = orderedSettings(DELIVERY_SETTING_KEYS, settingsByKey);
+  const identitySettings = orderedSettings(DELIVERY_IDENTITY_SETTING_KEYS, settingsByKey);
+  const enabledCount = deliverySettings.filter((item) => item.effective_value === "true").length;
+  const deliveryMethodCount = deliverySettings.length || DELIVERY_SETTING_KEYS.length;
+  const graphLookupEnabled = settingEnabled(settingsByKey, "graph_lookup_enabled");
+  const refreshSilently = useCallback(() => refresh({ showLoading: false }), [refresh]);
   const integrationViews = readiness
     ? [
         buildBotIntegrationView(readiness, copyDiagnosticValue),
@@ -4133,18 +4281,16 @@ function StatusPage() {
     : [];
   const overallTone = integrationViews.some((view) => view.tone === "danger") ? "danger" : integrationViews.some((view) => view.tone === "warn") ? "warn" : "success";
   const overallLabel = overallTone === "danger" ? "Degraded" : overallTone === "warn" ? "Attention" : "Ready";
-  const defaultSelectedComponentId = integrationViews.find((view) => view.tone === "danger" || view.tone === "warn")?.id ?? integrationViews.find((view) => view.id === "graph-delivery")?.id ?? integrationViews[0]?.id ?? "";
-  const selectedIntegration = integrationViews.find((view) => view.id === selectedComponentId) ?? integrationViews.find((view) => view.id === defaultSelectedComponentId) ?? integrationViews[0] ?? null;
 
   return (
     <>
       <PageIntro
         eyebrow="Operations"
-        title="Status"
-        description="Production readiness, delivery paths and diagnostics for Teams Rehook."
+        title="Delivery"
+        description="Operate the complete delivery pipeline from one place."
         actions={
           readiness ? (
-            <div className="row-actions">
+            <div className="row-actions delivery-page-actions">
               <button
                 className="secondary-button secondary-button--small button-with-icon"
                 type="button"
@@ -4155,7 +4301,15 @@ function StatusPage() {
                 <RefreshCw aria-hidden="true" className={classNames("button-icon", authRefreshBusy && "button-icon--spin")} focusable="false" />
                 {authRefreshBusy ? "Refreshing..." : "Refresh auth tokens"}
               </button>
-              <StatusBadge label={overallLabel} tone={overallTone} />
+              <button
+                className="icon-button delivery-settings-trigger"
+                type="button"
+                onClick={() => setSettingsModalOpen(true)}
+                aria-label="Configure delivery settings"
+                title="Configure delivery settings"
+              >
+                <SettingsIcon aria-hidden="true" focusable="false" />
+              </button>
             </div>
           ) : null
         }
@@ -4164,13 +4318,13 @@ function StatusPage() {
         <Card>
           <div className="table-state" role="status" aria-live="polite">
             <div className="spinner spinner--small" aria-hidden="true" />
-            <p>Loading status...</p>
+            <p>Loading delivery operations...</p>
           </div>
         </Card>
       ) : error ? (
         <Card>
           <div className="table-state table-state--error" role="alert">
-            <h3>Could not load status</h3>
+            <h3>Could not load delivery operations</h3>
             <p>{error}</p>
             <button className="secondary-button secondary-button--small" type="button" onClick={() => void refresh()}>
               Retry
@@ -4178,51 +4332,387 @@ function StatusPage() {
           </div>
         </Card>
       ) : readiness ? (
-        <div className="status-command-center">
-          <RelayHealthHero readiness={readiness} integrations={integrationViews} overallLabel={overallLabel} overallTone={overallTone} />
-          <RelayPipelineLayout
+        <div className="delivery-page delivery-operations-page">
+          <RelayHealthHero
+            deliveryMethodCount={deliveryMethodCount}
+            enabledCount={enabledCount}
             integrations={integrationViews}
-            selectedIntegration={selectedIntegration}
-            selectedComponentId={selectedIntegration?.id ?? defaultSelectedComponentId}
-            onSelectComponent={setSelectedComponentId}
+            overallLabel={overallLabel}
+            overallTone={overallTone}
+            readiness={readiness}
           />
-          <section className="status-operations-grid" aria-label="Operational context">
+          <section className="delivery-component-grid" aria-label="Delivery methods">
+            {integrationViews.map((integration) => (
+              <DeliveryComponentCard
+                key={integration.id}
+                csrfToken={csrfToken}
+                graphLookupEnabled={graphLookupEnabled}
+                integration={integration}
+                item={settingsByKey.get(deliverySettingKeyForIntegration(integration.id))}
+                notify={notify}
+                onChanged={refresh}
+              />
+            ))}
+          </section>
+          <section className="status-operations-grid" aria-label="Runtime context">
             <RuntimeSnapshotCard readiness={readiness} onCopy={copyDiagnosticValue} />
           </section>
+          {settingsModalOpen ? (
+            <DeliverySettingsModal
+              settings={identitySettings}
+              settingsByKey={settingsByKey}
+              csrfToken={csrfToken}
+              onChanged={refreshSilently}
+              notify={notify}
+              onClose={() => setSettingsModalOpen(false)}
+            />
+          ) : null}
         </div>
       ) : null}
     </>
   );
 }
 
-function deliveryAuthRefreshToastTone(result: DeliveryAuthRefreshOut): "success" | "info" {
-  return deliveryAuthRefreshComponents(result).some((component) => component.status === "skipped") ? "info" : "success";
+function deliverySettingKeyForIntegration(integrationId: string): (typeof DELIVERY_SETTING_KEYS)[number] {
+  if (integrationId === "graph-lookup") return "graph_lookup_enabled";
+  if (integrationId === "graph-delivery") return "graph_delivery_enabled";
+  return "bot_framework_enabled";
 }
 
-function deliveryAuthRefreshToastDescription(result: DeliveryAuthRefreshOut): string {
-  const components = deliveryAuthRefreshComponents(result);
-  const failed = components.filter((component) => component.status === "failed");
-  if (failed.length) {
-    return failed.map((component) => `${component.label}: ${component.message}`).join(" ");
-  }
-  const refreshed = components.filter((component) => component.status === "refreshed").length;
-  const cleared = components.filter((component) => component.status === "cleared").length;
-  const skipped = components.filter((component) => component.status === "skipped").length;
-  const parts = [
-    refreshed ? `${refreshed} refreshed` : "",
-    cleared ? `${cleared} cache${cleared === 1 ? "" : "s"} cleared` : "",
-    skipped ? `${skipped} skipped` : "",
-  ].filter(Boolean);
-  return parts.join(", ") || "Delivery authentication state was checked.";
-}
-
-function deliveryAuthRefreshComponents(result: DeliveryAuthRefreshOut) {
-  return [
-    { label: "Bot delivery", ...result.bot_delivery },
-    { label: "Graph lookup", ...result.graph_lookup },
-    { label: "Graph delivery", ...result.graph_delivery },
-    { label: "Bot inbound auth", ...result.bot_inbound_auth },
+function DeliveryComponentCard({
+  csrfToken,
+  graphLookupEnabled,
+  item,
+  integration,
+  notify,
+  onChanged,
+}: {
+  csrfToken: string;
+  graphLookupEnabled: boolean;
+  item?: SettingItemOut;
+  integration: IntegrationStatusView;
+  notify: SettingsNotify;
+  onChanged: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [detailView, setDetailView] = useState<DeliveryDetailView | null>(null);
+  const inputId = useId();
+  const enabled = item?.effective_value === "true";
+  const graphDeliveryBlocked = item?.key === "graph_delivery_enabled" && !enabled && !graphLookupEnabled;
+  const readyChecks = integration.healthChecks.filter((check) => check.tone === "success").length;
+  const tokenFactValue = integration.facts.find((fact) => fact.label === "Token");
+  const actionItem = integration.attentionItems[0];
+  const checksTone = readyChecks === integration.healthChecks.length ? "success" : readyChecks > 0 ? "warn" : "danger";
+  const configuredCount = integration.credentials.filter(([, value]) => value === "Configured" || value === "Inherited").length;
+  const tokenTooltip = `Token ${tokenFactValue?.value ?? "Unknown"}`;
+  const secondaryDetailItems: RowActionItem[] = [
+    { label: "Open diagnostics", icon: Activity, onClick: () => setDetailView("diagnostics") },
+    { label: "Open technical information", icon: Info, onClick: () => setDetailView("technical") },
   ];
+  const overflowItems: RowActionItem[] = integration.manageActionItems?.length
+    ? [
+        ...secondaryDetailItems,
+        ...integration.manageActionItems.map((item, index) => ({
+          ...item,
+          separated: index === 0 ? true : item.separated,
+        })),
+      ]
+    : secondaryDetailItems;
+
+  async function toggle(nextEnabled: boolean) {
+    if (!item) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api.updateSetting(csrfToken, item.key, nextEnabled ? "true" : "false");
+      notify({ tone: "success", title: `${item.label} ${nextEnabled ? "enabled" : "disabled"}` });
+      await onChanged();
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Delivery method could not be updated.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <Card className={classNames("delivery-component-card", `delivery-component-card--${integration.tone}`)}>
+        <div className="delivery-component-header">
+          <div className="delivery-component-title">
+            <DeliveryMethodIcon integrationId={integration.id} />
+            <span>
+              <h2>{integration.title}</h2>
+              <p>{integration.description}</p>
+            </span>
+          </div>
+          <div className="delivery-component-health" aria-label={`${integration.title} health`}>
+            <DeliveryStatusGroup integration={integration} overridden={Boolean(item?.source === "environment" && item.is_overridden)} tokenLabel={tokenTooltip} />
+          </div>
+          <div className="delivery-component-state" aria-label={`${integration.title} state`}>
+            {item ? (
+              <label className="settings-switch delivery-method-switch" htmlFor={inputId}>
+                <input
+                  id={inputId}
+                  type="checkbox"
+                  checked={enabled}
+                  disabled={busy || graphDeliveryBlocked}
+                  onChange={(event) => void toggle(event.target.checked)}
+                  aria-describedby={error ? `${inputId}-error` : undefined}
+                />
+                <span aria-hidden="true" />
+                <strong>{busy ? "Saving..." : enabled ? "Enabled" : "Disabled"}</strong>
+              </label>
+            ) : null}
+          </div>
+          <div className="delivery-detail-hub" aria-label={`${integration.title} actions`}>
+            <button
+              type="button"
+              className={classNames("delivery-detail-button delivery-detail-button--primary", `delivery-detail-button--${checksTone}`)}
+              aria-label={`Open ${integration.title} readiness checks, ${readyChecks} of ${integration.healthChecks.length} passing`}
+              onClick={() => setDetailView("readiness")}
+            >
+              <Check aria-hidden="true" className="button-icon" focusable="false" />
+              <span className="delivery-action-label" aria-hidden="true">
+                <span className="delivery-action-label-full">Checks</span>
+                <span className="delivery-action-label-short">Checks</span>
+              </span>
+              <strong>{readyChecks}/{integration.healthChecks.length}</strong>
+            </button>
+            <button type="button" className="delivery-detail-button delivery-detail-button--primary" aria-label={`Open ${integration.title} configuration`} onClick={() => setDetailView("configuration")}>
+              <Wrench aria-hidden="true" className="button-icon" focusable="false" />
+              <span className="delivery-action-label" aria-hidden="true">
+                <span className="delivery-action-label-full">Config</span>
+                <span className="delivery-action-label-short">Config</span>
+              </span>
+              <strong>{configuredCount}/{integration.credentials.length}</strong>
+            </button>
+            <button type="button" className="delivery-detail-button delivery-detail-button--secondary" aria-label={`Open ${integration.title} diagnostics`} onClick={() => setDetailView("diagnostics")}>
+              <Activity aria-hidden="true" className="button-icon" focusable="false" />
+              <span className="delivery-action-label" aria-hidden="true">
+                <span className="delivery-action-label-full">Diagnostics</span>
+                <span className="delivery-action-label-short">Diag</span>
+              </span>
+            </button>
+            <button type="button" className="delivery-detail-button delivery-detail-button--secondary" aria-label={`Open ${integration.title} technical information`} onClick={() => setDetailView("technical")}>
+              <Info aria-hidden="true" className="button-icon" focusable="false" />
+              <span className="delivery-action-label" aria-hidden="true">
+                <span className="delivery-action-label-full">Technical</span>
+                <span className="delivery-action-label-short">Tech</span>
+              </span>
+            </button>
+          </div>
+          {integration.manageActionItems?.length ? (
+            <div className="delivery-overflow-action delivery-overflow-action--manage">
+              <RowActionMenu label={`Manage ${integration.title}`} items={integration.manageActionItems} />
+            </div>
+          ) : null}
+          <div className="delivery-overflow-action delivery-overflow-action--details">
+            <RowActionMenu label={`More ${integration.title} actions`} items={overflowItems} />
+          </div>
+        </div>
+
+        {actionItem || graphDeliveryBlocked || error ? (
+          <div className="delivery-inline-issues">
+            {actionItem ? (
+              <div className={classNames("delivery-inline-issue", `delivery-inline-issue--${actionItem.tone}`)}>
+                <strong>{actionItem.title}</strong>
+                <span>{actionItem.description}</span>
+              </div>
+            ) : null}
+            {actionItem && integration.primaryActionSlot ? <div className="delivery-inline-action">{integration.primaryActionSlot}</div> : null}
+            {graphDeliveryBlocked ? <p className="settings-warning">Enable Graph lookup first.</p> : null}
+            {error ? (
+              <p className="form-error" id={`${inputId}-error`}>
+                {error}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
+      </Card>
+      {detailView ? <DeliveryDetailModal integration={integration} view={detailView} onClose={() => setDetailView(null)} /> : null}
+    </>
+  );
+}
+
+function DeliveryMethodIcon({ integrationId }: { integrationId: string }) {
+  const Icon = integrationId === "graph-lookup" ? Search : integrationId === "graph-delivery" ? Send : Bot;
+  return (
+    <span className={classNames("delivery-method-icon", `delivery-method-icon--${integrationId}`)} aria-hidden="true">
+      <Icon focusable="false" />
+    </span>
+  );
+}
+
+type DeliveryDetailView = "readiness" | "configuration" | "diagnostics" | "technical";
+
+function DeliverySettingsModal({
+  csrfToken,
+  notify,
+  onChanged,
+  onClose,
+  settings,
+  settingsByKey,
+}: SettingsCardProps & { onClose: () => void }) {
+  const tenantConfigured = Boolean(settingValue(settingsByKey, "ms_app_tenant_id"));
+  const clientConfigured = Boolean(settingValue(settingsByKey, "ms_app_client_id"));
+  const secretConfigured = settingValue(settingsByKey, "ms_app_client_secret") === "configured";
+  const configuredCount = [tenantConfigured, clientConfigured, secretConfigured].filter(Boolean).length;
+  const identityReady = configuredCount === 3;
+  const overrideCount = settings.filter((item) => item.is_overridden).length;
+
+  return (
+    <Modal
+      title="Delivery settings"
+      description="Microsoft identity values used by Bot Framework and Graph delivery."
+      onClose={onClose}
+      panelClassName="delivery-settings-modal"
+    >
+      <div className="delivery-settings-modal-body">
+        <section className={classNames("delivery-settings-summary", identityReady ? "delivery-settings-summary--ready" : "delivery-settings-summary--warn")}>
+          <span className={classNames("delivery-status-dot", identityReady ? "delivery-status-dot--success" : "delivery-status-dot--warn")} aria-hidden="true" />
+          <div>
+            <strong>{configuredCount}/3 identity values configured</strong>
+            <p>{identityReady ? "Tenant, client and secret are ready for delivery auth." : "Complete the missing identity values before refreshing auth tokens."}</p>
+          </div>
+          <StatusBadge label={overrideCount > 0 ? `${overrideCount} overrides` : "ENV"} tone={overrideCount > 0 ? "warn" : "neutral"} />
+        </section>
+        <div className="delivery-settings-list">
+          {settings.length ? (
+            settings.map((item) => (
+              <RuntimeSettingControl
+                key={item.key}
+                item={item}
+                csrfToken={csrfToken}
+                onChanged={onChanged}
+                notify={notify}
+                settingsByKey={settingsByKey}
+              />
+            ))
+          ) : (
+            <EmptyState title="No identity settings available" body="Delivery identity settings could not be loaded." />
+          )}
+        </div>
+        <p className="delivery-settings-footnote">
+          OAuth scopes use the built-in Bot Framework and Microsoft Graph defaults. Override them only through environment variables when needed.
+        </p>
+      </div>
+      <div className="form-actions">
+        <button className="secondary-button secondary-button--small" type="button" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function DeliveryDetailModal({ integration, onClose, view }: { integration: IntegrationStatusView; onClose: () => void; view: DeliveryDetailView }) {
+  const titleByView: Record<DeliveryDetailView, string> = {
+    readiness: "Readiness Checks",
+    configuration: "Configuration",
+    diagnostics: "Diagnostics",
+    technical: "Technical Information",
+  };
+
+  return (
+    <Modal title={titleByView[view]} description={`${integration.title} · ${integration.statusLabel}`} onClose={onClose} panelClassName="delivery-inspector-modal">
+      {view === "readiness" ? <DeliveryReadinessInspector integration={integration} /> : null}
+      {view === "configuration" ? <DeliveryConfigurationInspector integration={integration} /> : null}
+      {view === "diagnostics" ? <DeliveryDiagnosticsInspector integration={integration} /> : null}
+      {view === "technical" ? <DeliveryTechnicalInspector integration={integration} /> : null}
+      <div className="form-actions">
+        <button className="secondary-button secondary-button--small" type="button" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function DeliveryReadinessInspector({ integration }: { integration: IntegrationStatusView }) {
+  return (
+    <div className="delivery-inspector-body">
+      <StatusCheckList checks={integration.healthChecks} />
+    </div>
+  );
+}
+
+function DeliveryConfigurationInspector({ integration }: { integration: IntegrationStatusView }) {
+  return (
+    <div className="delivery-inspector-body">
+      <section className="delivery-inspector-section">
+        <h3>Credentials</h3>
+        <div className="credential-check-grid">
+          {integration.credentials.map(([label, value]) => (
+            <CredentialCheck key={label} label={label} value={value} />
+          ))}
+        </div>
+      </section>
+      <section className="delivery-inspector-section">
+        <h3>Capabilities</h3>
+        <StatusFactList facts={integration.capabilities} />
+      </section>
+    </div>
+  );
+}
+
+function DeliveryDiagnosticsInspector({ integration }: { integration: IntegrationStatusView }) {
+  return (
+    <div className="delivery-inspector-body">
+      <section className="delivery-inspector-section">
+        <h3>Permissions</h3>
+        <p>{integration.permissionSummary}</p>
+        <div className="permission-badge-list">
+          {integration.permissionBadges.map((badge) => (
+            <span className={classNames("permission-badge", `permission-badge--${badge.tone}`)} key={badge.label}>
+              {badge.label}
+            </span>
+          ))}
+        </div>
+      </section>
+      <section className="delivery-inspector-section">
+        <h3>Diagnostic output</h3>
+        <dl className="definition-list definition-list--compact advanced-definition-list">
+          {integration.diagnosticRows.map((row) => (
+            <FragmentPair key={row.label} label={row.label} value={row.value} />
+          ))}
+        </dl>
+      </section>
+    </div>
+  );
+}
+
+function DeliveryTechnicalInspector({ integration }: { integration: IntegrationStatusView }) {
+  return (
+    <div className="delivery-inspector-body">
+      <dl className="definition-list definition-list--compact advanced-definition-list">
+        {integration.technicalRows.map((row) => (
+          <FragmentPair key={row.label} label={row.label} value={row.value} />
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+function DeliveryStatusGroup({ integration, overridden, tokenLabel }: { integration: IntegrationStatusView; overridden: boolean; tokenLabel: string }) {
+  return (
+    <div
+      className="delivery-status-group delivery-token-tooltip"
+      aria-label={`${integration.title}: ${integration.statusLabel}${overridden ? ", Override active" : ""}. ${tokenLabel}`}
+      data-tooltip={tokenLabel}
+      tabIndex={0}
+    >
+      <span className={classNames("delivery-status-dot", `delivery-status-dot--${integration.tone}`)} aria-hidden="true" />
+      <strong>{integration.statusLabel}</strong>
+      {overridden ? (
+        <>
+          <span aria-hidden="true">·</span>
+          <span>Override</span>
+        </>
+      ) : null}
+    </div>
+  );
 }
 
 function SettingsPage() {
@@ -4230,7 +4720,6 @@ function SettingsPage() {
   const [settings, setSettings] = useState<SettingItemOut[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [identityOpen, setIdentityOpen] = useState(false);
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
 
   const refresh = useCallback(async () => {
@@ -4250,19 +4739,17 @@ function SettingsPage() {
   }, [refresh]);
 
   const settingsByKey = useMemo(() => new Map(settings.map((item) => [item.key, item])), [settings]);
-  const overrideCount = settings.filter((item) => item.is_overridden).length;
-  const deliverySettings = orderedSettings(DELIVERY_SETTING_KEYS, settingsByKey);
   const runtimeSettings = orderedSettings(RUNTIME_SETTING_KEYS, settingsByKey);
-  const identitySettings = orderedSettings(ADVANCED_IDENTITY_SETTING_KEYS, settingsByKey);
-  const overrideBadge = overrideCount > 0 ? `${overrideCount} ${overrideCount === 1 ? "override" : "overrides"}` : "All defaults";
+  const runtimeOverrideCount = runtimeSettings.filter((item) => item.is_overridden).length;
+  const overrideBadge = runtimeOverrideCount > 0 ? `${runtimeOverrideCount} ${runtimeOverrideCount === 1 ? "override" : "overrides"}` : "All defaults";
 
   return (
     <>
       <PageIntro
         eyebrow="Configuration"
         title="Settings"
-        description="Control delivery behavior, runtime defaults and Microsoft identity values."
-        actions={<StatusBadge label={overrideBadge} tone={overrideCount > 0 ? "warn" : "neutral"} />}
+        description="Manage runtime defaults used by relay operations."
+        actions={<StatusBadge label={overrideBadge} tone={runtimeOverrideCount > 0 ? "warn" : "neutral"} />}
       />
       {loading ? (
         <Card>
@@ -4283,29 +4770,13 @@ function SettingsPage() {
         </Card>
       ) : (
         <div className="settings-page">
-          <SettingsOverviewStrip settingsByKey={settingsByKey} overrideCount={overrideCount} />
-          <DeliveryControlsCard
-            settings={deliverySettings}
-            settingsByKey={settingsByKey}
-            csrfToken={csrfToken}
-            onChanged={refresh}
-            notify={notify}
-          />
+          <SettingsOverviewStrip settingsByKey={settingsByKey} overrideCount={runtimeOverrideCount} />
           <RuntimeDefaultsCard
             settings={runtimeSettings}
             settingsByKey={settingsByKey}
             csrfToken={csrfToken}
             onChanged={refresh}
             notify={notify}
-          />
-          <AdvancedIdentityCard
-            settings={identitySettings}
-            settingsByKey={settingsByKey}
-            csrfToken={csrfToken}
-            onChanged={refresh}
-            notify={notify}
-            open={identityOpen}
-            onToggle={() => setIdentityOpen((value) => !value)}
           />
         </div>
       )}
@@ -4332,10 +4803,7 @@ function SettingsOverviewStrip({
   overrideCount: number;
   settingsByKey: Map<string, SettingItemOut>;
 }) {
-  const tenantConfigured = Boolean(settingValue(settingsByKey, "ms_app_tenant_id"));
-  const clientConfigured = Boolean(settingValue(settingsByKey, "ms_app_client_id"));
-  const secretConfigured = settingValue(settingsByKey, "ms_app_client_secret") === "configured";
-  const identityReady = tenantConfigured && clientConfigured && secretConfigured;
+  const runtimeOverrideCount = RUNTIME_SETTING_KEYS.filter((key) => settingsByKey.get(key)?.is_overridden).length;
 
   return (
     <section className="settings-overview" aria-label="Runtime configuration overview">
@@ -4345,15 +4813,10 @@ function SettingsOverviewStrip({
         detail={overrideCount > 0 ? "Runtime overrides are applied immediately." : "All values inherit from environment defaults."}
       />
       <OverviewMetric
-        label="Features"
-        value={`${[settingEnabled(settingsByKey, "bot_framework_enabled"), settingEnabled(settingsByKey, "graph_lookup_enabled"), settingEnabled(settingsByKey, "graph_delivery_enabled")].filter(Boolean).length}/3 enabled`}
-        detail="Bot Framework, Graph lookup and delegated Graph delivery."
-      />
-      <OverviewMetric
-        label="Identity"
-        value={identityReady ? "Configured" : "Needs attention"}
-        detail={identityReady ? "Tenant, client and secret are present." : "Check Microsoft Entra values."}
-        tone={identityReady ? "success" : "warn"}
+        label="Runtime"
+        value={runtimeOverrideCount > 0 ? `${runtimeOverrideCount} overrides` : "Defaults"}
+        detail={runtimeOverrideCount > 0 ? "URL, retention or proxy values are overridden." : "Runtime values inherit from environment config."}
+        tone={runtimeOverrideCount > 0 ? "warn" : "neutral"}
       />
     </section>
   );
@@ -4376,31 +4839,6 @@ function OverviewMetric({
       <strong>{value}</strong>
       <p>{detail}</p>
     </div>
-  );
-}
-
-function DeliveryControlsCard({
-  csrfToken,
-  notify,
-  onChanged,
-  settings,
-  settingsByKey,
-}: SettingsCardProps) {
-  return (
-    <Card className="settings-card" title="Delivery" description="Primary delivery controls stay visible for quick operational changes.">
-      <div className="settings-feature-grid">
-        {settings.map((item) => (
-          <RuntimeSettingControl
-            key={item.key}
-            item={item}
-            csrfToken={csrfToken}
-            onChanged={onChanged}
-            notify={notify}
-            settingsByKey={settingsByKey}
-          />
-        ))}
-      </div>
-    </Card>
   );
 }
 
@@ -4493,62 +4931,6 @@ function RuntimeDefaultsCard({
   );
 }
 
-function AdvancedIdentityCard({
-  csrfToken,
-  notify,
-  onChanged,
-  onToggle,
-  open,
-  settings,
-  settingsByKey,
-}: SettingsCardProps & { open: boolean; onToggle: () => void }) {
-  const overriddenCount = settings.filter((item) => item.is_overridden).length;
-  const secret = settingsByKey.get("ms_app_client_secret");
-  const secretReady = secret?.effective_value === "configured";
-
-  return (
-    <Card className="settings-card settings-card--identity">
-      <div className="settings-disclosure">
-        <button
-          className="settings-disclosure-trigger"
-          type="button"
-          aria-expanded={open}
-          aria-controls="advanced-identity-settings"
-          onClick={onToggle}
-        >
-          <span>
-            <span className="settings-disclosure-kicker">Advanced</span>
-            <strong>Microsoft identity</strong>
-            <small>Tenant, client secret and OAuth scopes for Bot Framework and Graph.</small>
-          </span>
-          <span className="settings-disclosure-badges">
-            <StatusBadge label={secretReady ? "Secret configured" : "Secret missing"} tone={secretReady ? "success" : "warn"} />
-            {overriddenCount > 0 ? <StatusBadge label={`${overriddenCount} overrides`} tone="warn" /> : <StatusBadge label="ENV" />}
-            <ChevronDown aria-hidden="true" className="settings-disclosure-icon" focusable="false" />
-          </span>
-        </button>
-        {open ? (
-          <div className="settings-advanced-list" id="advanced-identity-settings">
-            <p className="settings-advanced-intro">
-              Microsoft Entra app registration used for Bot Framework and Graph. These values apply immediately after saving.
-            </p>
-            {settings.map((item) => (
-              <RuntimeSettingControl
-                key={item.key}
-                item={item}
-                csrfToken={csrfToken}
-                onChanged={onChanged}
-                notify={notify}
-                settingsByKey={settingsByKey}
-              />
-            ))}
-          </div>
-        ) : null}
-      </div>
-    </Card>
-  );
-}
-
 type SettingsNotify = ReturnType<typeof useAppContext>["notify"];
 
 type SettingsCardProps = {
@@ -4595,14 +4977,13 @@ function RuntimeSettingControl({
   const meta = SETTING_META[item.key];
   const display = meta?.display ?? (item.type === "bool" ? "switch" : item.type === "int" ? "number" : item.type === "secret" ? "secret" : "technical");
   const label = meta?.label ?? item.label;
-  const graphLookupEnabled = settingEnabled(settingsByKey, "graph_lookup_enabled");
-  const dependencyWarning = item.key === "graph_delivery_enabled" && draft === "true" && !graphLookupEnabled;
+  const autoSavePending = item.type !== "secret" && canSave;
 
-  async function save() {
+  async function save(nextValue = draft) {
     setBusy(true);
     setError("");
     try {
-      await api.updateSetting(csrfToken, item.key, draft);
+      await api.updateSetting(csrfToken, item.key, nextValue);
       notify({ tone: "success", title: `${item.label} saved` });
       await onChanged();
     } catch (err) {
@@ -4610,6 +4991,23 @@ function RuntimeSettingControl({
     } finally {
       setBusy(false);
     }
+  }
+
+  function commitChoice(nextValue: string) {
+    setDraft(nextValue);
+    if (nextValue !== item.effective_value || (nextValue === "" && item.is_overridden)) void save(nextValue);
+  }
+
+  function handleAutoSaveBlur(event: FocusEvent<HTMLInputElement>) {
+    if (!autoSavePending || busy) return;
+    const nextTarget = event.relatedTarget;
+    const control = event.currentTarget.closest(".settings-control");
+    if (nextTarget && control?.contains(nextTarget as Node)) return;
+    void save(draft);
+  }
+
+  function blurOnEnter(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Enter") event.currentTarget.blur();
   }
 
   async function copyValue() {
@@ -4665,7 +5063,7 @@ function RuntimeSettingControl({
               checked={draft === "true"}
               disabled={busy}
               aria-describedby={error ? errorId : undefined}
-              onChange={(event) => setDraft(event.target.checked ? "true" : "false")}
+              onChange={(event) => commitChoice(event.target.checked ? "true" : "false")}
             />
             <span aria-hidden="true" />
             <strong>{draft === "true" ? "Enabled" : "Disabled"}</strong>
@@ -4680,7 +5078,7 @@ function RuntimeSettingControl({
                 role="radio"
                 aria-checked={draft === value}
                 disabled={busy}
-                onClick={() => setDraft(value)}
+                onClick={() => commitChoice(value)}
               >
                 {value}
               </button>
@@ -4725,6 +5123,8 @@ function RuntimeSettingControl({
               disabled={busy}
               aria-describedby={error ? errorId : undefined}
               onChange={(event) => setDraft(event.target.value)}
+              onBlur={handleAutoSaveBlur}
+              onKeyDown={blurOnEnter}
             />
             {meta?.unit ? <span className="settings-unit">{meta.unit}</span> : null}
           </div>
@@ -4737,6 +5137,8 @@ function RuntimeSettingControl({
               disabled={busy}
               aria-describedby={error ? errorId : undefined}
               onChange={(event) => setDraft(event.target.value)}
+              onBlur={handleAutoSaveBlur}
+              onKeyDown={blurOnEnter}
             />
             <button
               className="icon-button icon-button--tiny"
@@ -4750,10 +5152,10 @@ function RuntimeSettingControl({
             </button>
           </div>
         )}
-        {dependencyWarning ? <p className="settings-warning">Graph delivery requires Graph lookup. Enable lookup first or save will fail.</p> : null}
         <div className="settings-control-footer">
           <div className="settings-source-row">
-            <SourceBadge overridden={item.is_overridden} />
+            <SourceBadge label={meta?.sourceLabel} overridden={item.is_overridden} source={item.source} />
+            {autoSavePending ? <StatusBadge label="Unsaved" tone="warn" /> : null}
             {item.is_overridden ? (
               <span>
                 Default <code>{item.env_default || "-"}</code>
@@ -4772,7 +5174,7 @@ function RuntimeSettingControl({
                 Reset
               </button>
             ) : null}
-            {canSave ? (
+            {canSave && item.type === "secret" ? (
               <button className="primary-button secondary-button--small" type="button" disabled={busy} onClick={() => void save()}>
                 Save
               </button>
@@ -4799,8 +5201,18 @@ function RuntimeSettingControl({
   );
 }
 
-function SourceBadge({ overridden }: { overridden: boolean }) {
-  return <span className={classNames("settings-source-badge", overridden && "settings-source-badge--override")}>{overridden ? "Override" : "ENV"}</span>;
+function SourceBadge({
+  label,
+  overridden,
+  source,
+}: {
+  label?: string;
+  overridden: boolean;
+  source: SettingItemOut["source"];
+}) {
+  const isOverride = source === "environment" && overridden;
+  const sourceLabel = label ?? (source === "application" ? "App" : "ENV");
+  return <span className={classNames("settings-source-badge", isOverride && "settings-source-badge--override")}>{isOverride ? "Override" : sourceLabel}</span>;
 }
 
 type StatusTone = "neutral" | "success" | "warn" | "danger";
@@ -4827,6 +5239,7 @@ type IntegrationStatusView = {
   id: string;
   title: string;
   description: string;
+  enabled: boolean;
   statusLabel: string;
   tone: StatusTone;
   summary: string;
@@ -4842,6 +5255,7 @@ type IntegrationStatusView = {
   diagnosticRows: StatusTechnicalRow[];
   technicalRows: StatusTechnicalRow[];
   primaryActionSlot?: ReactNode;
+  manageActionItems?: RowActionItem[];
 };
 
 function buildBotIntegrationView(readiness: AdminReadinessOut, onCopy: (value: string, label: string) => void): IntegrationStatusView {
@@ -4852,10 +5266,11 @@ function buildBotIntegrationView(readiness: AdminReadinessOut, onCopy: (value: s
     id: "bot-framework",
     title: "Bot Framework",
     description: "Teams conversation delivery",
+    enabled: readiness.bot.enabled,
     statusLabel: healthStateLabel(authStatus),
     tone: authStatusTone(authStatus),
     summary: readinessSummary(authStatus, readiness.bot.message, oauth),
-    lastCheckedLabel: oauth.token.checked ? "Checked this request" : "Not checked",
+    lastCheckedLabel: oauth.token.checked ? "Current request" : "Not checked",
     badges: [
       { label: readiness.bot.enabled ? "Enabled" : "Disabled", tone: readiness.bot.enabled ? "success" : "neutral" },
       {
@@ -4865,7 +5280,7 @@ function buildBotIntegrationView(readiness: AdminReadinessOut, onCopy: (value: s
     ],
     facts: oauthFacts(oauth),
     healthChecks: [
-      { label: "Feature policy", value: readiness.bot.enabled ? "Enabled" : "Disabled", tone: readiness.bot.enabled ? "success" : "neutral" },
+      { label: "Availability", value: readiness.bot.enabled ? "Enabled" : "Disabled", tone: readiness.bot.enabled ? "success" : "neutral" },
       { label: "App credentials", value: readiness.bot.credentials_configured ? "Configured" : "Missing", tone: readiness.bot.credentials_configured ? "success" : "warn" },
       { label: "Token request", value: tokenFact(oauth), tone: oauth.token.succeeded ? "success" : oauth.token.checked ? "danger" : "neutral" },
       {
@@ -4900,10 +5315,11 @@ function buildGraphLookupIntegrationView(readiness: AdminReadinessOut, onCopy: (
     id: "graph-lookup",
     title: "Graph lookup",
     description: "Target discovery and names",
+    enabled: readiness.graph_lookup.enabled,
     statusLabel: healthStateLabel(authStatus),
     tone: authStatusTone(authStatus),
     summary: readinessSummary(authStatus, readiness.graph_lookup.message, oauth),
-    lastCheckedLabel: oauth.token.checked ? "Checked this request" : "Not checked",
+    lastCheckedLabel: oauth.token.checked ? "Current request" : "Not checked",
     badges: [
       { label: readiness.graph_lookup.enabled ? "Enabled" : "Disabled", tone: readiness.graph_lookup.enabled ? "success" : "neutral" },
       {
@@ -4913,7 +5329,7 @@ function buildGraphLookupIntegrationView(readiness: AdminReadinessOut, onCopy: (
     ],
     facts: oauthFacts(oauth),
     healthChecks: [
-      { label: "Feature policy", value: readiness.graph_lookup.enabled ? "Enabled" : "Disabled", tone: readiness.graph_lookup.enabled ? "success" : "neutral" },
+      { label: "Availability", value: readiness.graph_lookup.enabled ? "Enabled" : "Disabled", tone: readiness.graph_lookup.enabled ? "success" : "neutral" },
       { label: "App credentials", value: readiness.graph_lookup.configured ? "Configured" : "Missing", tone: readiness.graph_lookup.configured ? "success" : "warn" },
       { label: "Token request", value: tokenFact(oauth), tone: oauth.token.succeeded ? "success" : oauth.token.checked ? "danger" : "neutral" },
       { label: "Directory metadata", value: oauth.app.available || oauth.tenant.available ? "Available" : "Limited", tone: oauth.app.available || oauth.tenant.available ? "success" : "warn" },
@@ -4949,10 +5365,11 @@ function buildGraphDeliveryIntegrationView(
     id: "graph-delivery",
     title: "Graph delivery",
     description: "Delegated Teams sends",
+    enabled: readiness.enabled,
     statusLabel: healthStateLabel(readiness.auth_status),
     tone: authStatusTone(readiness.auth_status),
     summary: graphDeliverySummary(readiness),
-    lastCheckedLabel: readiness.refresh_checked_at ? formatDateTime(readiness.refresh_checked_at) : readiness.token_checked ? "Checked this request" : "Not checked",
+    lastCheckedLabel: readiness.refresh_checked_at ? formatDateTime(readiness.refresh_checked_at) : readiness.token_checked ? "Current request" : "Not checked",
     badges: [
       { label: readiness.enabled ? "Enabled" : "Disabled", tone: readiness.enabled ? "success" : "neutral" },
       {
@@ -4975,7 +5392,7 @@ function buildGraphDeliveryIntegrationView(
       { label: "Last checked", value: readiness.refresh_checked_at ? formatDateTime(readiness.refresh_checked_at) : "Not checked" },
     ],
     healthChecks: [
-      { label: "Feature policy", value: readiness.enabled ? "Enabled" : "Disabled", tone: readiness.enabled ? "success" : "neutral" },
+      { label: "Availability", value: readiness.enabled ? "Enabled" : "Disabled", tone: readiness.enabled ? "success" : "neutral" },
       { label: "Service user", value: readiness.configured ? "Connected" : "Not connected", tone: readiness.configured ? "success" : readiness.enabled ? "warn" : "neutral" },
       { label: "Token refresh", value: delegatedTokenFact(readiness), tone: readiness.token_request_succeeded ? "success" : readiness.token_checked ? "danger" : "neutral" },
       {
@@ -5009,6 +5426,13 @@ function buildGraphDeliveryIntegrationView(
         onDisconnect={onDisconnect}
       />
     ),
+    manageActionItems: graphDeliveryManageItems({
+      busy,
+      configured: readiness.configured,
+      enabled: readiness.enabled,
+      onConnect,
+      onDisconnect,
+    }),
     diagnosticRows: [
       { label: "Credential source", value: readiness.credential_source || "missing" },
       { label: "Refresh checked", value: readiness.refresh_checked_at ? formatDateTime(readiness.refresh_checked_at) : "Not checked" },
@@ -5070,11 +5494,15 @@ function oauthTechnicalRows(oauth: OAuthDiagnosticsOut, onCopy: (value: string, 
 }
 
 function RelayHealthHero({
+  deliveryMethodCount,
+  enabledCount,
   integrations,
   overallLabel,
   overallTone,
   readiness,
 }: {
+  deliveryMethodCount?: number;
+  enabledCount?: number;
   integrations: IntegrationStatusView[];
   overallLabel: string;
   overallTone: StatusTone;
@@ -5082,7 +5510,10 @@ function RelayHealthHero({
 }) {
   const tokenCount = integrations.filter((integration) => integration.facts.some((fact) => fact.label === "Token" && fact.tone === "success")).length;
   const attentionItems = integrations.flatMap((integration) => integration.attentionItems);
-  const firstAction = attentionItems[0]?.title ?? (readiness.graph_delivery.configured ? "Monitor Messages" : "Connect service user");
+  const readyCount = integrations.filter((integration) => integration.tone === "success").length;
+  const nextStep = attentionItems[0]?.title ?? (readiness.graph_delivery.configured ? "Monitor message delivery" : "Connect service user");
+  const methodsEnabled = enabledCount ?? readyCount;
+  const methodsTotal = deliveryMethodCount ?? integrations.length;
 
   return (
     <section className={classNames("status-relay-hero", `status-relay-hero--${overallTone}`)} aria-label="Relay health">
@@ -5093,186 +5524,33 @@ function RelayHealthHero({
           <h2>{overallLabel === "Ready" ? "Relay is ready to deliver messages" : overallLabel === "Attention" ? "Relay needs operator attention" : "Relay delivery is degraded"}</h2>
           <p>
             {overallTone === "success"
-              ? "All configured relay paths report usable readiness."
-              : "One or more relay checks need review before production delivery can be trusted."}
+              ? "No immediate action is required. Keep an eye on message logs after new routes are added."
+              : "Start with the first item below, then refresh auth tokens to confirm the fix."}
           </p>
         </div>
       </div>
       <div className="status-relay-metrics">
-        <StatusOverviewMetric label="Overall" value={overallLabel} detail={overallTone === "success" ? "No active blockers." : "Review pipeline details."} tone={overallTone} />
+        <StatusOverviewMetric label="Status" value={overallLabel} detail={overallTone === "success" ? "No active blockers." : "Review the selected component."} tone={overallTone} />
         <StatusOverviewMetric
-          label="Tokens"
-          value={`${tokenCount}/${integrations.length} valid`}
-          detail="Bot, lookup and delegated checks."
-          tone={tokenCount === integrations.length ? "success" : tokenCount > 0 ? "warn" : "danger"}
-        />
-        <StatusOverviewMetric
-          label="Next"
-          value={attentionItems.length ? `${attentionItems.length} issue${attentionItems.length === 1 ? "" : "s"}` : "No blockers"}
-          detail={firstAction}
+          label="Action"
+          value={attentionItems.length ? `${attentionItems.length} item${attentionItems.length === 1 ? "" : "s"}` : "None"}
+          detail={nextStep}
           tone={attentionItems.length ? (attentionItems.some((item) => item.tone === "danger") ? "danger" : "warn") : "success"}
         />
+        <StatusOverviewMetric
+          label="Methods"
+          value={`${methodsEnabled}/${methodsTotal} enabled`}
+          detail={`${readyCount}/${integrations.length} components ready.`}
+          tone={methodsEnabled === methodsTotal ? "success" : methodsEnabled > 0 ? "warn" : "danger"}
+        />
+        <StatusOverviewMetric
+          label="Auth"
+          value={`${tokenCount}/${integrations.length} valid`}
+          detail="Token checks that currently pass."
+          tone={tokenCount === integrations.length ? "success" : tokenCount > 0 ? "warn" : "danger"}
+        />
       </div>
     </section>
-  );
-}
-
-function RelayPipelineLayout({
-  integrations,
-  onSelectComponent,
-  selectedComponentId,
-  selectedIntegration,
-}: {
-  integrations: IntegrationStatusView[];
-  onSelectComponent: (componentId: string) => void;
-  selectedComponentId: string;
-  selectedIntegration: IntegrationStatusView | null;
-}) {
-  return (
-    <section className="status-master-detail" aria-label="Delivery pipeline status">
-      <div className="status-master-pane">
-        <div className="status-pane-header">
-          <div>
-            <p className="integration-kicker">Delivery pipeline</p>
-            <h2>Components</h2>
-          </div>
-          <span>{integrations.length} checks</span>
-        </div>
-        <ComponentList integrations={integrations} onSelectComponent={onSelectComponent} selectedComponentId={selectedComponentId} />
-      </div>
-      <ComponentDetailPane integration={selectedIntegration} />
-    </section>
-  );
-}
-
-function ComponentList({
-  integrations,
-  onSelectComponent,
-  selectedComponentId,
-}: {
-  integrations: IntegrationStatusView[];
-  onSelectComponent: (componentId: string) => void;
-  selectedComponentId: string;
-}) {
-  return (
-    <div className="status-component-list" role="list">
-      {integrations.map((integration) => {
-        const topIssue = integration.attentionItems[0];
-        const tokenFact = integration.facts.find((fact) => fact.label === "Token");
-        return (
-          <button
-            aria-pressed={selectedComponentId === integration.id}
-            className={classNames("status-component-row", `status-component-row--${integration.tone}`, selectedComponentId === integration.id && "status-component-row--selected")}
-            key={integration.id}
-            onClick={() => onSelectComponent(integration.id)}
-            type="button"
-          >
-            <span className={classNames("status-dot", `status-dot--${integration.tone}`)} aria-hidden="true" />
-            <span className="status-component-row-main">
-              <span className="status-component-row-title">
-                <strong>{integration.title}</strong>
-                <small>{integration.statusLabel}</small>
-              </span>
-              <span>{topIssue ? topIssue.title : integration.summary}</span>
-            </span>
-            <span className="status-component-row-meta">
-              <span>{tokenFact ? tokenFact.value : "Token unknown"}</span>
-              <span>{integration.lastCheckedLabel}</span>
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function ComponentDetailPane({ integration }: { integration: IntegrationStatusView | null }) {
-  if (!integration) return null;
-  return (
-    <aside className="status-detail-pane" aria-label={`${integration.title} details`}>
-      <div className="status-detail-header">
-        <div>
-          <p className="integration-kicker">Selected component</p>
-          <h2>{integration.title}</h2>
-          <p>{integration.description}</p>
-        </div>
-        <div className={classNames("status-health-pill", `status-health-pill--${integration.tone}`)}>
-          <span aria-hidden="true" />
-          <strong>{integration.statusLabel}</strong>
-        </div>
-      </div>
-
-      {integration.attentionItems.length ? (
-        <div className={classNames("status-detail-alert", `status-detail-alert--${integration.attentionItems[0].tone}`)}>
-          <strong>{integration.attentionItems[0].title}</strong>
-          <span>{integration.attentionItems[0].description}</span>
-        </div>
-      ) : null}
-
-      <section className="status-detail-section">
-        <h3>Overview</h3>
-        <p>{integration.summary}</p>
-        <StatusFactList facts={integration.facts} />
-      </section>
-
-      <section className="status-detail-section">
-        <h3>Health checks</h3>
-        <StatusCheckList checks={integration.healthChecks} />
-      </section>
-
-      <section className="status-detail-section">
-        <h3>Capabilities</h3>
-        <StatusFactList facts={integration.capabilities} />
-      </section>
-
-      {integration.primaryActionSlot ? (
-        <section className="status-detail-section">
-          <h3>Actions</h3>
-          <div className="status-detail-actions">{integration.primaryActionSlot}</div>
-        </section>
-      ) : null}
-
-      <details className="status-detail-disclosure">
-        <summary>
-          <span>Diagnostics</span>
-          <small>Credentials, permissions and check output</small>
-        </summary>
-        <div className="status-detail-disclosure-body">
-          <div className="credential-check-grid">
-            {integration.credentials.map(([label, value]) => (
-              <CredentialCheck key={label} label={label} value={value} />
-            ))}
-          </div>
-          <p>{integration.permissionSummary}</p>
-          <div className="permission-badge-list">
-            {integration.permissionBadges.map((badge) => (
-              <span className={classNames("permission-badge", `permission-badge--${badge.tone}`)} key={badge.label}>
-                {badge.label}
-              </span>
-            ))}
-          </div>
-          <dl className="definition-list definition-list--compact advanced-definition-list">
-            {integration.diagnosticRows.map((row) => (
-              <FragmentPair key={row.label} label={row.label} value={row.value} />
-            ))}
-          </dl>
-        </div>
-      </details>
-
-      <details className="status-detail-disclosure">
-        <summary>
-          <span>Technical information</span>
-          <small>IDs, claims and copyable values</small>
-        </summary>
-        <div className="status-detail-disclosure-body">
-          <dl className="definition-list definition-list--compact advanced-definition-list">
-            {integration.technicalRows.map((row) => (
-              <FragmentPair key={row.label} label={row.label} value={row.value} />
-            ))}
-          </dl>
-        </div>
-      </details>
-    </aside>
   );
 }
 
@@ -5363,41 +5641,103 @@ function GraphDeliveryActionBar({
   );
 }
 
+function graphDeliveryManageItems({
+  busy,
+  configured,
+  enabled,
+  onConnect,
+  onDisconnect,
+}: {
+  busy: boolean;
+  configured: boolean;
+  enabled: boolean;
+  onConnect: () => void;
+  onDisconnect: () => void;
+}): RowActionItem[] {
+  if (configured) {
+    return [
+      {
+        label: "Reconnect service user",
+        icon: RefreshCw,
+        onClick: onConnect,
+        disabled: busy || !enabled,
+        spinning: busy,
+      },
+      {
+        label: "Disconnect service user",
+        icon: PowerOff,
+        onClick: onDisconnect,
+        disabled: busy,
+        separated: true,
+      },
+    ];
+  }
+
+  return [
+    {
+      label: "Connect service user",
+      icon: Power,
+      onClick: onConnect,
+      disabled: busy || !enabled,
+    },
+  ];
+}
+
 function RuntimeSnapshotCard({ onCopy, readiness }: { onCopy: (value: string, label: string) => void; readiness: AdminReadinessOut }) {
   return (
-    <Card className="status-context-card" title="Runtime snapshot" description="Effective values used by relay operations.">
-      <dl className="status-runtime-list">
-        <dt>Application</dt>
-        <dd>
-          {readiness.app_name} {readiness.app_version}
-        </dd>
-        <dt>Public URL</dt>
-        <dd>
-          <CopyInlineValue label="Public URL" onCopy={onCopy} value={readiness.runtime.app_public_base_url} />
-        </dd>
-        <dt>Frontend URL</dt>
-        <dd>
-          <CopyInlineValue label="Frontend URL" onCopy={onCopy} value={readiness.runtime.frontend_base_url} />
-        </dd>
-        <dt>CORS origins</dt>
-        <dd>{readiness.runtime.cors_origins.join(", ") || "-"}</dd>
-        <dt>Compose subnet</dt>
-        <dd>{readiness.runtime.compose_app_subnet || "-"}</dd>
-        <dt>Trusted upstream proxies</dt>
-        <dd>{readiness.runtime.trusted_proxy_ips || "-"}</dd>
-        <dt>Trusted proxy chain</dt>
-        <dd>{readiness.runtime.trusted_proxy_chain || "-"}</dd>
-        <dt>Payload limit</dt>
-        <dd>{formatBytes(readiness.runtime.webhook_max_payload_bytes)}</dd>
-        <dt>Log retention</dt>
-        <dd>{readiness.runtime.log_retention_days} days</dd>
-        <dt>Cleanup interval</dt>
-        <dd>{readiness.runtime.log_cleanup_interval_minutes} minutes</dd>
-        <dt>Secure session cookie</dt>
-        <dd>{yesNo(readiness.runtime.session_secure_cookie)}</dd>
-        <dt>Settings encryption</dt>
-        <dd>{settingsEncryptionLabel(readiness.runtime.settings_encryption_key_source, readiness.runtime.settings_encryption_ready)}</dd>
-      </dl>
+    <Card className="status-context-card">
+      <details className="status-runtime-disclosure">
+        <summary>
+          <span>
+            <span className="integration-kicker">Developer details</span>
+            <strong>Runtime and environment</strong>
+            <small>URLs, proxy settings, limits and retention values.</small>
+          </span>
+          <span className="status-runtime-summary-badges">
+            <StatusBadge
+              label={`Retention ${readiness.runtime.log_retention_days}d`}
+              tone="neutral"
+            />
+            <StatusBadge
+              label={settingsEncryptionLabel(readiness.runtime.settings_encryption_key_source, readiness.runtime.settings_encryption_ready)}
+              tone={readiness.runtime.settings_encryption_ready ? "success" : "warn"}
+            />
+            <ChevronDown aria-hidden="true" className="settings-disclosure-icon" focusable="false" />
+          </span>
+        </summary>
+        <dl className="status-runtime-list">
+          <dt>Application</dt>
+          <dd>
+            {readiness.app_name} {readiness.app_version}
+          </dd>
+          <dt>Public URL</dt>
+          <dd>
+            <CopyInlineValue label="Public URL" onCopy={onCopy} value={readiness.runtime.app_public_base_url} />
+          </dd>
+          <dt>Frontend URL</dt>
+          <dd>
+            <CopyInlineValue label="Frontend URL" onCopy={onCopy} value={readiness.runtime.frontend_base_url} />
+          </dd>
+          <dt>CORS origins</dt>
+          <dd>{readiness.runtime.cors_origins.join(", ") || "-"}</dd>
+          <dt>Compose subnet</dt>
+          <dd>{readiness.runtime.compose_app_subnet || "-"}</dd>
+          <dt>Trusted upstream proxies</dt>
+          <dd>{readiness.runtime.trusted_proxy_ips || "-"}</dd>
+          <dt>Trusted proxy chain</dt>
+          <dd>{readiness.runtime.trusted_proxy_chain || "-"}</dd>
+          <dt>Payload limit</dt>
+          <dd>{formatBytes(readiness.runtime.webhook_max_payload_bytes)}</dd>
+          <dt>Log retention</dt>
+          <dd>{readiness.runtime.log_retention_days} days</dd>
+          <dt>Cleanup interval</dt>
+          <dd>{readiness.runtime.log_cleanup_interval_minutes} minutes</dd>
+          <dt>Secure session cookie</dt>
+          <dd>{yesNo(readiness.runtime.session_secure_cookie)}</dd>
+          <dt>Settings encryption</dt>
+          <dd>{settingsEncryptionLabel(readiness.runtime.settings_encryption_key_source, readiness.runtime.settings_encryption_ready)}</dd>
+        </dl>
+      </details>
     </Card>
   );
 }

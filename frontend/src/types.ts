@@ -311,6 +311,7 @@ export type SettingItemOut = {
   env_default: string;
   effective_value: string;
   is_overridden: boolean;
+  source: "environment" | "application";
 };
 
 export type GraphDeliveryOAuthStartOut = {

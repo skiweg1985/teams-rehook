@@ -18,7 +18,13 @@ from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.proxy_trust import combined_trusted_proxy_ips
-from app.core.settings_overrides import clear_override, get_effective_settings, list_setting_items, set_override
+from app.core.settings_overrides import (
+    clear_override,
+    get_effective_settings,
+    is_environment_override,
+    list_setting_items,
+    set_override,
+)
 from app.database import get_db
 from app.deps import get_current_session, record_audit, require_admin, require_csrf
 from app.models import AuditEvent, BotActivityEvent, EventLogEntry, GraphDelegatedCredential, Session as UserSession, User, WebhookAbuseBucket
@@ -98,7 +104,7 @@ def update_setting(
     set_override(db, key=key, value=payload.value, updated_by_id=admin.id)
     record_audit(
         db,
-        action="settings.override.set",
+        action="settings.override.set" if is_environment_override(key) else "settings.application.set",
         actor_type="user",
         actor_id=admin.id,
         organization_id=admin.organization_id,
@@ -124,7 +130,7 @@ def reset_setting(
     clear_override(db, key=key)
     record_audit(
         db,
-        action="settings.override.reset",
+        action="settings.override.reset" if is_environment_override(key) else "settings.application.reset",
         actor_type="user",
         actor_id=admin.id,
         organization_id=admin.organization_id,

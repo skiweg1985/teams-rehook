@@ -526,6 +526,7 @@ class SettingItemOut(BaseModel):
     env_default: str
     effective_value: str
     is_overridden: bool
+    source: Literal["environment", "application"] = "environment"
 
 
 class SettingUpdateIn(BaseModel):
