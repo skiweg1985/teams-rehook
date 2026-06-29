@@ -231,6 +231,7 @@ textarea:focus {
   background: transparent;
   color: var(--muted);
   font-weight: 700;
+  line-height: 1.25;
 }
 
 .segmented-control-button:hover {
@@ -3594,6 +3595,7 @@ button:disabled {
   display: grid;
   place-items: center;
   padding: var(--space-5);
+  overflow: hidden;
 }
 
 .modal-backdrop {
@@ -3608,7 +3610,9 @@ button:disabled {
   z-index: 1;
   width: min(100%, 560px);
   max-height: calc(100vh - 48px);
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: var(--surface);
@@ -3634,13 +3638,41 @@ button:disabled {
   gap: var(--space-4);
 }
 
+.webhook-route-modal .segmented-control {
+  width: 100%;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+}
+
+.webhook-route-modal .segmented-control-button {
+  min-width: 92px;
+  white-space: nowrap;
+}
+
 .modal-panel-header,
 .modal-panel-body {
   padding: var(--space-4);
 }
 
 .modal-panel-header {
+  flex: none;
   border-bottom: 1px solid var(--line);
+}
+
+.modal-panel-body {
+  min-height: 0;
+  overflow: auto;
+}
+
+.modal-panel .form-actions {
+  position: sticky;
+  bottom: calc(var(--space-4) * -1);
+  z-index: 2;
+  margin: var(--space-2) calc(var(--space-4) * -1) calc(var(--space-4) * -1);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--line);
+  background: var(--surface);
 }
 
 .modal-panel-header h2,
@@ -4441,6 +4473,15 @@ button:disabled {
     justify-content: flex-start;
   }
 
+  .webhook-route-modal-top {
+    grid-template-columns: 1fr;
+    gap: var(--space-3);
+  }
+
+  .webhook-route-modal .segmented-control-button {
+    min-width: 0;
+  }
+
   .status-component-row-main > span:last-child {
     white-space: normal;
   }
@@ -4593,5 +4634,16 @@ button:disabled {
 
   .modal-panel {
     max-height: calc(100vh - 24px);
+  }
+
+  .modal-panel-header,
+  .modal-panel-body {
+    padding: var(--space-3);
+  }
+
+  .modal-panel .form-actions {
+    bottom: calc(var(--space-3) * -1);
+    margin: var(--space-2) calc(var(--space-3) * -1) calc(var(--space-3) * -1);
+    padding: var(--space-3);
   }
 }

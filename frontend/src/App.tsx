@@ -5182,11 +5182,9 @@ function ComponentList({
               <span>{topIssue ? topIssue.title : integration.summary}</span>
             </span>
             <span className="status-component-row-meta">
-              {integration.badges.slice(0, 2).map((badge) => (
-                <span className={classNames("status-mini-badge", badge.tone && `status-mini-badge--${badge.tone}`)} key={badge.label}>
-                  {badge.label}
-                </span>
-              ))}
+              <span className={classNames("status-mini-badge", `status-mini-badge--${integration.tone}`)}>
+                {integration.statusLabel}
+              </span>
             </span>
           </button>
         );
