@@ -4373,19 +4373,16 @@ function DeliveryComponentCard({
       <Card className={classNames("delivery-component-card", `delivery-component-card--${integration.tone}`)}>
         <div className="delivery-component-header">
           <div className="delivery-component-title">
-            <span className={classNames("status-dot", `status-dot--${integration.tone}`)} aria-hidden="true" />
-            <h2>{integration.title}</h2>
-            <p>{integration.description}</p>
+            <DeliveryMethodIcon integrationId={integration.id} />
+            <span>
+              <h2>{integration.title}</h2>
+              <p>{integration.description}</p>
+            </span>
           </div>
           <div className="delivery-component-kpis" aria-label={`${integration.title} summary`}>
-            <DeliveryStatusGroup enabled={enabled} integration={integration} overridden={Boolean(item?.is_overridden)} />
+            <DeliveryStatusGroup integration={integration} overridden={Boolean(item?.is_overridden)} />
             <CompactStatusValue label="Checks" tone={readyChecks === integration.healthChecks.length ? "success" : readyChecks > 0 ? "warn" : "danger"} value={`${readyChecks}/${integration.healthChecks.length}`} />
             <CompactStatusValue label="Token" tone={tokenFactValue?.tone ?? "neutral"} value={tokenFactValue?.value ?? "Unknown"} />
-          </div>
-          <div className="delivery-component-action">
-            <span className={classNames("delivery-action-state", actionItem && `delivery-action-state--${actionItem.tone}`)}>
-              {actionItem ? actionItem.title : "No action"}
-            </span>
             {item ? (
               <label className="settings-switch delivery-method-switch" htmlFor={inputId}>
                 <input
@@ -4400,6 +4397,26 @@ function DeliveryComponentCard({
                 <strong>{busy ? "Saving..." : enabled ? "Enabled" : "Disabled"}</strong>
               </label>
             ) : null}
+          </div>
+          <div className="delivery-detail-hub" aria-label={`${integration.title} details`}>
+            <button type="button" className="delivery-detail-button" aria-label={`Open ${integration.title} readiness checks`} onClick={() => setDetailView("readiness")}>
+              <Check aria-hidden="true" className="button-icon" focusable="false" />
+              <span>Checks</span>
+              <strong>{readyChecks}/{integration.healthChecks.length}</strong>
+            </button>
+            <button type="button" className="delivery-detail-button" aria-label={`Open ${integration.title} configuration`} onClick={() => setDetailView("configuration")}>
+              <Wrench aria-hidden="true" className="button-icon" focusable="false" />
+              <span>Config</span>
+              <strong>{integration.credentials.filter(([, value]) => value === "Configured" || value === "Inherited").length}/{integration.credentials.length}</strong>
+            </button>
+            <button type="button" className="delivery-detail-button" aria-label={`Open ${integration.title} diagnostics`} onClick={() => setDetailView("diagnostics")}>
+              <Activity aria-hidden="true" className="button-icon" focusable="false" />
+              <span>Diagnostics</span>
+            </button>
+            <button type="button" className="delivery-detail-button" aria-label={`Open ${integration.title} technical information`} onClick={() => setDetailView("technical")}>
+              <Info aria-hidden="true" className="button-icon" focusable="false" />
+              <span>Technical</span>
+            </button>
           </div>
         </div>
 
@@ -4421,29 +4438,18 @@ function DeliveryComponentCard({
           </div>
         ) : null}
 
-        <div className="delivery-detail-hub" aria-label={`${integration.title} details`}>
-          <button type="button" className="delivery-detail-button" aria-label={`Open ${integration.title} readiness checks`} onClick={() => setDetailView("readiness")}>
-            <Check aria-hidden="true" className="button-icon" focusable="false" />
-            <span>Checks</span>
-            <strong>{readyChecks}/{integration.healthChecks.length}</strong>
-          </button>
-          <button type="button" className="delivery-detail-button" aria-label={`Open ${integration.title} configuration`} onClick={() => setDetailView("configuration")}>
-            <Wrench aria-hidden="true" className="button-icon" focusable="false" />
-            <span>Config</span>
-            <strong>{integration.credentials.filter(([, value]) => value === "Configured" || value === "Inherited").length}/{integration.credentials.length}</strong>
-          </button>
-          <button type="button" className="delivery-detail-button" aria-label={`Open ${integration.title} diagnostics`} onClick={() => setDetailView("diagnostics")}>
-            <Activity aria-hidden="true" className="button-icon" focusable="false" />
-            <span>Diagnostics</span>
-          </button>
-          <button type="button" className="delivery-detail-button" aria-label={`Open ${integration.title} technical information`} onClick={() => setDetailView("technical")}>
-            <Info aria-hidden="true" className="button-icon" focusable="false" />
-            <span>Technical</span>
-          </button>
-        </div>
       </Card>
       {detailView ? <DeliveryDetailModal integration={integration} view={detailView} onClose={() => setDetailView(null)} /> : null}
     </>
+  );
+}
+
+function DeliveryMethodIcon({ integrationId }: { integrationId: string }) {
+  const Icon = integrationId === "graph-lookup" ? Search : integrationId === "graph-delivery" ? Send : Bot;
+  return (
+    <span className={classNames("delivery-method-icon", `delivery-method-icon--${integrationId}`)} aria-hidden="true">
+      <Icon focusable="false" />
+    </span>
   );
 }
 
@@ -4547,13 +4553,11 @@ function CompactStatusValue({ label, tone = "neutral", value }: { label: string;
   );
 }
 
-function DeliveryStatusGroup({ enabled, integration, overridden }: { enabled: boolean; integration: IntegrationStatusView; overridden: boolean }) {
+function DeliveryStatusGroup({ integration, overridden }: { integration: IntegrationStatusView; overridden: boolean }) {
   return (
-    <div className="delivery-status-group" aria-label={`${integration.title}: ${integration.statusLabel}, ${enabled ? "Enabled" : "Disabled"}${overridden ? ", Override active" : ""}`}>
+    <div className="delivery-status-group" aria-label={`${integration.title}: ${integration.statusLabel}${overridden ? ", Override active" : ""}`}>
       <span className={classNames("delivery-status-dot", `delivery-status-dot--${integration.tone}`)} aria-hidden="true" />
       <strong>{integration.statusLabel}</strong>
-      <span aria-hidden="true">·</span>
-      <span>{enabled ? "Enabled" : "Disabled"}</span>
       {overridden ? (
         <>
           <span aria-hidden="true">·</span>
@@ -5186,7 +5190,7 @@ function buildBotIntegrationView(readiness: AdminReadinessOut, onCopy: (value: s
     statusLabel: healthStateLabel(authStatus),
     tone: authStatusTone(authStatus),
     summary: readinessSummary(authStatus, readiness.bot.message, oauth),
-    lastCheckedLabel: oauth.token.checked ? "Checked this request" : "Not checked",
+    lastCheckedLabel: oauth.token.checked ? "Current request" : "Not checked",
     badges: [
       { label: readiness.bot.enabled ? "Enabled" : "Disabled", tone: readiness.bot.enabled ? "success" : "neutral" },
       {
@@ -5234,7 +5238,7 @@ function buildGraphLookupIntegrationView(readiness: AdminReadinessOut, onCopy: (
     statusLabel: healthStateLabel(authStatus),
     tone: authStatusTone(authStatus),
     summary: readinessSummary(authStatus, readiness.graph_lookup.message, oauth),
-    lastCheckedLabel: oauth.token.checked ? "Checked this request" : "Not checked",
+    lastCheckedLabel: oauth.token.checked ? "Current request" : "Not checked",
     badges: [
       { label: readiness.graph_lookup.enabled ? "Enabled" : "Disabled", tone: readiness.graph_lookup.enabled ? "success" : "neutral" },
       {
@@ -5283,7 +5287,7 @@ function buildGraphDeliveryIntegrationView(
     statusLabel: healthStateLabel(readiness.auth_status),
     tone: authStatusTone(readiness.auth_status),
     summary: graphDeliverySummary(readiness),
-    lastCheckedLabel: readiness.refresh_checked_at ? formatDateTime(readiness.refresh_checked_at) : readiness.token_checked ? "Checked this request" : "Not checked",
+    lastCheckedLabel: readiness.refresh_checked_at ? formatDateTime(readiness.refresh_checked_at) : readiness.token_checked ? "Current request" : "Not checked",
     badges: [
       { label: readiness.enabled ? "Enabled" : "Disabled", tone: readiness.enabled ? "success" : "neutral" },
       {
