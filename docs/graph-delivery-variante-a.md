@@ -60,7 +60,7 @@ Important constraints for this product:
 | Target type | V1 decision | Required route identifiers | Delivery endpoint | Delegated permissions |
 | --- | --- | --- | --- | --- |
 | Team channel | Supported first | `team_id`, `channel_id` | `POST /teams/{team-id}/channels/{channel-id}/messages` | `ChannelMessage.Send` |
-| Existing group chat | Supported for chats the service user belongs to | `chat_id` | `POST /chats/{chat-id}/messages` | `ChatMessage.Send`; `Chat.ReadBasic` for service-user chat search |
+| Existing group chat | Supported for chats the service user belongs to | `chat_id` | `POST /chats/{chat-id}/messages` | `ChatMessage.Send`; `Chat.ReadBasic` for service-user chat search and member refresh |
 | User / 1:1 | Supported in V1 via route-setup chat resolution/creation | `chat_id` once resolved or created | `POST /chats/{chat-id}/messages` | `ChatMessage.Send`; `Chat.Create` for route setup resolving/creating the 1:1 chat |
 
 V1 should not treat a Graph user ID alone as a sendable delivery target. A user
@@ -93,8 +93,8 @@ Minimum delegated permission set for V1:
 - `User.Read` as the delegated sign-in baseline.
 - `ChannelMessage.Send` for channel routes.
 - `ChatMessage.Send` for existing chat routes.
-- `Chat.ReadBasic` for listing existing chats that the delegated service user
-  belongs to.
+- `Chat.ReadBasic` for listing existing chats and refreshing chat members that
+  the delegated service user can read.
 - `Chat.Create` for one-on-one route setup so Teams Rehook can resolve or
   create the chat target before later message delivery.
 

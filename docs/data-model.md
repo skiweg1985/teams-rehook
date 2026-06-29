@@ -45,6 +45,7 @@ The backend creates tables at startup and applies additive/backfill schema handl
 | `target_name` | Display label for the route target. |
 | `bot_service_url`, `bot_conversation_id` | Bot Framework delivery target values. |
 | `graph_*` fields | Graph target metadata for lookup, display, and delivery. |
+| `member_summary`, `member_count`, `member_list_json`, `members_refreshed_at`, `members_lookup_error` | Best-effort participant metadata for group chat targets. |
 | `last_delivery_status`, `last_delivery_at` | Last route delivery outcome summary. |
 
 ### `webhook_delivery_events`
@@ -65,6 +66,7 @@ Stores Bot Framework values needed to send proactive messages:
 - `conversation_id`
 - tenant/team/channel/user metadata
 - Graph IDs when available
+- best-effort group-chat participant summary, count, limited member list, refresh timestamp, and lookup error
 - `last_seen_at`
 
 ### `graph_delegated_credentials`

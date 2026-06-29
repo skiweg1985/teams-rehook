@@ -127,6 +127,11 @@ def _backfill_webhook_route_targets(db: Session) -> None:
         route.graph_team_id = reference.graph_team_id
         route.graph_team_name = reference.team_name
         route.graph_channel_id = reference.channel_id if route.graph_target_kind == "channel" else ""
+        route.member_summary = reference.member_summary
+        route.member_count = reference.member_count
+        route.member_list_json = reference.member_list_json
+        route.members_refreshed_at = reference.members_refreshed_at
+        route.members_lookup_error = reference.members_lookup_error
         if not route.bot_registered_by_id:
             route.bot_registered_by_id = reference.graph_user_id or reference.user_id
         changed = True
@@ -161,6 +166,8 @@ def _reference_target_name(reference: BotConversationReference) -> str:
         return _clip(reference.channel_name, 200)
     if reference.team_name:
         return _clip(reference.team_name, 200)
+    if reference.member_summary:
+        return _clip(reference.member_summary, 200)
     if reference.scope == "chat" or reference.conversation_type.lower() == "groupchat":
         return "Group chat"
     return _clip(reference.user_name or reference.graph_user_id or reference.user_id or reference.conversation_id, 200)
@@ -288,6 +295,11 @@ def _ensure_additive_schema() -> None:
             "graph_user_id": "TEXT DEFAULT '' NOT NULL",
             "graph_user_display_name": "VARCHAR(255) DEFAULT '' NOT NULL",
             "graph_user_principal_name": "VARCHAR(255) DEFAULT '' NOT NULL",
+            "member_summary": "VARCHAR(500) DEFAULT '' NOT NULL",
+            "member_count": "INTEGER DEFAULT 0 NOT NULL",
+            "member_list_json": "TEXT DEFAULT '[]' NOT NULL",
+            "members_refreshed_at": "TIMESTAMP NULL",
+            "members_lookup_error": "TEXT DEFAULT '' NOT NULL",
             "bot_target_source": "VARCHAR(40) DEFAULT '' NOT NULL",
             "bot_registered_by_id": "TEXT DEFAULT '' NOT NULL",
             "bot_registered_at": "TIMESTAMP NULL",
@@ -313,6 +325,11 @@ def _ensure_additive_schema() -> None:
             "channel_name": "VARCHAR(200) DEFAULT '' NOT NULL",
             "user_name": "VARCHAR(200) DEFAULT '' NOT NULL",
             "graph_user_id": "TEXT DEFAULT '' NOT NULL",
+            "member_summary": "VARCHAR(500) DEFAULT '' NOT NULL",
+            "member_count": "INTEGER DEFAULT 0 NOT NULL",
+            "member_list_json": "TEXT DEFAULT '[]' NOT NULL",
+            "members_refreshed_at": "TIMESTAMP NULL",
+            "members_lookup_error": "TEXT DEFAULT '' NOT NULL",
         },
         "webhook_abuse_buckets": {
             "last_client_host": "TEXT DEFAULT '' NOT NULL",

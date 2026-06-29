@@ -76,6 +76,8 @@ Inbound Bot Framework activities are authenticated before any activity event, co
 
 Accepted Bot Framework activities store only non-sensitive authentication metadata on the activity event, such as validated issuer, audience, service URL match status and validation time. Raw bearer tokens, JWT signatures and full claims are not persisted. Historical events created before auth metadata existed may show `unknown` auth status.
 
+For captured group chats, the backend can use the Bot Framework Connector member endpoint to store a best-effort participant summary, member count, limited member list, refresh timestamp, and lookup error on the conversation reference and related routes.
+
 ### Microsoft Graph Lookup
 
 Graph lookup uses app-only credentials to search users, teams, and channels and to refresh display names. Lookup metadata does not prove sendability.
@@ -83,6 +85,8 @@ Graph lookup uses app-only credentials to search users, teams, and channels and 
 ### Microsoft Graph Delivery
 
 Graph delivery uses a delegated service-user connection and sends to supported Graph targets. Messages appear as the delegated service user.
+
+Graph chat routes can refresh the same participant fields manually through the route API. This uses the delegated service-user token and Microsoft Graph chat members endpoint.
 
 ## Error Handling
 

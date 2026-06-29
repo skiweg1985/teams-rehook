@@ -30,7 +30,16 @@ from app.schemas import (
     WebhookRouteUpdate,
 )
 from app.security import dumps_json, issue_plain_secret, loads_json, lookup_secret_hash, utcnow
-from app.services.graph_delegated_lookup import GraphDelegatedLookupError, create_or_get_one_on_one_chat
+from app.services.bot_conversation_members import (
+    BotConversationMembersError,
+    fetch_bot_conversation_members,
+    serialize_members,
+)
+from app.services.graph_delegated_lookup import (
+    GraphDelegatedLookupError,
+    create_or_get_one_on_one_chat,
+    fetch_service_user_chat_members,
+)
 from app.services.graph_name_resolution import refresh_graph_names, resolve_route_graph_names, try_resolve_route_graph_names
 from app.services.graph_targets import GraphConfigError, GraphRequestError
 from app.services.log_retention import cleanup_log_events
@@ -155,6 +164,7 @@ def update_webhook_route(
 ):
     settings = get_effective_settings()
     route = _get_org_route(db, admin.organization_id, route_id)
+    previous_member_target = _route_member_target_key(route)
     _ensure_delivery_backend_feature_enabled(payload.delivery_backend or _route_delivery_backend(route), settings)
     if payload.name is not None:
         route.name = payload.name.strip()
@@ -197,6 +207,8 @@ def update_webhook_route(
     _ensure_route_feature_enabled(route, settings)
     _validate_client_ip_access(route)
     _materialize_graph_user_target(db, admin.organization_id, route)
+    if _route_member_target_key(route) != previous_member_target:
+        _clear_route_members(route)
     if settings.graph_lookup_enabled:
         try_resolve_route_graph_names(route)
     _validate_target(route)
@@ -277,6 +289,32 @@ def refresh_single_webhook_route_graph_names(
     )
     db.commit()
     return WebhookRouteNameRefreshOut(routes_checked=1, routes_updated=1 if updated else 0)
+
+
+@router.post("/webhook-routes/{route_id}/refresh-members", response_model=WebhookRouteOut, dependencies=[Depends(require_csrf)])
+def refresh_webhook_route_members(
+    route_id: str,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    route = _get_org_route(db, admin.organization_id, route_id)
+    _refresh_route_members(db, route)
+    record_audit(
+        db,
+        action="webhook_route.members_refreshed",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata={
+            "webhook_route_id": route.id,
+            "name": route.name,
+            "member_count": route.member_count,
+            "lookup_error": bool(route.members_lookup_error),
+        },
+    )
+    db.commit()
+    db.refresh(route)
+    return _route_out(route)
 
 
 @router.delete("/webhook-routes/{route_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_csrf)])
@@ -705,6 +743,53 @@ def _materialize_graph_user_target(db: Session, organization_id: str, route: Web
         route.bot_target_source = "graph_user_lookup"
 
 
+def _refresh_route_members(db: Session, route: WebhookRoute) -> None:
+    backend = _route_delivery_backend(route)
+    now = utcnow()
+    try:
+        if backend == DELIVERY_BACKEND_GRAPH and (route.graph_target_kind or "").strip() == "chat":
+            result = fetch_service_user_chat_members(
+                db,
+                organization_id=route.organization_id,
+                chat_id=route.graph_target_id,
+            )
+        elif backend == DELIVERY_BACKEND_BOT and route.bot_service_url.strip() and route.bot_conversation_id.strip():
+            result = fetch_bot_conversation_members(
+                service_url=route.bot_service_url,
+                conversation_id=route.bot_conversation_id,
+            )
+        else:
+            raise ValueError("Member refresh is only available for Bot Framework conversations and Graph chat routes.")
+    except (BotConversationMembersError, BotDeliveryError, GraphDelegatedLookupError, ValueError) as exc:
+        route.members_lookup_error = str(exc)[:1000]
+        route.members_refreshed_at = now
+        route.updated_at = now
+        return
+    route.member_summary = result.member_summary
+    route.member_count = result.member_count
+    route.member_list_json = serialize_members(result.members)
+    route.members_lookup_error = ""
+    route.members_refreshed_at = now
+    if result.member_summary:
+        route.target_name = result.member_summary[:200]
+    route.updated_at = now
+
+
+def _route_member_target_key(route: WebhookRoute) -> tuple[str, str, str, str]:
+    backend = _route_delivery_backend(route)
+    if backend == DELIVERY_BACKEND_GRAPH:
+        return (backend, (route.graph_target_kind or "").strip(), route.graph_target_id.strip(), "")
+    return (backend, route.bot_service_url.strip(), route.bot_conversation_id.strip(), "")
+
+
+def _clear_route_members(route: WebhookRoute) -> None:
+    route.member_summary = ""
+    route.member_count = 0
+    route.member_list_json = "[]"
+    route.members_refreshed_at = None
+    route.members_lookup_error = ""
+
+
 def _ensure_graph_lookup_enabled() -> None:
     if not get_effective_settings().graph_lookup_enabled:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Microsoft Graph lookup is disabled")
@@ -1091,6 +1176,11 @@ def _route_out(
         "graph_user_id": route.graph_user_id,
         "graph_user_display_name": route.graph_user_display_name,
         "graph_user_principal_name": route.graph_user_principal_name,
+        "member_summary": route.member_summary,
+        "member_count": route.member_count,
+        "members": route.members,
+        "members_refreshed_at": route.members_refreshed_at,
+        "members_lookup_error": route.members_lookup_error,
         "bot_target_source": route.bot_target_source,
         "bot_registered_by_id": route.bot_registered_by_id,
         "bot_registered_at": route.bot_registered_at,

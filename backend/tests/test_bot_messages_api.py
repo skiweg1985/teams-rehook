@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import urllib.parse
 from collections.abc import Iterator
+from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
@@ -12,8 +14,9 @@ from app.core.config import get_settings
 from app.database import Base, get_db
 from app.main import create_app
 from app.models import AuditEvent, BotActivityEvent, BotConversationReference, WebhookDeliveryEvent, WebhookRoute
-from app.routers.bot_messages import require_bot_framework_auth
+from app.routers.bot_messages import _refresh_reference_chat_members, require_bot_framework_auth
 from app.security import loads_json, utcnow
+from app.services.bot_conversation_members import BotConversationMembersError
 from app.services.bot_framework_auth import BotFrameworkClaims
 
 
@@ -207,6 +210,83 @@ def test_bot_message_endpoint_captures_group_chat_as_chat_reference():
     db.close()
 
 
+def test_bot_message_endpoint_refreshes_group_chat_member_summary(monkeypatch):
+    def fake_members(**kwargs):
+        assert kwargs["conversation_id"] == "19:group-chat@thread.v2"
+        return SimpleNamespace(
+            member_summary="Ada Admin, Ben Builder",
+            member_count=2,
+            members=[
+                SimpleNamespace(to_dict=lambda: {"id": "29:ada", "name": "Ada Admin", "aad_object_id": "", "email": "", "user_principal_name": ""}),
+                SimpleNamespace(to_dict=lambda: {"id": "29:ben", "name": "Ben Builder", "aad_object_id": "", "email": "", "user_principal_name": ""}),
+            ],
+        )
+
+    monkeypatch.setattr("app.routers.bot_messages.fetch_bot_conversation_members", fake_members)
+    client, db = make_client()
+    activity = {
+        "type": "message",
+        "serviceUrl": "https://smba.trafficmanager.net/emea/tenant-id/",
+        "conversation": {"id": "19:group-chat@thread.v2", "conversationType": "groupChat", "isGroup": True},
+        "from": {"id": "29:user", "name": "Ada Admin", "aadObjectId": "aad-user-id"},
+        "channelData": {"tenant": {"id": "tenant-id"}},
+    }
+
+    response = client.post("/api/v1/bot/messages", json=activity)
+
+    assert response.status_code == 200
+    reference = db.scalar(select(BotConversationReference))
+    assert reference is not None
+    assert reference.member_summary == "Ada Admin, Ben Builder"
+    assert reference.member_count == 2
+    assert reference.members_refreshed_at is not None
+    assert reference.members_lookup_error == ""
+    db.close()
+
+
+def test_bot_message_endpoint_keeps_group_chat_when_member_lookup_fails(monkeypatch):
+    def fail_members(**kwargs):
+        raise BotConversationMembersError("member lookup unavailable")
+
+    monkeypatch.setattr("app.routers.bot_messages.fetch_bot_conversation_members", fail_members)
+    client, db = make_client()
+    activity = {
+        "type": "message",
+        "serviceUrl": "https://smba.trafficmanager.net/emea/tenant-id/",
+        "conversation": {"id": "19:group-chat@thread.v2", "conversationType": "groupChat", "isGroup": True},
+        "from": {"id": "29:user", "name": "Ada Admin"},
+        "channelData": {"tenant": {"id": "tenant-id"}},
+    }
+
+    response = client.post("/api/v1/bot/messages", json=activity)
+
+    assert response.status_code == 200
+    reference = db.scalar(select(BotConversationReference))
+    assert reference is not None
+    assert reference.scope == "chat"
+    assert reference.member_summary == ""
+    assert reference.members_lookup_error == "member lookup unavailable"
+    db.close()
+
+
+def test_group_chat_member_refresh_tolerates_naive_database_timestamp(monkeypatch):
+    def fail_if_called(**kwargs):
+        raise AssertionError("fresh member lookup should be skipped")
+
+    monkeypatch.setattr("app.routers.bot_messages.fetch_bot_conversation_members", fail_if_called)
+    reference = BotConversationReference(
+        scope="chat",
+        conversation_type="groupChat",
+        service_url="https://smba.trafficmanager.net/emea/tenant-id/",
+        conversation_id="19:group-chat@thread.v2",
+        members_refreshed_at=datetime.now() - timedelta(minutes=5),
+    )
+
+    changed = _refresh_reference_chat_members(reference)
+
+    assert changed is False
+
+
 def test_register_command_creates_webhook_route_from_current_conversation(monkeypatch):
     sent_replies: list[dict] = []
 
@@ -263,7 +343,11 @@ def test_register_command_creates_webhook_route_from_current_conversation(monkey
 
 
 def test_register_command_treats_group_chat_as_chat_target(monkeypatch):
+    def fake_members(**kwargs):
+        return SimpleNamespace(member_summary="Ada Admin, Ben Builder", member_count=2, members=[])
+
     monkeypatch.setattr("app.routers.bot_messages.send_bot_activity", lambda **kwargs: None)
+    monkeypatch.setattr("app.routers.bot_messages.fetch_bot_conversation_members", fake_members)
     client, db = make_client()
     activity = {
         "type": "message",
@@ -288,11 +372,13 @@ def test_register_command_treats_group_chat_as_chat_target(monkeypatch):
     assert reference is not None
     assert reference.scope == "chat"
     assert route is not None
-    assert route.target_name == "Group chat"
+    assert route.target_name == "Ada Admin, Ben Builder"
     assert route.bot_conversation_id == "19:group-chat@thread.v2"
     assert route.graph_target_kind == "chat"
     assert route.graph_target_id == "19:group-chat@thread.v2"
     assert route.graph_channel_id == ""
+    assert route.member_summary == "Ada Admin, Ben Builder"
+    assert route.member_count == 2
     assert route.bot_registered_by_id == "aad-user-id"
     db.close()
 

@@ -13,6 +13,7 @@ Status values:
 | 💬 Messaging / Communication | Relay URLs | ✅ Available | Each webhook route has a stable relay URL for external systems. | Users, administrators |
 | 💬 Messaging / Communication | Bot Framework delivery | ✅ Available | Sends normalized messages to stored Teams Bot Framework conversation references. | Users, administrators |
 | 💬 Messaging / Communication | Delegated Graph delivery | ✅ Available | Sends Graph-backed routes through a delegated service-user connection for supported channel and chat targets. | Administrators |
+| 💬 Messaging / Communication | Group chat participant summaries | ✅ Available | Shows best-effort participant summaries for captured Bot Framework group chats and refreshable Graph chat routes. | Users, administrators |
 | 💬 Messaging / Communication | Test sends | ✅ Available | Operators can send a test message for a configured route before sharing the relay URL. | Users, administrators |
 | 💬 Messaging / Communication | Teams bot commands | ✅ Available | The bot handles `register`, `webhook`, `enable`, `disable`, `delete`, `info`, and `help`. | Users, administrators |
 | 🧩 Integrations | Webhook payload normalization | ✅ Available | Accepts plain text, JSON objects, JSON arrays, and Adaptive Card activity payloads. | Users, developers |

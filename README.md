@@ -14,6 +14,7 @@ Teams Rehook is intended for teams that need to forward operational events from 
 - Authenticated operations UI for route management, testing, settings, logs, and readiness checks.
 - Bot Framework delivery to captured Teams conversation references.
 - Microsoft Graph target lookup and delegated Graph delivery for supported Graph routes.
+- Participant summaries for Teams group chats, including manual refresh on eligible routes.
 - Payload handling for plain text, JSON objects, JSON arrays, and Adaptive Card activities.
 - Payload Generator for building example JSON bodies.
 - Delivery events, audit logs, retention cleanup, and API-key protected machine monitoring.

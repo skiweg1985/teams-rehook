@@ -52,9 +52,12 @@ curl -i -X POST "http://localhost:8080/api/v1/auth/login" \
 | `POST` | `/api/v1/webhook-routes/{route_id}/regenerate-url` | Admin session + CSRF | Generate a new relay URL and invalidate the old URL. |
 | `POST` | `/api/v1/webhook-routes/refresh-graph-names` | Admin session + CSRF | Refresh stored Graph names for routes and references. |
 | `POST` | `/api/v1/webhook-routes/{route_id}/refresh-graph-names` | Admin session + CSRF | Refresh Graph names for one route. |
+| `POST` | `/api/v1/webhook-routes/{route_id}/refresh-members` | Admin session + CSRF | Refresh participant summary fields for a Bot Framework conversation or Graph chat route. |
 | `GET` | `/api/v1/webhook-routes/{route_id}/deliveries` | Admin session | List recent deliveries for one route. |
 
 Route create/update payloads are defined by `WebhookRouteCreate` and `WebhookRouteUpdate` in `backend/app/schemas.py`. Supported delivery backends are `bot_framework` and `graph`.
+
+Route responses include best-effort group-chat participant metadata: `member_summary`, `member_count`, `members`, `members_refreshed_at`, and `members_lookup_error`.
 
 ## Public Relay Ingress
 
@@ -132,6 +135,8 @@ The redirect URI is:
 | `GET` | `/api/v1/bot/conversation-references` | Admin session | Lists known Bot Framework conversations. |
 
 Accepted bot activities store non-sensitive authentication metadata such as validated issuer, audience, service URL match status and validation time. Raw bearer tokens and full JWTs are never stored. Historical bot activity rows created before auth metadata existed may report `auth_status` as `unknown`.
+
+Captured group-chat references include the same best-effort participant metadata as route responses when the lookup succeeds.
 
 ## Teams Targets
 

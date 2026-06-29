@@ -48,6 +48,8 @@ Developers and maintainers use the technical API and data model documentation in
 
 Graph search can help find Teams, channels, users, and chats. A Graph search result does not prove that the bot or delegated Graph service user can send there. Always validate with **Send test**.
 
+Known group chats show a participant summary when Teams Rehook can read the current members. Bot-captured group chats refresh automatically on inbound bot activity and when the known conversations list is loaded after the summary becomes stale. Graph chat routes can be refreshed from the route actions with **Refresh members**.
+
 ## Creating A Webhook Route
 
 1. Open **Webhooks**.
@@ -119,7 +121,7 @@ Routes created through `register` still need the same operational care as UI-cre
 ## Monitoring What Happened
 
 - **Dashboard** shows route counts, known conversations, failed/rejected routes, inactive routes, and untested active routes.
-- **Webhooks** manages routes, relay URLs, tests, Graph name refresh, and known conversations.
+- **Webhooks** manages routes, relay URLs, tests, Graph name refresh, participant refresh, and known conversations.
 - **Messages** shows delivery logs with filters for status, route, and search text.
 - **System logs** shows sign-ins, route changes, admin activity, and Teams bot activity events.
 - **Settings > Readiness** shows non-secret configuration and integration status.
@@ -137,6 +139,10 @@ Routes created through `register` still need the same operational care as UI-cre
 ### Why is no known conversation listed?
 
 Add the bot to the target Teams chat or channel and send or mention it once. Teams Rehook needs a Bot Framework service URL and conversation ID before a Bot Framework route can send.
+
+### Why does a group chat still say "Group chat"?
+
+The participant lookup is best-effort. It can fail if the bot or delegated Graph service user cannot read the chat members, credentials are missing, or Microsoft returns an upstream error. Open the route and use **Refresh members** to retry for Bot Framework conversations or Graph chat routes.
 
 ### Why does a route test fail in real mode?
 

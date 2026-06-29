@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.settings_overrides import get_effective_settings
+from app.services.bot_conversation_members import BotConversationMember, BotConversationMembersResult, summarize_members
 from app.services.graph_delegated_auth import GraphDelegatedAuthError, refresh_delegated_access_token
 
 
@@ -144,6 +145,34 @@ def create_or_get_one_on_one_chat(
     )
 
 
+def fetch_service_user_chat_members(
+    db: Session,
+    *,
+    organization_id: str,
+    chat_id: str,
+    settings: Settings | None = None,
+) -> BotConversationMembersResult:
+    chat_id = chat_id.strip()
+    if not chat_id:
+        raise GraphDelegatedLookupError("A Microsoft Graph chat ID is required.")
+    settings = settings or get_effective_settings()
+    try:
+        token = refresh_delegated_access_token(db, organization_id=organization_id, settings=settings)
+    except GraphDelegatedAuthError as exc:
+        raise GraphDelegatedLookupError("Delegated Graph delivery is not connected or the service-user token cannot be refreshed.") from exc
+    data = _graph_get(f"/chats/{urllib.parse.quote(chat_id, safe='')}/members", token.access_token, {})
+    raw_members = data.get("value")
+    if not isinstance(raw_members, list):
+        raise GraphDelegatedLookupError("Microsoft Graph chat members response was invalid.")
+    members = [_bot_member_from_graph_member(member) for member in raw_members if isinstance(member, dict)]
+    members = [member for member in members if member.id or member.name or member.email or member.user_principal_name]
+    return BotConversationMembersResult(
+        members=members,
+        member_summary=summarize_members(members),
+        member_count=len(members),
+    )
+
+
 def _list_chats_with_fallbacks(access_token: str, limit: int) -> dict:
     include_ordering = True
     include_members = True
@@ -222,8 +251,9 @@ def _looks_like_graph_chat_id(value: str) -> bool:
 
 def _graph_get(path: str, access_token: str, params: dict[str, str]) -> dict:
     query = urllib.parse.urlencode(params)
+    separator = "?" if query else ""
     request = urllib.request.Request(
-        f"https://graph.microsoft.com/v1.0{path}?{query}",
+        f"https://graph.microsoft.com/v1.0{path}{separator}{query}",
         headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
         method="GET",
     )
@@ -297,6 +327,16 @@ def _chat_members(chat: dict) -> list[DelegatedGraphChatMember]:
         if member.user_id or member.display_name or member.email:
             members.append(member)
     return members
+
+
+def _bot_member_from_graph_member(raw_member: dict) -> BotConversationMember:
+    return BotConversationMember(
+        id=str(raw_member.get("id") or raw_member.get("userId") or "").strip(),
+        name=str(raw_member.get("displayName") or "").strip(),
+        aad_object_id=str(raw_member.get("userId") or "").strip(),
+        email=str(raw_member.get("email") or "").strip(),
+        user_principal_name=str(raw_member.get("userPrincipalName") or raw_member.get("email") or "").strip(),
+    )
 
 
 def _chat_display(

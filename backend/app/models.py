@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -80,6 +80,11 @@ class WebhookRoute(Base):
     graph_user_id: Mapped[str] = mapped_column(Text, default="")
     graph_user_display_name: Mapped[str] = mapped_column(String(255), default="")
     graph_user_principal_name: Mapped[str] = mapped_column(String(255), default="")
+    member_summary: Mapped[str] = mapped_column(String(500), default="")
+    member_count: Mapped[int] = mapped_column(Integer, default=0)
+    member_list_json: Mapped[str] = mapped_column(Text, default="[]")
+    members_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    members_lookup_error: Mapped[str] = mapped_column(Text, default="")
     bot_target_source: Mapped[str] = mapped_column(String(40), default="")
     bot_registered_by_id: Mapped[str] = mapped_column(Text, default="")
     bot_registered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -91,6 +96,16 @@ class WebhookRoute(Base):
     __table_args__ = (
         UniqueConstraint("organization_id", "name", "delivery_backend", name="uq_webhook_routes_org_name_backend"),
     )
+
+    @property
+    def members(self) -> list[dict]:
+        import json
+
+        try:
+            parsed = json.loads(self.member_list_json or "[]")
+        except json.JSONDecodeError:
+            return []
+        return parsed if isinstance(parsed, list) else []
 
 
 class WebhookDeliveryEvent(Base):
@@ -171,6 +186,11 @@ class BotConversationReference(Base):
     user_id: Mapped[str] = mapped_column(Text, default="", index=True)
     user_name: Mapped[str] = mapped_column(String(200), default="")
     graph_user_id: Mapped[str] = mapped_column(Text, default="", index=True)
+    member_summary: Mapped[str] = mapped_column(String(500), default="")
+    member_count: Mapped[int] = mapped_column(Integer, default=0)
+    member_list_json: Mapped[str] = mapped_column(Text, default="[]")
+    members_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    members_lookup_error: Mapped[str] = mapped_column(Text, default="")
     raw_activity_type: Mapped[str] = mapped_column(String(80), default="")
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
@@ -179,6 +199,16 @@ class BotConversationReference(Base):
     __table_args__ = (
         UniqueConstraint("conversation_id", name="uq_bot_conversation_references_conversation_id"),
     )
+
+    @property
+    def members(self) -> list[dict]:
+        import json
+
+        try:
+            parsed = json.loads(self.member_list_json or "[]")
+        except json.JSONDecodeError:
+            return []
+        return parsed if isinstance(parsed, list) else []
 
 
 class GraphDelegatedCredential(Base):

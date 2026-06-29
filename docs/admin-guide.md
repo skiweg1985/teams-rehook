@@ -114,6 +114,11 @@ Graph delivery uses a delegated service-user connection. Configure delegated per
 - `Chat.ReadBasic`
 - `Chat.Create`
 
+Group-chat participant summaries do not require additional permissions beyond the existing delivery setup:
+
+- Bot Framework captured chats use the Bot Framework Connector member endpoint with the bot app token, not Microsoft Graph.
+- Graph chat route member refresh uses the delegated service-user connection and the existing `Chat.ReadBasic` scope.
+
 Add this redirect URI under the app registration web authentication platform:
 
 ```text
@@ -133,6 +138,8 @@ http://localhost:8080/api/v1/admin/graph-delivery/oauth/callback
 ```
 
 Graph delivery messages appear as the connected delegated service user. The service user must be licensed and must already be a member of selected Teams channels or chats. For one-on-one routes, Teams Rehook can resolve or create the 1:1 chat during route setup and then stores the resulting chat target for delivery.
+
+For Graph chat routes, administrators can refresh the stored participant summary from the route actions. The refresh reads current chat members through Microsoft Graph and updates the route display label, member count, refresh timestamp, and any lookup error.
 
 ## Start, Stop, Restart
 

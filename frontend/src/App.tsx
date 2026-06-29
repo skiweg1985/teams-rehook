@@ -1564,6 +1564,7 @@ function WebhooksPage() {
   const [deletingId, setDeletingId] = useState("");
   const [togglingId, setTogglingId] = useState("");
   const [refreshingRouteNameId, setRefreshingRouteNameId] = useState("");
+  const [refreshingMembersId, setRefreshingMembersId] = useState("");
   const [selectedRouteId, setSelectedRouteId] = useState("");
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
 
@@ -1703,6 +1704,35 @@ function WebhooksPage() {
     }
   }
 
+  async function refreshRouteMembers(route: WebhookRouteOut) {
+    setRefreshingMembersId(route.id);
+    try {
+      const updated = await api.refreshWebhookRouteMembers(csrfToken, route.id);
+      if (updated.members_lookup_error) {
+        notify({
+          tone: "error",
+          title: "Member refresh failed",
+          description: updated.members_lookup_error,
+        });
+      } else {
+        notify({
+          tone: "success",
+          title: "Members refreshed",
+          description: updated.member_summary || `${updated.member_count} members`,
+        });
+      }
+      await refresh();
+    } catch (err) {
+      notify({
+        tone: "error",
+        title: "Member refresh failed",
+        description: isApiError(err) ? err.message : "The member list could not be refreshed.",
+      });
+    } finally {
+      setRefreshingMembersId("");
+    }
+  }
+
   const routeViews = routes.map((route) => buildWebhookRouteView(route, featurePolicy));
   const defaultSelectedRouteId =
     routeViews.find((view) => view.tone === "danger")?.route.id ??
@@ -1763,11 +1793,13 @@ function WebhooksPage() {
           onCopyRoute={(route) => void copyText(route.webhook_url ?? "", route.name)}
           onDeleteRoute={setConfirmingDelete}
           onEditRoute={setEditing}
+          onRefreshMembers={(route) => void refreshRouteMembers(route)}
           onRefreshNames={(route) => void refreshRouteGraphNames(route)}
           onRegenerateRoute={setConfirmingRegeneration}
           onTestRoute={(route) => void testRoute(route)}
           onToggleRoute={(route) => void toggleRouteActive(route)}
           onViewLogs={setViewingLogs}
+          refreshingMembersId={refreshingMembersId}
           refreshingRouteNameId={refreshingRouteNameId}
           regeneratingId={regeneratingId}
           routeView={selectedRouteView}
@@ -2026,11 +2058,13 @@ function WebhookRouteInspector({
   onCopyRoute,
   onDeleteRoute,
   onEditRoute,
+  onRefreshMembers,
   onRefreshNames,
   onRegenerateRoute,
   onTestRoute,
   onToggleRoute,
   onViewLogs,
+  refreshingMembersId,
   refreshingRouteNameId,
   regeneratingId,
   routeView,
@@ -2041,11 +2075,13 @@ function WebhookRouteInspector({
   onCopyRoute: (route: WebhookRouteOut) => void;
   onDeleteRoute: (route: WebhookRouteOut) => void;
   onEditRoute: (route: WebhookRouteOut) => void;
+  onRefreshMembers: (route: WebhookRouteOut) => void;
   onRefreshNames: (route: WebhookRouteOut) => void;
   onRegenerateRoute: (route: WebhookRouteOut) => void;
   onTestRoute: (route: WebhookRouteOut) => void;
   onToggleRoute: (route: WebhookRouteOut) => void;
   onViewLogs: (route: WebhookRouteOut) => void;
+  refreshingMembersId: string;
   refreshingRouteNameId: string;
   regeneratingId: string;
   routeView: WebhookRouteView | null;
@@ -2087,6 +2123,9 @@ function WebhookRouteInspector({
           <div>
             <strong>{route.target_name || "Unnamed target"}</strong>
             <span>{deliveryBackendLabel(route.delivery_backend)}</span>
+            {route.member_summary ? <small>{route.member_summary}</small> : null}
+            {route.members_refreshed_at ? <small>Members refreshed {formatRelativeTime(route.members_refreshed_at)}</small> : null}
+            {route.members_lookup_error ? <small className="form-error">{route.members_lookup_error}</small> : null}
           </div>
         </div>
       </section>
@@ -2145,6 +2184,19 @@ function WebhookRouteInspector({
           <small>Refresh metadata, rotate URL or delete the route</small>
         </summary>
         <div className="webhook-route-danger-zone">
+          <button
+            className="secondary-button secondary-button--small button-with-icon"
+            type="button"
+            disabled={refreshingMembersId === route.id}
+            onClick={() => onRefreshMembers(route)}
+          >
+            <MessagesSquare
+              aria-hidden="true"
+              className={classNames("button-icon", refreshingMembersId === route.id && "button-icon--spin")}
+              focusable="false"
+            />
+            {refreshingMembersId === route.id ? "Refreshing..." : "Refresh members"}
+          </button>
           <button
             className="secondary-button secondary-button--small button-with-icon"
             type="button"
@@ -2344,6 +2396,7 @@ function referenceTitle(reference: BotConversationReferenceOut): string {
   if (reference.team_name && reference.channel_name) return `${reference.team_name} / ${reference.channel_name}`;
   if (reference.channel_name) return reference.channel_name;
   if (reference.team_name) return reference.team_name;
+  if (reference.member_summary) return reference.member_summary;
   if (reference.scope === "chat" || reference.conversation_type.toLowerCase() === "groupchat") return "Group chat";
   if (reference.user_name) return reference.user_name;
   return reference.conversation_type === "personal" ? "Personal chat" : "Teams conversation";
@@ -2353,6 +2406,7 @@ function referenceSubtitle(reference: BotConversationReferenceOut): string {
   const parts = [
     reference.scope || reference.conversation_type || "conversation",
     `seen ${formatRelativeTime(reference.last_seen_at)}`,
+    reference.member_count ? `${reference.member_count} members` : "",
     reference.channel_id ? `channel ${shortId(reference.channel_id)}` : "",
     reference.scope === "chat" || reference.conversation_type.toLowerCase() === "groupchat" ? `chat ${shortId(reference.conversation_id)}` : "",
     reference.graph_user_id || reference.user_id ? `user ${shortId(reference.graph_user_id || reference.user_id)}` : "",
@@ -2462,6 +2516,11 @@ function emptyWebhookRoute(botDefaultServiceUrl = ""): WebhookRouteOut {
     graph_user_id: "",
     graph_user_display_name: "",
     graph_user_principal_name: "",
+    member_summary: "",
+    member_count: 0,
+    members: [],
+    members_refreshed_at: null,
+    members_lookup_error: "",
     bot_target_source: "",
     bot_registered_by_id: "",
     bot_registered_at: null,
@@ -2489,6 +2548,11 @@ function webhookRouteFromReference(reference: BotConversationReferenceOut): Webh
     graph_user_id: kind === "user" ? reference.graph_user_id || reference.user_id : "",
     graph_user_display_name: kind === "user" ? reference.user_name : "",
     graph_user_principal_name: "",
+    member_summary: reference.member_summary,
+    member_count: reference.member_count,
+    members: reference.members,
+    members_refreshed_at: reference.members_refreshed_at,
+    members_lookup_error: reference.members_lookup_error,
     bot_target_source: "conversation_reference",
     bot_registered_by_id: reference.graph_user_id || reference.user_id,
   };

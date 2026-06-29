@@ -10,6 +10,7 @@ from app.services.graph_delegated_lookup import (
     DelegatedGraphOneOnOneChat,
     GraphDelegatedLookupError,
     create_or_get_one_on_one_chat,
+    fetch_service_user_chat_members,
     list_service_user_chats,
 )
 
@@ -52,6 +53,33 @@ def test_list_service_user_chats_uses_supported_graph_ordering(monkeypatch: pyte
         )
     ]
     assert "lastUpdatedDateTime" not in calls[0][2].get("$orderby", "")
+
+
+def test_fetch_service_user_chat_members_returns_summary(monkeypatch: pytest.MonkeyPatch):
+    calls: list[tuple[str, str, dict[str, str]]] = []
+
+    def fake_refresh(db, *, organization_id: str, settings):
+        assert organization_id == "org-id"
+        return SimpleNamespace(access_token="delegated-token")
+
+    def fake_graph_get(path: str, access_token: str, params: dict[str, str]):
+        calls.append((path, access_token, params))
+        return {
+            "value": [
+                {"id": "membership-1", "userId": "user-1", "displayName": "Ada Admin", "email": "ada@example.com"},
+                {"id": "membership-2", "userId": "user-2", "displayName": "Ben Builder", "email": "ben@example.com"},
+            ]
+        }
+
+    monkeypatch.setattr("app.services.graph_delegated_lookup.refresh_delegated_access_token", fake_refresh)
+    monkeypatch.setattr("app.services.graph_delegated_lookup._graph_get", fake_graph_get)
+
+    result = fetch_service_user_chat_members(SimpleNamespace(), organization_id="org-id", chat_id="19:chat@thread.v2")
+
+    assert result.member_summary == "Ada Admin, Ben Builder"
+    assert result.member_count == 2
+    assert result.members[0].aad_object_id == "user-1"
+    assert calls == [("/chats/19%3Achat%40thread.v2/members", "delegated-token", {})]
 
 
 def test_list_service_user_chats_retries_without_ordering_when_graph_rejects_orderby(monkeypatch: pytest.MonkeyPatch):

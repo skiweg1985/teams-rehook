@@ -881,6 +881,31 @@ def test_update_route_delivery_backend(client: TestClient, db_session: Session):
     assert route.delivery_backend == "graph"
 
 
+def test_update_route_target_clears_stale_member_summary(client: TestClient, db_session: Session):
+    route = add_route(db_session)
+    route.member_summary = "Ada Admin, Ben Builder"
+    route.member_count = 2
+    route.member_list_json = dumps_json([{"id": "member-1", "name": "Ada Admin"}])
+    route.members_lookup_error = "previous failure"
+    route.members_refreshed_at = utcnow()
+    db_session.commit()
+    csrf_token = login_admin(client)
+
+    response = client.patch(
+        f"/api/v1/webhook-routes/{route.id}",
+        headers={"X-CSRF-Token": csrf_token},
+        json={"bot_conversation_id": "different-conversation-id"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["member_summary"] == ""
+    assert body["member_count"] == 0
+    assert body["members"] == []
+    assert body["members_refreshed_at"] is None
+    assert body["members_lookup_error"] == ""
+
+
 def test_create_graph_chat_route_uses_graph_target_id_as_chat_id(client: TestClient):
     csrf_token = login_admin(client)
 
@@ -903,6 +928,55 @@ def test_create_graph_chat_route_uses_graph_target_id_as_chat_id(client: TestCli
     assert body["delivery_backend"] == "graph"
     assert body["graph_target_kind"] == "chat"
     assert body["graph_target_id"] == "chat-id"
+
+
+def test_refresh_graph_chat_route_members_updates_target_summary(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from app.services.bot_conversation_members import BotConversationMember, BotConversationMembersResult
+
+    csrf_token = login_admin(client)
+    route = add_route(db_session)
+    route.delivery_backend = "graph"
+    route.bot_service_url = ""
+    route.bot_conversation_id = ""
+    route.graph_target_kind = "chat"
+    route.graph_target_id = "chat-id"
+    route.target_name = "Ops chat"
+    db_session.commit()
+
+    def fake_members(db, *, organization_id: str, chat_id: str):
+        assert organization_id == route.organization_id
+        assert chat_id == "chat-id"
+        members = [
+            BotConversationMember(id="member-1", name="Ada Admin"),
+            BotConversationMember(id="member-2", name="Ben Builder"),
+        ]
+        return BotConversationMembersResult(
+            members=members,
+            member_summary="Ada Admin, Ben Builder",
+            member_count=2,
+        )
+
+    monkeypatch.setattr("app.routers.webhook_routes.fetch_service_user_chat_members", fake_members)
+
+    response = client.post(
+        f"/api/v1/webhook-routes/{route.id}/refresh-members",
+        headers={"X-CSRF-Token": csrf_token},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["target_name"] == "Ada Admin, Ben Builder"
+    assert body["member_summary"] == "Ada Admin, Ben Builder"
+    assert body["member_count"] == 2
+    assert body["members_lookup_error"] == ""
+    assert body["members"][0]["name"] == "Ada Admin"
+    db_session.refresh(route)
+    assert route.graph_target_kind == "chat"
+    assert route.member_summary == "Ada Admin, Ben Builder"
 
 
 def test_create_graph_user_route_materializes_one_on_one_chat(

@@ -255,6 +255,12 @@ export const api = {
       csrfToken,
     });
   },
+  refreshWebhookRouteMembers(csrfToken: string, id: string) {
+    return request<WebhookRouteOut>(`/api/v1/webhook-routes/${encodeURIComponent(id)}/refresh-members`, {
+      method: "POST",
+      csrfToken,
+    });
+  },
   webhookRouteDeliveries(id: string, status?: WebhookDeliveryStatus) {
     const params = new URLSearchParams();
     if (status) params.set("status", status);

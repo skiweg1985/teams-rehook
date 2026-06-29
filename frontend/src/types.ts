@@ -156,6 +156,14 @@ export type DeliveryBackend = "bot_framework" | "graph";
 export type ClientIpAccessMode = "public" | "restricted";
 export type GraphTargetKind = "user" | "team" | "channel" | "chat";
 
+export type ConversationMemberOut = {
+  id: string;
+  name: string;
+  aad_object_id: string;
+  email: string;
+  user_principal_name: string;
+};
+
 export type WebhookRouteOut = {
   id: string;
   organization_id: string;
@@ -176,6 +184,11 @@ export type WebhookRouteOut = {
   graph_user_id: string;
   graph_user_display_name: string;
   graph_user_principal_name: string;
+  member_summary: string;
+  member_count: number;
+  members: ConversationMemberOut[];
+  members_refreshed_at: string | null;
+  members_lookup_error: string;
   bot_target_source: string;
   bot_registered_by_id: string;
   bot_registered_at: string | null;
@@ -428,6 +441,11 @@ export type BotConversationReferenceOut = {
   user_id: string;
   user_name: string;
   graph_user_id: string;
+  member_summary: string;
+  member_count: number;
+  members: ConversationMemberOut[];
+  members_refreshed_at: string | null;
+  members_lookup_error: string;
   raw_activity_type: string;
   last_seen_at: string;
   created_at: string;

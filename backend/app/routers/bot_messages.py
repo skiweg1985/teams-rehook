@@ -4,6 +4,7 @@ import json
 import re
 import urllib.parse
 from dataclasses import dataclass
+from datetime import timedelta
 from html import unescape
 from typing import Any
 
@@ -16,7 +17,7 @@ from app.database import get_db
 from app.deps import record_audit, require_admin
 from app.models import BotActivityEvent, BotConversationReference, Organization, User, WebhookDeliveryEvent, WebhookRoute
 from app.schemas import BotActivityIngestOut, BotConversationReferenceOut
-from app.security import dumps_json, issue_plain_secret, lookup_secret_hash, utcnow
+from app.security import dumps_json, ensure_utc, issue_plain_secret, lookup_secret_hash, utcnow
 from app.services.client_ip_allowlist import (
     CLIENT_IP_ACCESS_PUBLIC,
     CLIENT_IP_ACCESS_RESTRICTED,
@@ -28,6 +29,11 @@ from app.services.bot_framework_auth import (
     BotFrameworkAuthError,
     validate_bot_framework_activity,
 )
+from app.services.bot_conversation_members import (
+    BotConversationMembersError,
+    fetch_bot_conversation_members,
+    serialize_members,
+)
 from app.services.graph_name_resolution import try_resolve_reference_graph_names, try_resolve_route_graph_names
 from app.services.event_log import emit_event
 from app.services.teams_bot import BotDeliveryError, send_bot_activity
@@ -35,6 +41,7 @@ from app.services.webhook_payloads import NormalizedMessage
 
 router = APIRouter(tags=["bot-messages"])
 DELIVERY_BACKEND_BOT = "bot_framework"
+CHAT_MEMBER_REFRESH_AFTER = timedelta(hours=6)
 
 
 async def require_bot_framework_auth(
@@ -179,6 +186,11 @@ def list_bot_conversation_references(admin: User = Depends(require_admin), db: S
     references = db.scalars(
         select(BotConversationReference).order_by(BotConversationReference.last_seen_at.desc()).limit(100)
     ).all()
+    changed = False
+    for reference in references:
+        changed = _refresh_reference_chat_members(reference) or changed
+    if changed:
+        db.commit()
     return references
 
 
@@ -221,8 +233,41 @@ def _upsert_reference(db: Session, captured: dict[str, str]) -> BotConversationR
     reference.last_seen_at = now
     reference.updated_at = now
     try_resolve_reference_graph_names(reference)
+    _refresh_reference_chat_members(reference)
     db.flush()
     return reference
+
+
+def _refresh_reference_chat_members(reference: BotConversationReference, *, force: bool = False) -> bool:
+    if reference.scope != "chat" and reference.conversation_type.lower() != "groupchat":
+        return False
+    if not reference.service_url or not reference.conversation_id:
+        return False
+    now = utcnow()
+    members_refreshed_at = ensure_utc(reference.members_refreshed_at)
+    if (
+        not force
+        and members_refreshed_at is not None
+        and now - members_refreshed_at < CHAT_MEMBER_REFRESH_AFTER
+    ):
+        return False
+    try:
+        result = fetch_bot_conversation_members(
+            service_url=reference.service_url,
+            conversation_id=reference.conversation_id,
+        )
+    except (BotConversationMembersError, BotDeliveryError) as exc:
+        reference.members_lookup_error = _clip(str(exc), 1000)
+        reference.members_refreshed_at = now
+        reference.updated_at = now
+        return True
+    reference.member_summary = result.member_summary
+    reference.member_count = result.member_count
+    reference.member_list_json = serialize_members(result.members)
+    reference.members_lookup_error = ""
+    reference.members_refreshed_at = now
+    reference.updated_at = now
+    return True
 
 
 def _scope_for(captured: dict[str, str]) -> str:
@@ -790,6 +835,12 @@ def _register_route_from_command(
     route.graph_team_id = effective["graph_team_id"]
     route.graph_team_name = _clip(effective["team_name"], 200)
     route.graph_channel_id = effective["channel_id"] if route.graph_target_kind == "channel" else ""
+    if reference is not None:
+        route.member_summary = reference.member_summary
+        route.member_count = reference.member_count
+        route.member_list_json = reference.member_list_json
+        route.members_refreshed_at = reference.members_refreshed_at
+        route.members_lookup_error = reference.members_lookup_error
     route.bot_target_source = "bot_command"
     route.bot_registered_by_id = effective["graph_user_id"] or effective["from_id"]
     route.bot_registered_at = utcnow()
@@ -1280,6 +1331,7 @@ def _captured_with_reference(
         "channel_id": reference.channel_id,
         "conversation_type": reference.conversation_type,
         "is_group": "true" if reference.scope == "chat" else "",
+        "member_summary": reference.member_summary,
         "team_name": reference.team_name,
         "channel_name": reference.channel_name,
         "from_id": reference.user_id,
@@ -1309,6 +1361,8 @@ def _target_name(captured: dict[str, str]) -> str:
         return _clip(captured["channel_name"], 200)
     if captured["team_name"]:
         return _clip(captured["team_name"], 200)
+    if captured.get("member_summary"):
+        return _clip(captured["member_summary"], 200)
     if _scope_for(captured) == "chat":
         return "Group chat"
     return _clip(

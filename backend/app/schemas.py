@@ -267,6 +267,14 @@ class WebhookRouteUpdate(BaseModel):
         return self
 
 
+class BotConversationMemberOut(BaseModel):
+    id: str = ""
+    name: str = ""
+    aad_object_id: str = ""
+    email: str = ""
+    user_principal_name: str = ""
+
+
 class WebhookRouteOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -289,6 +297,11 @@ class WebhookRouteOut(BaseModel):
     graph_user_id: str
     graph_user_display_name: str
     graph_user_principal_name: str
+    member_summary: str = ""
+    member_count: int = 0
+    members: list[BotConversationMemberOut] = Field(default_factory=list)
+    members_refreshed_at: datetime | None = None
+    members_lookup_error: str = ""
     bot_target_source: str
     bot_registered_by_id: str
     bot_registered_at: datetime | None = None
@@ -611,6 +624,11 @@ class BotConversationReferenceOut(BaseModel):
     user_id: str
     user_name: str
     graph_user_id: str
+    member_summary: str = ""
+    member_count: int = 0
+    members: list[BotConversationMemberOut] = Field(default_factory=list)
+    members_refreshed_at: datetime | None = None
+    members_lookup_error: str = ""
     raw_activity_type: str
     last_seen_at: datetime
     created_at: datetime
