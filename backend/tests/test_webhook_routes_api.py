@@ -392,6 +392,90 @@ def test_public_webhook_rejects_unknown_token(client: TestClient, db_session: Se
     assert events[0].status == "rejected"
 
 
+def test_public_webhook_rejects_oversized_payload_before_delivery(client: TestClient, db_session: Session):
+    csrf_token = login_admin(client)
+    set_admin_setting(client, csrf_token, "webhook_max_payload_bytes", "1024")
+
+    response = client.post(
+        "/api/v1/webhooks/missing-token",
+        content=b"x" * 1025,
+        headers={"Content-Type": "text/plain"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Payload exceeds 1024 bytes"
+    event = db_session.scalar(select(WebhookDeliveryEvent))
+    assert event is not None
+    assert event.status == "rejected"
+    assert event.error == "Payload exceeds 1024 bytes"
+
+
+def test_public_webhook_idempotency_key_prevents_duplicate_delivery(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    route = add_route(db_session, token="idempotent-token")
+    deliveries = 0
+
+    class FakeBotResult:
+        def to_dict(self):
+            return {"mode": "mock", "activity_id": "activity-id", "status_code": 202, "activity": {"type": "message"}}
+
+    def fake_send_bot_activity(**kwargs):
+        nonlocal deliveries
+        deliveries += 1
+        return FakeBotResult()
+
+    monkeypatch.setattr("app.routers.webhook_routes.send_bot_activity", fake_send_bot_activity)
+
+    first = client.post(
+        "/api/v1/webhooks/idempotent-token",
+        json={"text": "hello"},
+        headers={"Idempotency-Key": "retry-key-123"},
+    )
+    second = client.post(
+        "/api/v1/webhooks/idempotent-token",
+        json={"text": "hello again"},
+        headers={"Idempotency-Key": "retry-key-123"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["delivery_event_id"] == first.json()["delivery_event_id"]
+    assert deliveries == 1
+    events = db_session.scalars(select(WebhookDeliveryEvent).where(WebhookDeliveryEvent.route_id == route.id)).all()
+    assert len(events) == 1
+
+
+def test_public_webhook_persists_pending_event_before_provider_delivery(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    route = add_route(db_session, token="pending-token")
+    observed_statuses: list[str] = []
+
+    class FakeBotResult:
+        def to_dict(self):
+            return {"mode": "mock", "activity_id": "activity-id", "status_code": 202, "activity": {"type": "message"}}
+
+    def fake_send_bot_activity(**kwargs):
+        events = db_session.scalars(select(WebhookDeliveryEvent).where(WebhookDeliveryEvent.route_id == route.id)).all()
+        observed_statuses.extend(event.status for event in events)
+        return FakeBotResult()
+
+    monkeypatch.setattr("app.routers.webhook_routes.send_bot_activity", fake_send_bot_activity)
+
+    response = client.post("/api/v1/webhooks/pending-token", json={"text": "hello"})
+
+    assert response.status_code == 200
+    assert observed_statuses == ["pending"]
+    final_event = db_session.scalar(select(WebhookDeliveryEvent).where(WebhookDeliveryEvent.route_id == route.id))
+    assert final_event is not None
+    assert final_event.status == "delivered"
+
+
 def test_unknown_webhook_route_blocks_after_failure_limit(client: TestClient, db_session: Session):
     csrf_token = login_admin(client)
     set_admin_setting(client, csrf_token, "webhook_abuse_failure_limit", "2")
@@ -1271,6 +1355,40 @@ def test_delivery_events_endpoint_rejects_invalid_status_filter(client: TestClie
     assert response.status_code == 422
 
 
+def test_delivery_events_endpoint_uses_stable_order_for_equal_timestamps(client: TestClient, db_session: Session):
+    route = add_route(db_session)
+    login_admin(client)
+    created_at = utcnow()
+    db_session.add_all(
+        [
+            WebhookDeliveryEvent(
+                id="00000000-0000-0000-0000-000000000001",
+                organization_id=route.organization_id,
+                route_id=route.id,
+                route_token_hash=route.route_token_hash,
+                status="delivered",
+                normalized_message_json=dumps_json({"title": "First"}),
+                created_at=created_at,
+            ),
+            WebhookDeliveryEvent(
+                id="00000000-0000-0000-0000-000000000002",
+                organization_id=route.organization_id,
+                route_id=route.id,
+                route_token_hash=route.route_token_hash,
+                status="delivered",
+                normalized_message_json=dumps_json({"title": "Second"}),
+                created_at=created_at,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    response = client.get("/api/v1/webhook-delivery-events?page=1&page_size=2")
+
+    assert response.status_code == 200
+    assert [item["title"] for item in response.json()["items"]] == ["Second", "First"]
+
+
 def test_global_delivery_events_endpoint_paginates_summaries(client: TestClient, db_session: Session):
     route = add_route(db_session)
     login_admin(client)
@@ -1484,6 +1602,30 @@ def test_admin_cleanup_endpoint_cleans_all_log_tables(client: TestClient, db_ses
     assert body["deleted_webhook_delivery_events"] == 1
     assert body["deleted_audit_events"] == 1
     assert body["deleted_bot_activity_events"] == 1
+
+
+def test_delivery_log_cleanup_endpoint_returns_complete_cleanup_shape(client: TestClient, db_session: Session):
+    from app.services import log_retention
+
+    log_retention._last_log_cleanup_at = None
+    route = add_route(db_session)
+    db_session.add(
+        WebhookDeliveryEvent(
+            organization_id=route.organization_id,
+            route_id=route.id,
+            status="delivered",
+            created_at=utcnow() - timedelta(days=8),
+        )
+    )
+    db_session.commit()
+    csrf_token = login_admin(client)
+
+    response = client.post("/api/v1/webhook-delivery-events/cleanup", headers={"X-CSRF-Token": csrf_token})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["deleted_webhook_delivery_events"] == 1
+    assert body["deleted_event_log_entries"] >= 0
 
 
 def test_admin_system_logs_endpoint_returns_bot_activity_events(client: TestClient, db_session: Session):

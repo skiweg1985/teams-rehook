@@ -232,6 +232,8 @@ def _scope_for(captured: dict[str, str]) -> str:
         return "channel"
     if captured["team_id"]:
         return "team"
+    if _is_group_conversation(captured):
+        return "chat"
     return "user"
 
 
@@ -263,6 +265,7 @@ def _extract_activity(activity: dict[str, Any]) -> dict[str, str]:
         "graph_team_id": _string(team.get("aadGroupId")),
         "channel_id": channel_id,
         "conversation_type": _clip(conversation_type, 40),
+        "is_group": _bool_string(conversation.get("isGroup")),
         "team_name": _clip(_string(team.get("name")), 200),
         "channel_name": _clip(
             _string(channel.get("name")) or _string(selected_channel.get("name")) or _string(conversation.get("name")),
@@ -1276,6 +1279,7 @@ def _captured_with_reference(
         "graph_team_id": reference.graph_team_id,
         "channel_id": reference.channel_id,
         "conversation_type": reference.conversation_type,
+        "is_group": "true" if reference.scope == "chat" else "",
         "team_name": reference.team_name,
         "channel_name": reference.channel_name,
         "from_id": reference.user_id,
@@ -1305,6 +1309,8 @@ def _target_name(captured: dict[str, str]) -> str:
         return _clip(captured["channel_name"], 200)
     if captured["team_name"]:
         return _clip(captured["team_name"], 200)
+    if _scope_for(captured) == "chat":
+        return "Group chat"
     return _clip(
         captured["user_name"] or captured["graph_user_id"] or captured["from_id"] or captured["conversation_id"] or "Teams conversation",
         200,
@@ -1312,6 +1318,8 @@ def _target_name(captured: dict[str, str]) -> str:
 
 
 def _graph_target_kind(captured: dict[str, str]) -> str:
+    if _scope_for(captured) == "chat":
+        return "chat"
     if captured["channel_id"]:
         return "channel"
     if captured["graph_team_id"]:
@@ -1327,6 +1335,8 @@ def _graph_target_id(captured: dict[str, str]) -> str:
         return captured["channel_id"]
     if kind == "team":
         return captured["graph_team_id"]
+    if kind == "chat":
+        return captured["conversation_id"]
     if kind == "user":
         return captured["graph_user_id"] or captured["from_id"]
     return ""
@@ -1391,3 +1401,11 @@ def _dict(value: Any) -> dict[str, Any]:
 
 def _string(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
+
+
+def _bool_string(value: Any) -> str:
+    return "true" if value is True else ""
+
+
+def _is_group_conversation(captured: dict[str, str]) -> bool:
+    return captured.get("is_group") == "true" or captured.get("conversation_type", "").lower() in {"groupchat", "group", "chat"}

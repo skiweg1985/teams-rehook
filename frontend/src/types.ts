@@ -237,7 +237,7 @@ export type WebhookRouteNameRefreshOut = {
   error: string;
 };
 
-export type WebhookDeliveryStatus = "delivered" | "failed" | "rejected";
+export type WebhookDeliveryStatus = "delivered" | "failed" | "rejected" | "pending";
 
 export type WebhookDeliveryEventOut = {
   id: string;

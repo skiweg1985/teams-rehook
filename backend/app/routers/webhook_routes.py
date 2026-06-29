@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -48,7 +49,7 @@ from app.services.webhook_payloads import NormalizedMessage, WebhookPayloadError
 
 router = APIRouter(tags=["webhook-routes"])
 
-DeliveryStatusFilter = Literal["delivered", "failed", "rejected"]
+DeliveryStatusFilter = Literal["delivered", "failed", "rejected", "pending"]
 DELIVERY_BACKEND_BOT = "bot_framework"
 DELIVERY_BACKEND_GRAPH = "graph"
 ABUSE_REASON_BACKEND_DISABLED = "delivery_backend_disabled"
@@ -57,6 +58,13 @@ ABUSE_REASON_CLIENT_IP_NOT_ALLOWED = "client_ip_not_allowed"
 ABUSE_REASON_PAYLOAD_TOO_LARGE = "payload_too_large"
 ABUSE_REASON_ROUTE_DISABLED = "route_disabled"
 ABUSE_REASON_UNKNOWN_ROUTE = "unknown_route"
+IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9._:-]{8,120}$")
+
+
+class PayloadTooLargeError(ValueError):
+    def __init__(self, partial_body: bytes = b""):
+        super().__init__("Webhook payload is too large")
+        self.partial_body = partial_body
 
 
 @router.get("/webhook-routes", response_model=list[WebhookRouteOut])
@@ -327,7 +335,7 @@ def list_webhook_route_deliveries(
     query = select(WebhookDeliveryEvent).where(WebhookDeliveryEvent.route_id == route.id)
     if status_filter:
         query = query.where(WebhookDeliveryEvent.status == status_filter)
-    events = db.scalars(query.order_by(WebhookDeliveryEvent.created_at.desc()).limit(limit)).all()
+    events = db.scalars(query.order_by(WebhookDeliveryEvent.created_at.desc(), WebhookDeliveryEvent.id.desc()).limit(limit)).all()
     return [_delivery_event_out(event) for event in events]
 
 
@@ -379,7 +387,7 @@ def list_webhook_delivery_events(
         select(WebhookDeliveryEvent, WebhookRoute)
         .outerjoin(WebhookRoute, WebhookDeliveryEvent.route_id == WebhookRoute.id)
         .where(*filters)
-        .order_by(WebhookDeliveryEvent.created_at.desc())
+        .order_by(WebhookDeliveryEvent.created_at.desc(), WebhookDeliveryEvent.id.desc())
         .offset(offset)
         .limit(page_size)
     ).all()
@@ -427,6 +435,7 @@ def cleanup_log_event_retention(
         deleted_webhook_delivery_events=cleanup_result.deleted_webhook_delivery_events,
         deleted_audit_events=cleanup_result.deleted_audit_events,
         deleted_bot_activity_events=cleanup_result.deleted_bot_activity_events,
+        deleted_event_log_entries=cleanup_result.deleted_event_log_entries,
         retention_days=cleanup_result.retention_days,
         cutoff=cleanup_result.cutoff,
     )
@@ -478,15 +487,17 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
         db.commit()
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=BLOCKED_WEBHOOK_DETAIL)
 
-    body = await request.body()
-    if len(body) > settings.webhook_max_payload_bytes:
+    idempotency_key = _request_idempotency_key(request)
+    try:
+        body = await _read_limited_body(request, settings.webhook_max_payload_bytes)
+    except PayloadTooLargeError as exc:
         record_failure(db, client_host=client_host, route_token_hash=token_hash, reason=ABUSE_REASON_PAYLOAD_TOO_LARGE)
         event = _record_event(
             db,
             route=None,
             route_token_hash=token_hash,
             status_value="rejected",
-            request_metadata=_request_metadata(request, body),
+            request_metadata=_request_metadata(request, exc.partial_body, idempotency_key=idempotency_key),
             error=f"Payload exceeds {settings.webhook_max_payload_bytes} bytes",
         )
         db.commit()
@@ -500,7 +511,7 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
             route=None,
             route_token_hash=token_hash,
             status_value="rejected",
-            request_metadata=_request_metadata(request, body),
+            request_metadata=_request_metadata(request, body, idempotency_key=idempotency_key),
             error="Unknown webhook route",
         )
         db.commit()
@@ -512,7 +523,7 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
             route=route,
             route_token_hash=token_hash,
             status_value="rejected",
-            request_metadata=_request_metadata(request, body),
+            request_metadata=_request_metadata(request, body, idempotency_key=idempotency_key),
             error="Webhook route is disabled",
         )
         route.last_delivery_status = "rejected"
@@ -527,7 +538,7 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
             route=route,
             route_token_hash=token_hash,
             status_value="rejected",
-            request_metadata=_request_metadata(request, body),
+            request_metadata=_request_metadata(request, body, idempotency_key=idempotency_key),
             error=disabled_message,
         )
         route.last_delivery_status = "rejected"
@@ -541,7 +552,7 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
             route=route,
             route_token_hash=token_hash,
             status_value="rejected",
-            request_metadata=_request_metadata(request, body),
+            request_metadata=_request_metadata(request, body, idempotency_key=idempotency_key),
             error="Client IP is not allowed for this webhook route",
         )
         route.last_delivery_status = "rejected"
@@ -558,7 +569,7 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
             route=route,
             route_token_hash=token_hash,
             status_value="rejected",
-            request_metadata=_request_metadata(request, body),
+            request_metadata=_request_metadata(request, body, idempotency_key=idempotency_key),
             error=str(exc),
         )
         route.last_delivery_status = "rejected"
@@ -566,8 +577,34 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
         db.commit()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=event.error) from exc
 
+    request_metadata = _request_metadata(request, body, idempotency_key=idempotency_key)
+    if idempotency_key:
+        previous_delivery = _find_idempotent_delivery(db, route, idempotency_key)
+        if previous_delivery is not None:
+            if previous_delivery.status == "failed":
+                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=previous_delivery.error)
+            if previous_delivery.status == "pending":
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Webhook delivery is already being processed")
+            return WebhookDeliveryOut(
+                ok=previous_delivery.status == "delivered",
+                status=previous_delivery.status,
+                route_id=route.id,
+                delivery_event_id=previous_delivery.id,
+                message="Webhook delivery already processed",
+            )
+
     record_success(db, client_host=client_host, route_token_hash=token_hash)
-    delivery = _deliver_to_route(db, route, message, request_metadata=_request_metadata(request, body))
+    delivery = _record_event(
+        db,
+        route=route,
+        route_token_hash=route.route_token_hash,
+        status_value="pending",
+        request_metadata=request_metadata,
+        normalized_message=message.to_dict(),
+        delivery_result={"backend": _route_delivery_backend(route)},
+    )
+    db.commit()
+    delivery = _deliver_to_route(db, route, message, request_metadata=request_metadata, delivery_event=delivery)
     db.commit()
     if delivery.status == "failed":
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=delivery.error)
@@ -578,6 +615,57 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
         delivery_event_id=delivery.id,
         message="Webhook delivered",
     )
+
+
+async def _read_limited_body(request: Request, max_bytes: int) -> bytes:
+    limit = max(0, int(max_bytes))
+    content_length = request.headers.get("content-length", "").strip()
+    if content_length:
+        try:
+            declared_length = int(content_length)
+        except ValueError:
+            declared_length = 0
+        if declared_length > limit:
+            raise PayloadTooLargeError()
+
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        if not chunk:
+            continue
+        next_total = total + len(chunk)
+        if next_total > limit:
+            allowed = max(0, limit - total)
+            if allowed:
+                chunks.append(chunk[:allowed])
+            raise PayloadTooLargeError(b"".join(chunks))
+        chunks.append(chunk)
+        total = next_total
+    return b"".join(chunks)
+
+
+def _request_idempotency_key(request: Request) -> str:
+    candidate = (request.headers.get("idempotency-key") or "").strip()
+    if not candidate or not IDEMPOTENCY_KEY_RE.match(candidate):
+        return ""
+    return candidate[:120]
+
+
+def _find_idempotent_delivery(db: Session, route: WebhookRoute, idempotency_key: str) -> WebhookDeliveryEvent | None:
+    events = db.scalars(
+        select(WebhookDeliveryEvent)
+        .where(
+            WebhookDeliveryEvent.route_id == route.id,
+            WebhookDeliveryEvent.route_token_hash == route.route_token_hash,
+        )
+        .order_by(WebhookDeliveryEvent.created_at.desc(), WebhookDeliveryEvent.id.desc())
+        .limit(50)
+    ).all()
+    for event in events:
+        metadata = loads_json(event.request_metadata_json, {})
+        if metadata.get("idempotency_key") == idempotency_key:
+            return event
+    return None
 
 
 def _get_org_route(db: Session, organization_id: str, route_id: str) -> WebhookRoute:
@@ -720,6 +808,7 @@ def _deliver_to_route(
     message: NormalizedMessage,
     *,
     request_metadata: dict,
+    delivery_event: WebhookDeliveryEvent | None = None,
 ) -> WebhookDeliveryEvent:
     backend = _route_delivery_backend(route)
     if backend == DELIVERY_BACKEND_GRAPH:
@@ -735,6 +824,7 @@ def _deliver_to_route(
                 request_metadata=request_metadata,
                 normalized_message=message.to_dict(),
                 delivery_result=result.to_dict(),
+                event=delivery_event,
             )
         except GraphDeliveryError as exc:
             return _record_failed_delivery(
@@ -744,6 +834,7 @@ def _deliver_to_route(
                 request_metadata,
                 str(exc),
                 delivery_result=exc.result or {"backend": DELIVERY_BACKEND_GRAPH, "error_type": exc.error_type},
+                event=delivery_event,
             )
     if backend != DELIVERY_BACKEND_BOT:
         return _record_failed_delivery(
@@ -753,6 +844,7 @@ def _deliver_to_route(
             request_metadata,
             f"Unsupported delivery backend: {backend}",
             delivery_result={"backend": backend},
+            event=delivery_event,
         )
     try:
         result = send_bot_activity(
@@ -772,6 +864,7 @@ def _deliver_to_route(
             request_metadata=request_metadata,
             normalized_message=message.to_dict(),
             delivery_result=delivery_result,
+            event=delivery_event,
         )
     except BotDeliveryError as exc:
         return _record_failed_delivery(
@@ -781,6 +874,7 @@ def _deliver_to_route(
             request_metadata,
             str(exc),
             delivery_result={"backend": DELIVERY_BACKEND_BOT},
+            event=delivery_event,
         )
 
 
@@ -792,6 +886,7 @@ def _record_failed_delivery(
     error: str,
     *,
     delivery_result: dict,
+    event: WebhookDeliveryEvent | None = None,
 ) -> WebhookDeliveryEvent:
     route.last_delivery_status = "failed"
     route.last_delivery_at = utcnow()
@@ -804,6 +899,7 @@ def _record_failed_delivery(
         normalized_message=message.to_dict(),
         delivery_result=delivery_result,
         error=error,
+        event=event,
     )
 
 
@@ -817,18 +913,19 @@ def _record_event(
     normalized_message: dict | None = None,
     delivery_result: dict | None = None,
     error: str = "",
+    event: WebhookDeliveryEvent | None = None,
 ) -> WebhookDeliveryEvent:
-    event = WebhookDeliveryEvent(
-        organization_id=route.organization_id if route else None,
-        route_id=route.id if route else None,
-        route_token_hash=route_token_hash,
-        status=status_value,
-        request_metadata_json=dumps_json(request_metadata),
-        normalized_message_json=dumps_json(normalized_message or {}),
-        delivery_result_json=dumps_json(delivery_result or {}),
-        error=error[:1000],
-    )
-    db.add(event)
+    if event is None:
+        event = WebhookDeliveryEvent()
+        db.add(event)
+    event.organization_id = route.organization_id if route else None
+    event.route_id = route.id if route else None
+    event.route_token_hash = route_token_hash
+    event.status = status_value
+    event.request_metadata_json = dumps_json(request_metadata)
+    event.normalized_message_json = dumps_json(normalized_message or {})
+    event.delivery_result_json = dumps_json(delivery_result or {})
+    event.error = error[:1000]
     db.flush()
     delivery_backend = _string_value(delivery_result or {}, "backend") or (_route_delivery_backend(route) if route else "")
     emit_event(
@@ -863,7 +960,7 @@ def _record_event(
     return event
 
 
-def _request_metadata(request: Request, body: bytes) -> dict:
+def _request_metadata(request: Request, body: bytes, *, idempotency_key: str = "") -> dict:
     client_host, direct_client_host, x_forwarded_for, client_host_source = _resolve_client_host(request)
     return {
         "trigger": "external_webhook",
@@ -876,6 +973,7 @@ def _request_metadata(request: Request, body: bytes) -> dict:
         "x_forwarded_for": x_forwarded_for,
         "client_host_source": client_host_source,
         "user_agent": request.headers.get("user-agent", ""),
+        "idempotency_key": idempotency_key,
         "payload_preview": payload_preview(body),
     }
 
