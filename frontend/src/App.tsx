@@ -1988,61 +1988,53 @@ function WebhooksPage() {
     }
   }
 
-  async function refreshRouteGraphNames(route: WebhookRouteOut) {
-    setRefreshingRouteNameId(route.id);
-    try {
-      const result = await api.refreshSingleWebhookRouteGraphNames(csrfToken, route.id);
-      if (!result.ok) {
-        notify({
-          tone: "error",
-          title: "Name refresh failed",
-          description: result.error || "Microsoft Graph could not resolve the route name.",
-        });
-        return;
-      }
-      notify({
-        tone: "success",
-        title: "Names refreshed",
-        description: result.routes_updated ? route.name : "This route already has the current Graph names.",
-      });
-      await refresh();
-    } catch (err) {
-      notify({
-        tone: "error",
-        title: "Name refresh failed",
-        description: isApiError(err) ? err.message : "Microsoft Graph could not resolve the route name.",
-      });
-    } finally {
-      setRefreshingRouteNameId("");
-    }
-  }
-
-  async function refreshRouteMembers(route: WebhookRouteOut) {
+  async function refreshRouteGraphData(route: WebhookRouteOut) {
+    const errors: string[] = [];
+    let memberSummary = "";
+    let namesChanged = false;
     setRefreshingMembersId(route.id);
+    setRefreshingRouteNameId(route.id);
     try {
       const updated = await api.refreshWebhookRouteMembers(csrfToken, route.id);
       if (updated.members_lookup_error) {
-        notify({
-          tone: "error",
-          title: "Member refresh failed",
-          description: updated.members_lookup_error,
-        });
+        errors.push(updated.members_lookup_error);
       } else {
-        notify({
-          tone: "success",
-          title: "Members refreshed",
-          description: updated.member_summary || `${updated.member_count} members`,
-        });
+        memberSummary = updated.member_summary || `${updated.member_count} members`;
       }
-      await refresh();
     } catch (err) {
+      errors.push(isApiError(err) ? err.message : "The member list could not be refreshed.");
+    }
+
+    try {
+      const result = await api.refreshSingleWebhookRouteGraphNames(csrfToken, route.id);
+      if (!result.ok) {
+        errors.push(result.error || "Microsoft Graph could not resolve the route name.");
+      } else {
+        namesChanged = result.routes_updated > 0;
+      }
+    } catch (err) {
+      errors.push(isApiError(err) ? err.message : "Microsoft Graph could not resolve the route name.");
+    }
+
+    if (errors.length) {
       notify({
         tone: "error",
-        title: "Member refresh failed",
-        description: isApiError(err) ? err.message : "The member list could not be refreshed.",
+        title: "Refresh incomplete",
+        description: errors.join(" "),
       });
+    } else {
+      notify({
+        tone: "success",
+        title: "Route refreshed",
+        description: namesChanged ? "Members and Graph names were updated." : memberSummary || "Route data is already current.",
+      });
+    }
+
+    try {
+      await refresh();
     } finally {
       setRefreshingMembersId("");
+      setRefreshingRouteNameId("");
     }
   }
 
@@ -2098,8 +2090,7 @@ function WebhooksPage() {
           onCopyRoute={(route) => void copyText(route.webhook_url ?? "", route.name)}
           onDeleteRoute={setConfirmingDelete}
           onEditRoute={setEditing}
-          onRefreshMembers={(route) => void refreshRouteMembers(route)}
-          onRefreshNames={(route) => void refreshRouteGraphNames(route)}
+          onRefreshRouteData={(route) => void refreshRouteGraphData(route)}
           onRegenerateRoute={setConfirmingRegeneration}
           onRetry={() => void refresh()}
           onTestRoute={(route) => void testRoute(route)}
@@ -2477,8 +2468,7 @@ function WebhookRouteDetailPage({
   onCopyRoute,
   onDeleteRoute,
   onEditRoute,
-  onRefreshMembers,
-  onRefreshNames,
+  onRefreshRouteData,
   onRegenerateRoute,
   onRetry,
   onTestRoute,
@@ -2497,8 +2487,7 @@ function WebhookRouteDetailPage({
   onCopyRoute: (route: WebhookRouteOut) => void;
   onDeleteRoute: (route: WebhookRouteOut) => void;
   onEditRoute: (route: WebhookRouteOut) => void;
-  onRefreshMembers: (route: WebhookRouteOut) => void;
-  onRefreshNames: (route: WebhookRouteOut) => void;
+  onRefreshRouteData: (route: WebhookRouteOut) => void;
   onRegenerateRoute: (route: WebhookRouteOut) => void;
   onRetry: () => void;
   onTestRoute: (route: WebhookRouteOut) => void;
@@ -2554,6 +2543,7 @@ function WebhookRouteDetailPage({
   const target = routeView.targetPresentation;
   const targetMemberNames = target.kindLabel === "Group chat" ? webhookTargetMemberNames(route) : [];
   const heroTone = routeView.tone;
+  const refreshingRouteData = refreshingMembersId === route.id || refreshingRouteNameId === route.id;
   const actionItems: ResponsiveActionItem[] = [
     {
       label: testingId === route.id ? "Testing..." : "Test",
@@ -2573,27 +2563,20 @@ function WebhookRouteDetailPage({
       onClick: () => onViewLogs(route),
     },
     {
-      label: togglingId === route.id ? "Updating..." : route.is_active ? "Deactivate" : "Activate",
+      label: togglingId === route.id ? "Updating..." : route.is_active ? "Disable" : "Enable",
       icon: route.is_active ? PowerOff : Power,
       disabled: togglingId === route.id,
       onClick: () => onToggleRoute(route),
     },
     {
-      label: refreshingMembersId === route.id ? "Refreshing members..." : "Refresh members",
-      icon: MessagesSquare,
-      disabled: refreshingMembersId === route.id,
-      spinning: refreshingMembersId === route.id,
-      onClick: () => onRefreshMembers(route),
-    },
-    {
-      label: refreshingRouteNameId === route.id ? "Refreshing names..." : "Refresh Graph names",
+      label: refreshingRouteData ? "Refreshing..." : "Refresh",
       icon: RefreshCw,
-      disabled: refreshingRouteNameId === route.id || !featurePolicy.graphLookupEnabled,
-      spinning: refreshingRouteNameId === route.id,
-      onClick: () => onRefreshNames(route),
+      disabled: refreshingRouteData || !featurePolicy.graphLookupEnabled,
+      spinning: refreshingRouteData,
+      onClick: () => onRefreshRouteData(route),
     },
     {
-      label: regeneratingId === route.id ? "Regenerating URL..." : "Regenerate URL",
+      label: regeneratingId === route.id ? "Creating URL..." : "New URL",
       icon: RotateCcwKey,
       disabled: regeneratingId === route.id,
       onClick: () => onRegenerateRoute(route),
@@ -2824,7 +2807,7 @@ function RegenerateWebhookUrlModal({
           Cancel
         </button>
         <button className="danger-button" type="button" onClick={() => void onConfirm()} disabled={busy}>
-          {busy ? "Regenerating..." : "Regenerate URL"}
+          {busy ? "Creating..." : "New URL"}
         </button>
       </div>
     </Modal>
