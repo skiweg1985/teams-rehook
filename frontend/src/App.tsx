@@ -1490,8 +1490,7 @@ type WebhookRouteView = {
   tone: StatusTone;
   statusLabel: string;
   summary: string;
-  targetKindLabel: string;
-  targetSummary: string;
+  targetPresentation: WebhookTargetPresentation;
   deliveryLabel: string;
   lastActivityLabel: string;
   topIssue: string;
@@ -1501,6 +1500,12 @@ type WebhookRouteView = {
   technicalRows: StatusTechnicalRow[];
 };
 
+type WebhookTargetPresentation = {
+  kindLabel: string;
+  title: string;
+  subtitle: string;
+};
+
 function buildWebhookRouteView(route: WebhookRouteOut, policy: DeliveryFeaturePolicy): WebhookRouteView {
   const featureEnabled = routeDeliveryFeatureEnabled(route, policy);
   const deliveryLabel = route.last_delivery_status ? capitalize(route.last_delivery_status) : "Not tested";
@@ -1508,8 +1513,7 @@ function buildWebhookRouteView(route: WebhookRouteOut, policy: DeliveryFeaturePo
   const tone = webhookRouteTone(route, featureEnabled);
   const statusLabel = webhookRouteStatusLabel(route, featureEnabled);
   const topIssue = webhookRouteTopIssue(route, featureEnabled);
-  const targetKindLabel = webhookTargetKindLabel(route);
-  const targetSummary = webhookTargetSummary(route);
+  const targetPresentation = webhookTargetPresentation(route);
 
   return {
     route,
@@ -1520,8 +1524,7 @@ function buildWebhookRouteView(route: WebhookRouteOut, policy: DeliveryFeaturePo
         ? `Accepts relay requests for ${route.target_name || "the selected Teams target"}.`
         : "Route is active, but its delivery feature is disabled."
       : "Route is disabled and rejects incoming webhook requests.",
-    targetKindLabel,
-    targetSummary,
+    targetPresentation,
     deliveryLabel,
     lastActivityLabel,
     topIssue,
@@ -1530,7 +1533,6 @@ function buildWebhookRouteView(route: WebhookRouteOut, policy: DeliveryFeaturePo
     facts: [
       { label: "State", value: route.is_active ? "Active" : "Disabled", tone: route.is_active ? "success" : "warn" },
       { label: "Backend", value: deliveryBackendLabel(route.delivery_backend) },
-      { label: "Target", value: targetKindLabel },
       { label: "Client IP access", value: clientIpAccessLabel(route) },
       { label: "Delivery", value: deliveryLabel, tone: webhookDeliveryTone(route) },
       { label: "Last activity", value: lastActivityLabel },
@@ -1592,26 +1594,63 @@ function webhookRouteIssueDetail(route: WebhookRouteOut, featureEnabled: boolean
   return "The latest delivery check completed successfully.";
 }
 
-function webhookTargetSummary(route: WebhookRouteOut): string {
-  if (route.delivery_backend === "graph") {
-    return route.graph_user_principal_name || route.graph_team_name || route.target_name || route.graph_target_id || "No target name";
+function webhookTargetPresentation(route: WebhookRouteOut): WebhookTargetPresentation {
+  const kindLabel = webhookTargetKindLabel(route);
+  const targetName = route.target_name.trim();
+  const memberSummary = route.member_summary.trim();
+  const graphUserDisplayName = route.graph_user_display_name.trim();
+  const graphUserPrincipalName = route.graph_user_principal_name.trim();
+  const graphTeamName = route.graph_team_name.trim();
+  const graphTargetId = route.graph_target_id.trim();
+
+  if (kindLabel === "Group chat") {
+    const title = memberSummary || nonGenericTargetName(targetName, ["group chat", "teams group chat", "chat"]) || "Group chat";
+    return {
+      kindLabel,
+      title,
+      subtitle: title === kindLabel ? "" : kindLabel,
+    };
   }
-  return route.member_summary || deliveryBackendLabel(route.delivery_backend);
+
+  if (kindLabel === "1:1 chat") {
+    const title = nonGenericTargetName(targetName, ["1:1 chat", "one-on-one chat", "teams 1:1 chat"]) || graphUserDisplayName || memberSummary || "1:1 chat";
+    return {
+      kindLabel,
+      title,
+      subtitle: graphUserPrincipalName || (title === kindLabel ? "" : kindLabel),
+    };
+  }
+
+  if (kindLabel === "Channel") {
+    const title = targetName || graphTeamName || "Teams channel";
+    const subtitle = graphTeamName && graphTeamName !== title && !title.includes(graphTeamName) ? graphTeamName : "Channel";
+    return {
+      kindLabel,
+      title,
+      subtitle: subtitle === title ? "" : subtitle,
+    };
+  }
+
+  if (kindLabel === "Team") {
+    const title = targetName || graphTeamName || "Team";
+    return {
+      kindLabel,
+      title,
+      subtitle: title === kindLabel ? "" : kindLabel,
+    };
+  }
+
+  const title = targetName || graphTeamName || graphUserDisplayName || graphTargetId || kindLabel;
+  return {
+    kindLabel,
+    title,
+    subtitle: title === kindLabel ? "" : kindLabel,
+  };
 }
 
-function webhookDetailTargetTitle(route: WebhookRouteOut, targetKindLabel: string): string {
-  if (targetKindLabel === "Group chat") return "Teams group chat";
-  if (targetKindLabel === "1:1 chat") return route.target_name || "Teams 1:1 chat";
-  if (targetKindLabel === "Channel") return route.target_name || route.graph_team_name || "Teams channel";
-  return route.target_name || targetKindLabel;
-}
-
-function webhookDetailTargetSubtitle(route: WebhookRouteOut, targetKindLabel: string): string {
-  if (route.member_summary) return route.member_summary;
-  if (route.delivery_backend === "graph") {
-    return route.graph_user_principal_name || route.graph_team_name || route.graph_target_id || deliveryBackendLabel(route.delivery_backend);
-  }
-  return deliveryBackendLabel(route.delivery_backend);
+function nonGenericTargetName(value: string, genericLabels: string[]): string {
+  const normalized = value.trim().toLowerCase();
+  return normalized && !genericLabels.includes(normalized) ? value.trim() : "";
 }
 
 function webhookUrlPreview(url: string): string {
@@ -1633,7 +1672,7 @@ function webhookRouteBackendShortLabel(backend: DeliveryBackend): string {
 function webhookTargetKindLabel(route: WebhookRouteOut): string {
   if (route.delivery_backend === "graph") {
     if (route.graph_target_kind === "channel") return "Channel";
-    if (route.graph_target_kind === "chat") return "Group chat";
+    if (route.graph_target_kind === "chat") return route.graph_user_id || route.graph_user_display_name || route.graph_user_principal_name ? "1:1 chat" : "Group chat";
     if (route.graph_target_kind === "user") return "1:1 chat";
     if (route.graph_target_kind === "team") return "Team";
     return "Graph target";
@@ -2197,16 +2236,17 @@ function WebhookRouteTableRow({
 
 function WebhookRouteTargetCell({ view }: { view: WebhookRouteView }) {
   const route = view.route;
+  const target = view.targetPresentation;
   const members = route.members.filter((member) => memberDisplayName(member));
   const detailRows = webhookTargetDetailRows(view);
 
   return (
     <span className="webhook-route-table-cell webhook-route-target-cell">
-      <strong>{route.target_name || "Unnamed target"}</strong>
-      <small>{view.targetKindLabel}</small>
+      <strong>{target.title}</strong>
+      <small>{target.kindLabel}</small>
       <span className="webhook-target-popover" aria-hidden="true">
-        <span className="webhook-target-popover-title">{view.targetKindLabel}</span>
-        <span className="webhook-target-popover-subtitle">{route.target_name || view.targetSummary}</span>
+        <span className="webhook-target-popover-title">{target.kindLabel}</span>
+        <span className="webhook-target-popover-subtitle">{target.title}</span>
         {members.length ? (
           <span className="webhook-target-member-list">
             {members.slice(0, 8).map((member) => (
@@ -2236,13 +2276,37 @@ function memberDisplayName(member: WebhookRouteOut["members"][number]): string {
   return member.name || member.user_principal_name || member.email || member.aad_object_id;
 }
 
+function WebhookTargetMeta({ route }: { route: WebhookRouteOut }) {
+  if (!route.members_refreshed_at && !route.members_lookup_error) return null;
+
+  return (
+    <span className="webhook-target-meta">
+      {route.members_refreshed_at ? <span>Member list updated {formatRelativeTime(route.members_refreshed_at)}</span> : null}
+      {route.members_lookup_error ? <span className="webhook-target-meta-error">{route.members_lookup_error}</span> : null}
+    </span>
+  );
+}
+
+function webhookTargetMemberNames(route: WebhookRouteOut): string[] {
+  const members = route.members.filter((member) => memberDisplayName(member));
+  if (members.length) {
+    return members.map((member) => memberDisplayName(member));
+  }
+
+  return route.member_summary
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+}
+
 function webhookTargetDetailRows(view: WebhookRouteView): Array<{ label: string; value: string }> {
   const route = view.route;
+  const target = view.targetPresentation;
   const rows = [
-    { label: "Type", value: view.targetKindLabel },
-    { label: "Backend", value: deliveryBackendLabel(route.delivery_backend) },
-    { label: "Target", value: route.target_name || "Unnamed target" },
+    { label: "Type", value: target.kindLabel },
+    { label: "Target", value: target.title },
   ];
+  if (target.subtitle) rows.push({ label: "Context", value: target.subtitle });
   if (route.delivery_backend === "graph") {
     if (route.graph_team_name) rows.push({ label: "Team", value: route.graph_team_name });
     if (route.graph_user_principal_name) rows.push({ label: "User", value: route.graph_user_principal_name });
@@ -2335,6 +2399,8 @@ function WebhookRouteDetailPage({
   }
 
   const route = routeView.route;
+  const target = routeView.targetPresentation;
+  const targetMemberNames = target.kindLabel === "Group chat" ? webhookTargetMemberNames(route) : [];
   const heroTone = routeView.tone;
 
   return (
@@ -2383,14 +2449,24 @@ function WebhookRouteDetailPage({
             <h3>Target</h3>
             <div className="webhook-target-panel">
               <div>
-                <strong>{webhookDetailTargetTitle(route, routeView.targetKindLabel)}</strong>
-                <span className="webhook-target-kind-row">
-                  <StatusBadge label={routeView.targetKindLabel} tone="neutral" />
-                  <span>{deliveryBackendLabel(route.delivery_backend)}</span>
-                </span>
-                <small>{webhookDetailTargetSubtitle(route, routeView.targetKindLabel)}</small>
-                {route.members_refreshed_at ? <small>Members refreshed {formatRelativeTime(route.members_refreshed_at)}</small> : null}
-                {route.members_lookup_error ? <small className="form-error">{route.members_lookup_error}</small> : null}
+                <strong>{target.kindLabel === "Group chat" ? target.kindLabel : target.title}</strong>
+                {target.kindLabel === "Group chat" ? (
+                  targetMemberNames.length ? (
+                    <span className="webhook-target-member-inline" aria-label="Group chat members">
+                      {targetMemberNames.map((name, index) => (
+                        <span className="webhook-target-member-token" key={`${name}-${index}`}>
+                          <span>{name}</span>
+                          {index < targetMemberNames.length - 1 ? <span aria-hidden="true">·</span> : null}
+                        </span>
+                      ))}
+                    </span>
+                  ) : target.title !== target.kindLabel ? (
+                    <small>{target.title}</small>
+                  ) : null
+                ) : target.subtitle ? (
+                  <small>{target.subtitle}</small>
+                ) : null}
+                <WebhookTargetMeta route={route} />
               </div>
             </div>
           </div>
