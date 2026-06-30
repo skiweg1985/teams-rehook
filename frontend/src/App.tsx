@@ -1610,6 +1610,11 @@ type WebhookTargetPresentation = {
   subtitle: string;
 };
 
+type WebhookTargetTableDisplay = {
+  primary: string;
+  secondary: string;
+};
+
 function buildWebhookRouteView(route: WebhookRouteOut, policy: DeliveryFeaturePolicy): WebhookRouteView {
   const featureEnabled = routeDeliveryFeatureEnabled(route, policy);
   const deliveryLabel = route.last_delivery_status ? capitalize(route.last_delivery_status) : "Not tested";
@@ -1752,6 +1757,53 @@ function webhookTargetPresentation(route: WebhookRouteOut): WebhookTargetPresent
   };
 }
 
+function webhookRouteTargetTableDisplay(view: WebhookRouteView): WebhookTargetTableDisplay {
+  const route = view.route;
+  const target = view.targetPresentation;
+  const secondary = webhookRouteTargetSecondaryDetail(route, target);
+
+  return {
+    primary: target.kindLabel,
+    secondary: secondary || target.title || route.target_name.trim() || target.subtitle || target.kindLabel,
+  };
+}
+
+function webhookRouteTargetSecondaryDetail(route: WebhookRouteOut, target: WebhookTargetPresentation): string {
+  const targetName = route.target_name.trim();
+
+  if (target.kindLabel === "Group chat") {
+    const memberNames = webhookTargetMemberNames(route);
+    if (memberNames.length) return compactMemberSummary(memberNames, route.member_count || memberNames.length);
+    return nonGenericTargetName(target.title, ["group chat", "teams group chat", "chat"]) || targetName;
+  }
+
+  if (target.kindLabel === "1:1 chat") {
+    return (
+      nonGenericTargetName(target.title, ["1:1 chat", "one-on-one chat", "teams 1:1 chat"]) ||
+      route.graph_user_display_name.trim() ||
+      route.graph_user_principal_name.trim() ||
+      targetName
+    );
+  }
+
+  if (target.kindLabel === "Channel") {
+    return target.title || route.graph_channel_id.trim() || targetName;
+  }
+
+  if (target.kindLabel === "Team") {
+    return target.title || route.graph_team_name.trim() || targetName;
+  }
+
+  return target.title || target.subtitle || targetName;
+}
+
+function compactMemberSummary(memberNames: string[], totalCount: number): string {
+  const uniqueNames = Array.from(new Set(memberNames.map((name) => name.trim()).filter(Boolean)));
+  const visibleNames = uniqueNames.slice(0, 2);
+  const remaining = Math.max(totalCount || uniqueNames.length, uniqueNames.length) - visibleNames.length;
+  return [visibleNames.join(", "), remaining > 0 ? `+${remaining}` : ""].filter(Boolean).join(" ");
+}
+
 function nonGenericTargetName(value: string, genericLabels: string[]): string {
   const normalized = value.trim().toLowerCase();
   return normalized && !genericLabels.includes(normalized) ? value.trim() : "";
@@ -1769,8 +1821,8 @@ function webhookUrlPreview(url: string): string {
   }
 }
 
-function webhookRouteBackendShortLabel(backend: DeliveryBackend): string {
-  return backend === "graph" ? "Graph" : "Bot";
+function webhookRouteBackendTableLabel(backend: DeliveryBackend): string {
+  return backend === "graph" ? "Graph Delivery" : "Bot Framework";
 }
 
 function webhookTargetKindLabel(route: WebhookRouteOut): string {
@@ -2251,7 +2303,6 @@ function WebhookRouteOverviewTable({
       <div className="webhook-route-table" role="table" aria-label="Webhook relay routes">
         <div className="webhook-route-table-head" role="row">
           <span>Route</span>
-          <span>Backend</span>
           <span>Target</span>
           <span>Status</span>
           <span>Last activity</span>
@@ -2299,11 +2350,7 @@ function WebhookRouteTableRow({
       >
         <span className="webhook-route-table-cell webhook-route-table-route">
           <strong>{view.route.name}</strong>
-          <small>{view.summary}</small>
-        </span>
-        <span className="webhook-route-table-cell webhook-route-table-backend">
-          <strong>{webhookRouteBackendShortLabel(view.route.delivery_backend)}</strong>
-          <small>{view.statusLabel}</small>
+          <small>{webhookRouteBackendTableLabel(view.route.delivery_backend)}</small>
         </span>
         <WebhookRouteTargetCell view={view} />
         <span className="webhook-route-table-cell">
@@ -2341,13 +2388,14 @@ function WebhookRouteTableRow({
 function WebhookRouteTargetCell({ view }: { view: WebhookRouteView }) {
   const route = view.route;
   const target = view.targetPresentation;
+  const display = webhookRouteTargetTableDisplay(view);
   const members = route.members.filter((member) => memberDisplayName(member));
   const detailRows = webhookTargetDetailRows(view);
 
   return (
     <span className="webhook-route-table-cell webhook-route-target-cell">
-      <strong>{target.title}</strong>
-      <small>{target.kindLabel}</small>
+      <strong title={display.primary}>{display.primary}</strong>
+      <small title={display.secondary}>{display.secondary}</small>
       <span className="webhook-target-popover" aria-hidden="true">
         <span className="webhook-target-popover-title">{target.kindLabel}</span>
         <span className="webhook-target-popover-subtitle">{target.title}</span>

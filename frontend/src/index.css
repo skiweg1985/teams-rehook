@@ -1334,7 +1334,6 @@ html.dark .app-logo-image--dark {
   display: grid;
   grid-template-columns:
     minmax(120px, 1.05fr)
-    minmax(82px, 0.36fr)
     minmax(112px, 0.66fr)
     minmax(92px, 0.46fr)
     minmax(102px, 0.5fr)
@@ -1377,7 +1376,6 @@ html.dark .app-logo-image--dark {
   display: grid;
   grid-template-columns:
     minmax(120px, 1.05fr)
-    minmax(82px, 0.36fr)
     minmax(112px, 0.66fr)
     minmax(92px, 0.46fr)
     minmax(102px, 0.5fr)
@@ -1422,10 +1420,6 @@ html.dark .app-logo-image--dark {
   color: var(--muted);
   font-size: 0.78rem;
   line-height: 1.35;
-}
-
-.webhook-route-table-backend strong {
-  font-size: 0.82rem;
 }
 
 .webhook-route-target-cell {
