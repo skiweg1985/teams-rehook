@@ -38,6 +38,7 @@ from app.schemas import (
     EventLogEntryOut,
     EventLogEntryPageOut,
     GraphDeliveryOAuthStartOut,
+    GraphDeliveryOAuthPendingOut,
     GraphDeliveryReadinessOut,
     GraphReadinessOut,
     LogCleanupOut,
@@ -65,7 +66,11 @@ from app.services.graph_delegated_auth import (
     GraphDelegatedConfigError,
     build_authorization_url,
     diagnostics_for_organization,
-    exchange_authorization_code,
+    diagnostics_for_pending_credential,
+    exchange_authorization_code_to_pending,
+    get_pending_delegated_credential_by_id,
+    pending_credential_is_expired,
+    promote_pending_delegated_credential,
     refresh_delegated_access_token,
 )
 from app.services.graph_targets import GraphConfigError, GraphRequestError, get_graph_token_manager, reset_graph_token_manager
@@ -176,9 +181,10 @@ def graph_delivery_oauth_callback(
     if not code.strip():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing Microsoft Graph authorization code")
     try:
-        exchange_authorization_code(
+        pending = exchange_authorization_code_to_pending(
             db,
             organization_id=admin.organization_id,
+            created_by_id=admin.id,
             code=code,
             redirect_uri=_graph_delivery_redirect_uri(settings),
             settings=settings,
@@ -193,10 +199,85 @@ def graph_delivery_oauth_callback(
         actor_type="user",
         actor_id=admin.id,
         organization_id=admin.organization_id,
-        metadata={"credential": "delegated_service_user"},
+        metadata={"credential": "delegated_service_user", "pending_id": pending.id},
     )
     db.commit()
-    return _graph_delivery_settings_redirect(settings, "connected")
+    return _graph_delivery_pending_redirect(settings, pending.id)
+
+
+@router.get(
+    "/graph-delivery/oauth/pending/{pending_id}",
+    response_model=GraphDeliveryOAuthPendingOut,
+    dependencies=[Depends(require_csrf)],
+)
+def get_graph_delivery_oauth_pending(
+    pending_id: str,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    pending = _get_live_graph_delivery_pending(db, admin.organization_id, pending_id)
+    return _graph_delivery_pending_out(pending)
+
+
+@router.post(
+    "/graph-delivery/oauth/pending/{pending_id}/confirm",
+    response_model=GraphDeliveryReadinessOut,
+    dependencies=[Depends(require_csrf)],
+)
+def confirm_graph_delivery_oauth_pending(
+    pending_id: str,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    _get_live_graph_delivery_pending(db, admin.organization_id, pending_id)
+    try:
+        credential = promote_pending_delegated_credential(db, organization_id=admin.organization_id, pending_id=pending_id)
+    except GraphDelegatedAuthError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    record_audit(
+        db,
+        action="graph_delivery.oauth.confirmed",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata={
+            "credential": "delegated_service_user",
+            "pending_id": pending_id,
+            "service_user_id": credential.service_user_id,
+        },
+    )
+    db.commit()
+    readiness = _graph_delivery_readiness(db, admin.organization_id, get_effective_settings())
+    if readiness.token_checked:
+        db.commit()
+    return readiness
+
+
+@router.delete(
+    "/graph-delivery/oauth/pending/{pending_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_csrf)],
+)
+def cancel_graph_delivery_oauth_pending(
+    pending_id: str,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    pending = get_pending_delegated_credential_by_id(db, organization_id=admin.organization_id, pending_id=pending_id)
+    if pending is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pending delegated Graph connection was not found.")
+    db.delete(pending)
+    record_audit(
+        db,
+        action="graph_delivery.oauth.pending_canceled",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata={"credential": "delegated_service_user", "pending_id": pending_id},
+    )
+    db.commit()
+    return None
 
 
 @router.delete("/graph-delivery/oauth", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_csrf)])
@@ -559,6 +640,41 @@ def _graph_delivery_redirect_uri(settings) -> str:
 def _graph_delivery_settings_redirect(settings, result: str) -> RedirectResponse:
     base = settings.frontend_base_url.rstrip("/")
     return RedirectResponse(f"{base}/settings?graph_delivery={urllib.parse.quote(result)}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+def _graph_delivery_pending_redirect(settings, pending_id: str) -> RedirectResponse:
+    base = settings.frontend_base_url.rstrip("/")
+    return RedirectResponse(
+        f"{base}/settings/graph-delivery/confirm?pending_id={urllib.parse.quote(pending_id)}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+def _get_live_graph_delivery_pending(db: Session, organization_id: str, pending_id: str):
+    pending = get_pending_delegated_credential_by_id(db, organization_id=organization_id, pending_id=pending_id)
+    if pending is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pending delegated Graph connection was not found.")
+    if pending_credential_is_expired(pending):
+        db.delete(pending)
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pending delegated Graph connection expired.")
+    return pending
+
+
+def _graph_delivery_pending_out(pending) -> GraphDeliveryOAuthPendingOut:
+    diagnostics = diagnostics_for_pending_credential(pending)
+    return GraphDeliveryOAuthPendingOut(
+        id=pending.id,
+        tenant_id=diagnostics.tenant_id,
+        client_id=diagnostics.client_id,
+        scopes=diagnostics.scopes or [],
+        service_user_id=diagnostics.service_user_id,
+        service_user_display_name=diagnostics.service_user_display_name,
+        service_user_principal_name=diagnostics.service_user_principal_name,
+        access_token_expires_at=diagnostics.access_token_expires_at,
+        refresh_checked_at=diagnostics.refresh_checked_at,
+        expires_at=ensure_utc(pending.expires_at) or pending.expires_at,
+    )
 
 
 def _issue_graph_oauth_state(admin: User, settings) -> str:

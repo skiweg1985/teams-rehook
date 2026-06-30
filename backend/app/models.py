@@ -233,6 +233,28 @@ class GraphDelegatedCredential(Base):
     __table_args__ = (UniqueConstraint("organization_id", name="uq_graph_delegated_credentials_org"),)
 
 
+class GraphDelegatedOAuthPendingCredential(Base):
+    __tablename__ = "graph_delegated_oauth_pending_credentials"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    created_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(Text, default="")
+    client_id: Mapped[str] = mapped_column(Text, default="")
+    scopes: Mapped[str] = mapped_column(Text, default="")
+    encrypted_refresh_token: Mapped[str] = mapped_column(Text, default="")
+    service_user_id: Mapped[str] = mapped_column(Text, default="")
+    service_user_display_name: Mapped[str] = mapped_column(String(255), default="")
+    service_user_principal_name: Mapped[str] = mapped_column(String(255), default="")
+    access_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    refresh_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+    __table_args__ = (UniqueConstraint("organization_id", name="uq_graph_delegated_oauth_pending_org"),)
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_events"
 

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.core.encrypted_secrets import decrypt_secret, encrypt_secret
 from app.core.settings_overrides import get_effective_settings
-from app.models import GraphDelegatedCredential
+from app.models import GraphDelegatedCredential, GraphDelegatedOAuthPendingCredential
 from app.security import ensure_utc, utcnow
 
 
@@ -31,6 +31,7 @@ GRAPH_DELEGATED_STATUS_MISSING = "missing"
 GRAPH_DELEGATED_STATUS_READY = "ready"
 GRAPH_DELEGATED_STATUS_EXPIRED = "expired"
 GRAPH_DELEGATED_STATUS_TOKEN_ERROR = "token_error"
+PENDING_CREDENTIAL_TTL = timedelta(minutes=30)
 
 
 class GraphDelegatedConfigError(RuntimeError):
@@ -141,6 +142,113 @@ def exchange_authorization_code(
     return diagnostics_for_credential(credential)
 
 
+def exchange_authorization_code_to_pending(
+    db: Session,
+    *,
+    organization_id: str,
+    created_by_id: str | None,
+    code: str,
+    redirect_uri: str,
+    settings: Settings | None = None,
+    scopes: tuple[str, ...] = DEFAULT_DELEGATED_GRAPH_SCOPES,
+) -> GraphDelegatedOAuthPendingCredential:
+    settings = settings or get_effective_settings()
+    _require_app_registration(settings)
+    response = _request_token(
+        settings=settings,
+        form={
+            "grant_type": "authorization_code",
+            "client_id": settings.ms_app_client_id,
+            "client_secret": settings.ms_app_client_secret,
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "scope": " ".join(scopes),
+        },
+    )
+    refresh_token = str(response.get("refresh_token") or "")
+    access_token = str(response.get("access_token") or "")
+    if not refresh_token or not access_token:
+        raise GraphDelegatedAuthError("Delegated Graph authorization did not return usable token material")
+
+    existing = get_pending_delegated_credential(db, organization_id)
+    if existing is not None:
+        db.delete(existing)
+        db.flush()
+
+    pending = GraphDelegatedOAuthPendingCredential(
+        organization_id=organization_id,
+        created_by_id=created_by_id,
+        expires_at=utcnow() + PENDING_CREDENTIAL_TTL,
+    )
+    _apply_successful_token_response(
+        pending,
+        response,
+        settings=settings,
+        fallback_scopes=list(scopes),
+        refresh_token=refresh_token,
+    )
+    db.add(pending)
+    db.flush()
+    return pending
+
+
+def get_pending_delegated_credential(db: Session, organization_id: str) -> GraphDelegatedOAuthPendingCredential | None:
+    return db.scalar(
+        select(GraphDelegatedOAuthPendingCredential).where(
+            GraphDelegatedOAuthPendingCredential.organization_id == organization_id
+        )
+    )
+
+
+def get_pending_delegated_credential_by_id(
+    db: Session,
+    *,
+    organization_id: str,
+    pending_id: str,
+) -> GraphDelegatedOAuthPendingCredential | None:
+    pending = db.get(GraphDelegatedOAuthPendingCredential, pending_id)
+    if pending is None or pending.organization_id != organization_id:
+        return None
+    return pending
+
+
+def pending_credential_is_expired(pending: GraphDelegatedOAuthPendingCredential) -> bool:
+    expires_at = ensure_utc(pending.expires_at)
+    return expires_at is None or expires_at <= utcnow()
+
+
+def promote_pending_delegated_credential(
+    db: Session,
+    *,
+    organization_id: str,
+    pending_id: str,
+) -> GraphDelegatedCredential:
+    pending = get_pending_delegated_credential_by_id(db, organization_id=organization_id, pending_id=pending_id)
+    if pending is None:
+        raise GraphDelegatedAuthError("Pending delegated Graph connection was not found.")
+    if pending_credential_is_expired(pending):
+        db.delete(pending)
+        db.flush()
+        raise GraphDelegatedAuthError("Pending delegated Graph connection expired.")
+
+    credential = _get_or_create_credential(db, organization_id)
+    credential.tenant_id = pending.tenant_id
+    credential.client_id = pending.client_id
+    credential.scopes = pending.scopes
+    credential.encrypted_refresh_token = pending.encrypted_refresh_token
+    credential.service_user_id = pending.service_user_id
+    credential.service_user_display_name = pending.service_user_display_name
+    credential.service_user_principal_name = pending.service_user_principal_name
+    credential.last_status = GRAPH_DELEGATED_STATUS_READY
+    credential.last_error = ""
+    credential.access_token_expires_at = pending.access_token_expires_at
+    credential.refresh_checked_at = pending.refresh_checked_at
+    db.delete(pending)
+    db.add(credential)
+    db.flush()
+    return credential
+
+
 def refresh_delegated_access_token(
     db: Session,
     *,
@@ -244,6 +352,22 @@ def diagnostics_for_credential(credential: GraphDelegatedCredential) -> GraphDel
     )
 
 
+def diagnostics_for_pending_credential(pending: GraphDelegatedOAuthPendingCredential) -> GraphDelegatedDiagnostics:
+    return GraphDelegatedDiagnostics(
+        status=GRAPH_DELEGATED_STATUS_READY,
+        configured=bool(pending.encrypted_refresh_token),
+        tenant_id=pending.tenant_id,
+        client_id=pending.client_id,
+        scopes=_scope_list(pending.scopes),
+        service_user_id=pending.service_user_id,
+        service_user_display_name=pending.service_user_display_name,
+        service_user_principal_name=pending.service_user_principal_name,
+        access_token_expires_at=ensure_utc(pending.access_token_expires_at),
+        refresh_checked_at=ensure_utc(pending.refresh_checked_at),
+        message="Delegated Graph connection is waiting for admin confirmation.",
+    )
+
+
 class _ExpiredRefreshTokenError(GraphDelegatedAuthError):
     pass
 
@@ -299,7 +423,7 @@ def _token_error_code(exc: urllib.error.HTTPError) -> str:
 
 
 def _apply_successful_token_response(
-    credential: GraphDelegatedCredential,
+    credential: GraphDelegatedCredential | GraphDelegatedOAuthPendingCredential,
     response: dict[str, Any],
     *,
     settings: Settings,

@@ -6,6 +6,7 @@ import type {
   DeliveryAuthRefreshOut,
   EventLogEntryPageOut,
   FirstAdminCreate,
+  GraphDeliveryOAuthPendingOut,
   GraphDeliveryOAuthStartOut,
   LogCleanupOut,
   SessionResponse,
@@ -192,6 +193,21 @@ export const api = {
   },
   disconnectGraphDeliveryOAuth(csrfToken: string) {
     return request<void>("/api/v1/admin/graph-delivery/oauth", {
+      method: "DELETE",
+      csrfToken,
+    });
+  },
+  graphDeliveryOAuthPending(csrfToken: string, id: string) {
+    return request<GraphDeliveryOAuthPendingOut>(`/api/v1/admin/graph-delivery/oauth/pending/${encodeURIComponent(id)}`, { csrfToken });
+  },
+  confirmGraphDeliveryOAuthPending(csrfToken: string, id: string) {
+    return request<AdminReadinessOut>(`/api/v1/admin/graph-delivery/oauth/pending/${encodeURIComponent(id)}/confirm`, {
+      method: "POST",
+      csrfToken,
+    });
+  },
+  cancelGraphDeliveryOAuthPending(csrfToken: string, id: string) {
+    return request<void>(`/api/v1/admin/graph-delivery/oauth/pending/${encodeURIComponent(id)}`, {
       method: "DELETE",
       csrfToken,
     });

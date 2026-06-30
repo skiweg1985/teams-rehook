@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   Bot,
   Check,
+  CheckCircle,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -59,6 +60,7 @@ import type {
   DeliveryBackend,
   EventLogEntryOut,
   EventLogEntryPageOut,
+  GraphDeliveryOAuthPendingOut,
   GraphTargetKind,
   OAuthDiagnosticsOut,
   SettingItemOut,
@@ -275,7 +277,7 @@ function routeFromPath(pathname: string): RouteName {
   if (pathname === "/payload-generator") return "payload-generator";
   if (pathname === "/delivery") return "delivery";
   if (pathname === "/users") return "users";
-  if (pathname === "/settings") return "settings";
+  if (pathname === "/settings" || pathname.startsWith("/settings/")) return "settings";
   if (pathname === "/system-logs") return "system-logs";
   if (pathname === "/logs") return "logs";
   return "dashboard";
@@ -611,7 +613,7 @@ function AppShell() {
         {route === "payload-generator" ? <PayloadGeneratorPage /> : null}
         {route === "delivery" ? <DeliveryMethodsPage /> : null}
         {route === "users" ? <UsersPage /> : null}
-        {route === "settings" ? <SettingsPage /> : null}
+        {route === "settings" ? window.location.pathname.startsWith("/settings/graph-delivery/") ? <GraphDeliveryOAuthPage /> : <SettingsPage /> : null}
         {route === "logs" ? <MessageLogsPage /> : null}
         {route === "system-logs" ? <SystemLogsPage /> : null}
       </main>
@@ -4193,6 +4195,7 @@ function DeliveryMethodsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [graphOAuthBusy, setGraphOAuthBusy] = useState(false);
+  const [graphOAuthConfirm, setGraphOAuthConfirm] = useState<"reconnect" | "disconnect" | null>(null);
   const [authRefreshBusy, setAuthRefreshBusy] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
@@ -4247,6 +4250,18 @@ function DeliveryMethodsPage() {
     }
   }
 
+  function requestGraphDeliveryConnect() {
+    if (readiness?.graph_delivery.configured) {
+      setGraphOAuthConfirm("reconnect");
+      return;
+    }
+    void connectGraphDelivery();
+  }
+
+  function requestGraphDeliveryDisconnect() {
+    setGraphOAuthConfirm("disconnect");
+  }
+
   async function refreshDeliveryAuth() {
     setAuthRefreshBusy(true);
     setError("");
@@ -4276,7 +4291,7 @@ function DeliveryMethodsPage() {
     ? [
         buildBotIntegrationView(readiness, copyDiagnosticValue),
         buildGraphLookupIntegrationView(readiness, copyDiagnosticValue),
-        buildGraphDeliveryIntegrationView(readiness.graph_delivery, graphOAuthBusy, () => void connectGraphDelivery(), () => void disconnectGraphDelivery(), copyDiagnosticValue),
+        buildGraphDeliveryIntegrationView(readiness.graph_delivery, graphOAuthBusy, requestGraphDeliveryConnect, requestGraphDeliveryDisconnect, copyDiagnosticValue),
       ]
     : [];
   const overallTone = integrationViews.some((view) => view.tone === "danger") ? "danger" : integrationViews.some((view) => view.tone === "warn") ? "warn" : "success";
@@ -4366,6 +4381,39 @@ function DeliveryMethodsPage() {
               notify={notify}
               onClose={() => setSettingsModalOpen(false)}
             />
+          ) : null}
+          {graphOAuthConfirm && readiness ? (
+            <ConfirmModal
+              title={graphOAuthConfirm === "reconnect" ? "Reconnect service user?" : "Disconnect service user?"}
+              description={
+                graphOAuthConfirm === "reconnect"
+                  ? "The current Graph Delivery service user stays active until the newly authenticated user is reviewed and confirmed."
+                  : "Graph Delivery will stop using the currently connected service user."
+              }
+              confirmLabel={graphOAuthConfirm === "reconnect" ? "Start reconnect" : "Disconnect"}
+              busyLabel={graphOAuthConfirm === "reconnect" ? "Starting..." : "Disconnecting..."}
+              tone={graphOAuthConfirm === "reconnect" ? "primary" : "danger"}
+              busy={graphOAuthBusy}
+              onClose={() => setGraphOAuthConfirm(null)}
+              onConfirm={async () => {
+                const action = graphOAuthConfirm;
+                setGraphOAuthConfirm(null);
+                if (action === "reconnect") {
+                  await connectGraphDelivery();
+                } else {
+                  await disconnectGraphDelivery();
+                }
+              }}
+            >
+              <dl className="advanced-definition-list">
+                <dt>Current service user</dt>
+                <dd>{graphDeliveryServiceUserLabel(readiness.graph_delivery)}</dd>
+                <dt>User principal name</dt>
+                <dd>{readiness.graph_delivery.service_user_principal_name || "-"}</dd>
+                <dt>User ID</dt>
+                <dd>{readiness.graph_delivery.service_user_id || "-"}</dd>
+              </dl>
+            </ConfirmModal>
           ) : null}
         </div>
       ) : null}
@@ -4518,9 +4566,9 @@ function DeliveryComponentCard({
               <div className={classNames("delivery-inline-issue", `delivery-inline-issue--${actionItem.tone}`)}>
                 <strong>{actionItem.title}</strong>
                 <span>{actionItem.description}</span>
+                {integration.primaryActionSlot ? <div className="delivery-inline-action">{integration.primaryActionSlot}</div> : null}
               </div>
             ) : null}
-            {actionItem && integration.primaryActionSlot ? <div className="delivery-inline-action">{integration.primaryActionSlot}</div> : null}
             {graphDeliveryBlocked ? <p className="settings-warning">Enable Graph lookup first.</p> : null}
             {error ? (
               <p className="form-error" id={`${inputId}-error`}>
@@ -4713,6 +4761,258 @@ function DeliveryStatusGroup({ integration, overridden, tokenLabel }: { integrat
       ) : null}
     </div>
   );
+}
+
+function GraphDeliveryOAuthPage() {
+  const { notify, session } = useAppContext();
+  const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
+  const [pending, setPending] = useState<GraphDeliveryOAuthPendingOut | null>(null);
+  const [confirmedUser, setConfirmedUser] = useState<GraphDeliveryOAuthPendingOut | AdminReadinessOut["graph_delivery"] | null>(null);
+  const [readiness, setReadiness] = useState<AdminReadinessOut | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const isSuccess = window.location.pathname.endsWith("/success");
+  const pendingId = useMemo(() => new URLSearchParams(window.location.search).get("pending_id") ?? "", []);
+
+  useEffect(() => {
+    let active = true;
+    async function load() {
+      setLoading(true);
+      setError("");
+      try {
+        if (isSuccess) {
+          const nextReadiness = await api.adminReadiness(csrfToken);
+          if (!active) return;
+          setReadiness(nextReadiness);
+          setConfirmedUser(nextReadiness.graph_delivery);
+          return;
+        }
+        if (!pendingId) throw new Error("Missing pending Graph Delivery connection.");
+        const [nextPending, nextReadiness] = await Promise.all([
+          api.graphDeliveryOAuthPending(csrfToken, pendingId),
+          api.adminReadiness(csrfToken),
+        ]);
+        if (!active) return;
+        setPending(nextPending);
+        setReadiness(nextReadiness);
+      } catch (err) {
+        if (!active) return;
+        setError(isApiError(err) ? err.message : err instanceof Error ? err.message : "Graph Delivery connection could not be loaded.");
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    void load();
+    return () => {
+      active = false;
+    };
+  }, [csrfToken, isSuccess, pendingId]);
+
+  async function confirmPending() {
+    if (!pending) return;
+    setBusy(true);
+    setError("");
+    try {
+      const nextReadiness = await api.confirmGraphDeliveryOAuthPending(csrfToken, pending.id);
+      setReadiness(nextReadiness);
+      setConfirmedUser(pending);
+      setPending(null);
+      window.history.replaceState(null, "", "/settings/graph-delivery/success");
+      notify({ tone: "success", title: "Graph delivery connected" });
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Graph Delivery connection could not be confirmed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelPending() {
+    if (!pending) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api.cancelGraphDeliveryOAuthPending(csrfToken, pending.id);
+      notify({ tone: "info", title: "Graph delivery connection canceled" });
+      navigateInApp("/delivery");
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Graph Delivery connection could not be canceled.");
+      setBusy(false);
+    }
+  }
+
+  const current = readiness?.graph_delivery ?? null;
+  const pendingScopes = pending?.scopes ?? [];
+  const pendingServiceUser = pending ? graphDeliveryServiceUserLabel(pending) : "-";
+  const currentServiceUser = current?.configured ? graphDeliveryServiceUserLabel(current) : "None";
+  const pendingScopeBadges = pendingScopes.map((scope) => ({ label: scope, tone: "success" as const }));
+
+  return (
+    <>
+      <PageIntro
+        eyebrow="Graph delivery"
+        title={isSuccess || confirmedUser ? "Service user connected" : "Confirm service user"}
+        description={
+          isSuccess || confirmedUser
+            ? "The delegated Graph Delivery service user is active."
+            : "Review the authenticated Microsoft account before it is used for Graph Delivery."
+        }
+        actions={current ? <StatusBadge label={current.auth_status === "ready" ? "Ready" : healthStateLabel(current.auth_status)} tone={authStatusTone(current.auth_status)} /> : null}
+      />
+      {loading ? (
+        <Card>
+          <div className="table-state" role="status" aria-live="polite">
+            <div className="spinner spinner--small" aria-hidden="true" />
+            <p>Loading Graph Delivery connection...</p>
+          </div>
+        </Card>
+      ) : error ? (
+        <Card>
+          <div className="table-state table-state--error" role="alert">
+            <h3>Could not load Graph Delivery connection</h3>
+            <p>{error}</p>
+            <button className="secondary-button secondary-button--small" type="button" onClick={() => navigateInApp("/delivery")}>
+              Back to delivery
+            </button>
+          </div>
+        </Card>
+      ) : confirmedUser || isSuccess ? (
+        <div className="delivery-page delivery-operations-page graph-oauth-page">
+          <section className="status-relay-hero status-relay-hero--success" aria-label="Graph Delivery connection success">
+            <div className="status-relay-hero-main">
+              <div className="graph-oauth-success-mark" aria-hidden="true">
+                <CheckCircle focusable="false" />
+              </div>
+              <div>
+                <p className="integration-kicker">Connection confirmed</p>
+                <h2>Graph Delivery is connected</h2>
+                <p>The confirmed service user is now active for delegated Microsoft Graph sends.</p>
+              </div>
+            </div>
+            <div className="status-relay-metrics">
+              <StatusOverviewMetric label="Service user" value={graphDeliveryServiceUserLabel(confirmedUser ?? current!)} detail="Active delegated sender." tone="success" />
+              <StatusOverviewMetric label="Token" value={current?.access_token_expires_at ? formatRelativeTime(current.access_token_expires_at) : "Valid"} detail="Latest readiness state." tone="success" />
+              <StatusOverviewMetric label="Scopes" value={`${(current?.scopes ?? []).length || "-"} granted`} detail="Delegated permissions." tone="success" />
+              <StatusOverviewMetric label="Status" value={current ? healthStateLabel(current.auth_status) : "Ready"} detail="Graph Delivery readiness." tone="success" />
+            </div>
+          </section>
+          <Card className="delivery-component-card delivery-component-card--success graph-oauth-card">
+            <div className="graph-oauth-card-body">
+              <section className="status-detail-section">
+                <h3>Active service user</h3>
+                <StatusFactList facts={graphDeliveryUserFacts(confirmedUser ?? current)} />
+              </section>
+              <div className="form-actions">
+                <button className="primary-button secondary-button--small" type="button" onClick={() => navigateInApp("/delivery")}>
+                  Back to delivery
+                </button>
+              </div>
+            </div>
+          </Card>
+        </div>
+      ) : pending ? (
+        <div className="delivery-page delivery-operations-page graph-oauth-page">
+          <section className="status-relay-hero status-relay-hero--warn" aria-label="Graph Delivery pending connection">
+            <div className="status-relay-hero-main">
+              <div className="status-relay-indicator status-relay-indicator--warn" aria-hidden="true" />
+              <div>
+                <p className="integration-kicker">Pending connection</p>
+                <h2>Review the delegated sender before activation</h2>
+                <p>The current Graph Delivery service user remains active until this connection is confirmed.</p>
+              </div>
+            </div>
+            <div className="status-relay-metrics">
+              <StatusOverviewMetric label="New user" value={pendingServiceUser} detail={pending.service_user_principal_name || pending.service_user_id || "Authenticated account."} tone="warn" />
+              <StatusOverviewMetric label="Current user" value={currentServiceUser} detail={current?.service_user_principal_name || "Unchanged until confirm."} tone={current?.configured ? "neutral" : "warn"} />
+              <StatusOverviewMetric label="Review window" value={formatRelativeTime(pending.expires_at)} detail="Pending approval expires." tone="warn" />
+              <StatusOverviewMetric label="Scopes" value={`${pendingScopes.length} granted`} detail="Delegated permissions to review." tone="success" />
+            </div>
+          </section>
+          <Card className="delivery-component-card delivery-component-card--warn graph-oauth-card">
+            <div className="delivery-component-header graph-oauth-component-header">
+              <div className="delivery-component-title">
+                <span className="delivery-method-icon delivery-method-icon--graph-delivery" aria-hidden="true">
+                  <Send focusable="false" />
+                </span>
+                <span>
+                  <h2>New authenticated user</h2>
+                  <p>This account will become active only after confirmation.</p>
+                </span>
+              </div>
+              <div className="delivery-status-group">
+                <span className="delivery-status-dot delivery-status-dot--warn" aria-hidden="true" />
+                <strong>Pending</strong>
+              </div>
+              <div className="graph-oauth-actions">
+                <button className="secondary-button secondary-button--small" type="button" onClick={() => void cancelPending()} disabled={busy}>
+                  Cancel
+                </button>
+                <button className="primary-button secondary-button--small" type="button" onClick={() => void confirmPending()} disabled={busy}>
+                  {busy ? "Confirming..." : "Use service user"}
+                </button>
+              </div>
+            </div>
+            <div className="delivery-inline-issues">
+              <div className="delivery-inline-issue">
+                <strong>Review required</strong>
+                <span>Confirm only if the display name, user principal name, tenant and granted scopes match the intended Graph Delivery service account.</span>
+              </div>
+            </div>
+            <div className="graph-oauth-detail-grid">
+              <section className="status-detail-section">
+                <h3>Pending service user</h3>
+                <StatusFactList facts={graphDeliveryUserFacts(pending)} />
+              </section>
+              <section className="status-detail-section">
+                <h3>Current active user</h3>
+                {current?.configured ? <StatusFactList facts={graphDeliveryUserFacts(current)} /> : <EmptyState title="No active service user" body="Graph Delivery has no confirmed delegated sender yet." />}
+              </section>
+              <section className="status-detail-section graph-oauth-permissions">
+                <h3>Granted scopes</h3>
+                <p>{pendingScopes.length ? `${pendingScopes.length} delegated scopes were returned by Microsoft.` : "No scopes were reported for this pending connection."}</p>
+                <div className="permission-badge-list">
+                  {pendingScopeBadges.length ? (
+                    pendingScopeBadges.map((badge) => (
+                      <span className={classNames("permission-badge", `permission-badge--${badge.tone}`)} key={badge.label}>
+                        {badge.label}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="permission-badge permission-badge--warn">No scopes reported</span>
+                  )}
+                </div>
+              </section>
+              <section className="status-detail-section">
+                <h3>Token window</h3>
+                <StatusFactList
+                  facts={[
+                    { label: "Pending expires", value: formatRelativeTime(pending.expires_at), tone: "warn" },
+                    { label: "Access token", value: pending.access_token_expires_at ? formatRelativeTime(pending.access_token_expires_at) : "-", tone: pending.access_token_expires_at ? "success" : "neutral" },
+                  ]}
+                />
+              </section>
+            </div>
+          </Card>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function graphDeliveryUserFacts(user: GraphDeliveryOAuthPendingOut | AdminReadinessOut["graph_delivery"] | null): StatusFact[] {
+  if (!user) return [];
+  return [
+    { label: "Display name", value: graphDeliveryServiceUserLabel(user), tone: user.service_user_display_name ? "success" : "neutral" },
+    { label: "UPN", value: user.service_user_principal_name || "-", tone: user.service_user_principal_name ? "success" : "neutral" },
+    { label: "User ID", value: user.service_user_id || "-", tone: user.service_user_id ? "success" : "neutral" },
+    { label: "Tenant ID", value: user.tenant_id || "-", tone: user.tenant_id ? "success" : "neutral" },
+    { label: "Client ID", value: user.client_id || "-", tone: user.client_id ? "success" : "neutral" },
+  ];
+}
+
+function navigateInApp(path: string) {
+  window.history.pushState(null, "", path);
+  window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
 function SettingsPage() {
@@ -5359,7 +5659,7 @@ function buildGraphDeliveryIntegrationView(
   onDisconnect: () => void,
   onCopy: (value: string, label: string) => void,
 ): IntegrationStatusView {
-  const serviceUser = readiness.service_user_display_name || readiness.service_user_principal_name || readiness.service_user_id || "-";
+  const serviceUser = graphDeliveryServiceUserLabel(readiness);
   const missingScopes = new Set(readiness.missing_scopes.map((scope) => scope.toLowerCase()));
   return {
     id: "graph-delivery",
@@ -5826,6 +6126,10 @@ function graphDeliverySummary(readiness: AdminReadinessOut["graph_delivery"]): s
   if (readiness.auth_status === "configuration_error") return readiness.message || "Delegated Graph delivery has a configuration error.";
   if (readiness.auth_status === "incomplete") return readiness.message || "Required app registration settings are missing.";
   return readiness.message || "Graph delivery readiness could not be fully determined.";
+}
+
+function graphDeliveryServiceUserLabel(user: Pick<AdminReadinessOut["graph_delivery"], "service_user_display_name" | "service_user_principal_name" | "service_user_id">): string {
+  return user.service_user_display_name || user.service_user_principal_name || user.service_user_id || "-";
 }
 
 function delegatedTokenFact(readiness: AdminReadinessOut["graph_delivery"]): string {

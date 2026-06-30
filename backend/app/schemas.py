@@ -604,6 +604,19 @@ class GraphDeliveryOAuthStartOut(BaseModel):
     authorization_url: str
 
 
+class GraphDeliveryOAuthPendingOut(BaseModel):
+    id: str
+    tenant_id: str = ""
+    client_id: str = ""
+    scopes: list[str] = Field(default_factory=list)
+    service_user_id: str = ""
+    service_user_display_name: str = ""
+    service_user_principal_name: str = ""
+    access_token_expires_at: datetime | None = None
+    refresh_checked_at: datetime | None = None
+    expires_at: datetime
+
+
 class TeamsTargetSearchOut(BaseModel):
     kind: GraphTargetKind
     id: str

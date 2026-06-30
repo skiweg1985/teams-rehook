@@ -318,6 +318,19 @@ export type GraphDeliveryOAuthStartOut = {
   authorization_url: string;
 };
 
+export type GraphDeliveryOAuthPendingOut = {
+  id: string;
+  tenant_id: string;
+  client_id: string;
+  scopes: string[];
+  service_user_id: string;
+  service_user_display_name: string;
+  service_user_principal_name: string;
+  access_token_expires_at: string | null;
+  refresh_checked_at: string | null;
+  expires_at: string;
+};
+
 export type AdminReadinessOut = {
   app_name: string;
   app_version: string;

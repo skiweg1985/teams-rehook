@@ -13,10 +13,10 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.settings_overrides import load_overrides, reset_override_state
-from app.core.encrypted_secrets import encrypt_secret
+from app.core.encrypted_secrets import decrypt_secret, encrypt_secret
 from app.database import Base, get_db
 from app.main import create_app
-from app.models import AuditEvent, GraphDelegatedCredential, Organization, User
+from app.models import AuditEvent, GraphDelegatedCredential, GraphDelegatedOAuthPendingCredential, Organization, User
 from app.security import hash_secret
 from app.schemas import OAuthAppDiagnosticsOut, OAuthTenantDiagnosticsOut
 from app.services import graph_delegated_auth
@@ -620,21 +620,29 @@ def test_graph_delivery_oauth_start_returns_authorization_url(db_session: Sessio
     assert query["state"][0]
 
 
-def test_graph_delivery_oauth_callback_exchanges_code_and_redirects(db_session: Session, monkeypatch: pytest.MonkeyPatch):
+def test_graph_delivery_oauth_callback_creates_pending_credential_and_redirects(db_session: Session, monkeypatch: pytest.MonkeyPatch):
     captured: dict[str, str] = {}
+    active = add_delegated_credential(db_session)
 
     def fake_exchange(db, **kwargs):
         captured.update(kwargs)
-        db.add(
-            GraphDelegatedCredential(
-                organization_id=kwargs["organization_id"],
-                encrypted_refresh_token=encrypt_secret("refresh-token"),
-                last_status="ready",
-            )
+        pending = GraphDelegatedOAuthPendingCredential(
+            organization_id=kwargs["organization_id"],
+            created_by_id=kwargs["created_by_id"],
+            tenant_id="tenant",
+            client_id="client",
+            scopes="offline_access User.Read",
+            encrypted_refresh_token=encrypt_secret("pending-refresh-token"),
+            service_user_id="pending-user-id",
+            service_user_display_name="Pending User",
+            service_user_principal_name="pending@example.com",
+            expires_at=graph_delegated_auth.utcnow() + graph_delegated_auth.PENDING_CREDENTIAL_TTL,
         )
+        db.add(pending)
         db.flush()
+        return pending
 
-    monkeypatch.setattr("app.routers.admin.exchange_authorization_code", fake_exchange)
+    monkeypatch.setattr("app.routers.admin.exchange_authorization_code_to_pending", fake_exchange)
     with make_client(
         db_session,
         monkeypatch,
@@ -654,12 +662,135 @@ def test_graph_delivery_oauth_callback_exchanges_code_and_redirects(db_session: 
         )
 
     assert response.status_code == 303
-    assert response.headers["location"] == "https://ui.example.com/settings?graph_delivery=connected"
+    pending = db_session.query(GraphDelegatedOAuthPendingCredential).one()
+    assert response.headers["location"] == f"https://ui.example.com/settings/graph-delivery/confirm?pending_id={pending.id}"
     assert captured["code"] == "auth-code"
     assert captured["redirect_uri"] == "https://app.example.com/api/v1/admin/graph-delivery/oauth/callback"
     assert captured["scopes"] == graph_delegated_auth.DEFAULT_DELEGATED_GRAPH_SCOPES
+    assert captured["created_by_id"]
     row = db_session.query(GraphDelegatedCredential).one()
-    assert row.last_status == "ready"
+    assert row.id == active.id
+    assert row.service_user_display_name == "Old Service User"
+    assert "pending-refresh-token" not in json.dumps(dict(response.headers))
+
+
+def test_graph_delivery_oauth_pending_get_returns_safe_metadata(db_session: Session, monkeypatch: pytest.MonkeyPatch):
+    org = db_session.query(Organization).one()
+    pending = GraphDelegatedOAuthPendingCredential(
+        organization_id=org.id,
+        tenant_id="tenant",
+        client_id="client",
+        scopes="offline_access User.Read",
+        encrypted_refresh_token=encrypt_secret("pending-refresh-token"),
+        service_user_id="pending-user-id",
+        service_user_display_name="Pending User",
+        service_user_principal_name="pending@example.com",
+        expires_at=graph_delegated_auth.utcnow() + graph_delegated_auth.PENDING_CREDENTIAL_TTL,
+    )
+    db_session.add(pending)
+    db_session.commit()
+
+    with make_client(db_session, monkeypatch) as client:
+        csrf_token = login_admin(client)
+        response = client.get(f"/api/v1/admin/graph-delivery/oauth/pending/{pending.id}", headers={"X-CSRF-Token": csrf_token})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["service_user_display_name"] == "Pending User"
+    assert body["service_user_principal_name"] == "pending@example.com"
+    assert body["tenant_id"] == "tenant"
+    assert body["client_id"] == "client"
+    assert "User.Read" in body["scopes"]
+    assert "pending-refresh-token" not in json.dumps(body)
+
+
+def test_graph_delivery_oauth_pending_confirm_promotes_credential(db_session: Session, monkeypatch: pytest.MonkeyPatch):
+    active = add_delegated_credential(db_session)
+    pending = GraphDelegatedOAuthPendingCredential(
+        organization_id=active.organization_id,
+        tenant_id="tenant",
+        client_id="client",
+        scopes="offline_access User.Read ChannelMessage.Send ChatMessage.Send Chat.ReadBasic Chat.Create",
+        encrypted_refresh_token=encrypt_secret("pending-refresh-token"),
+        service_user_id="pending-user-id",
+        service_user_display_name="Pending User",
+        service_user_principal_name="pending@example.com",
+        expires_at=graph_delegated_auth.utcnow() + graph_delegated_auth.PENDING_CREDENTIAL_TTL,
+    )
+    db_session.add(pending)
+    db_session.commit()
+    monkeypatch.setattr(
+        graph_delegated_auth,
+        "_request_token",
+        lambda **kwargs: {
+            "access_token": fake_jwt(
+                oid="pending-user-id",
+                name="Pending User",
+                preferred_username="pending@example.com",
+            ),
+            "expires_in": 3600,
+            "scope": "offline_access User.Read ChannelMessage.Send ChatMessage.Send Chat.ReadBasic Chat.Create",
+        },
+    )
+
+    with make_client(db_session, monkeypatch, MS_APP_TENANT_ID="tenant", MS_APP_CLIENT_ID="client", MS_APP_CLIENT_SECRET="secret") as client:
+        csrf_token = login_admin(client)
+        response = client.post(
+            f"/api/v1/admin/graph-delivery/oauth/pending/{pending.id}/confirm",
+            headers={"X-CSRF-Token": csrf_token},
+        )
+
+    assert response.status_code == 200
+    row = db_session.query(GraphDelegatedCredential).one()
+    assert row.id == active.id
+    assert row.service_user_display_name == "Pending User"
+    assert decrypt_secret(row.encrypted_refresh_token) == "pending-refresh-token"
+    assert db_session.query(GraphDelegatedOAuthPendingCredential).count() == 0
+    audit = db_session.query(AuditEvent).filter_by(action="graph_delivery.oauth.confirmed").one()
+    assert audit.organization_id == active.organization_id
+
+
+def test_graph_delivery_oauth_pending_cancel_keeps_active_credential(db_session: Session, monkeypatch: pytest.MonkeyPatch):
+    active = add_delegated_credential(db_session)
+    pending = GraphDelegatedOAuthPendingCredential(
+        organization_id=active.organization_id,
+        encrypted_refresh_token=encrypt_secret("pending-refresh-token"),
+        service_user_display_name="Pending User",
+        expires_at=graph_delegated_auth.utcnow() + graph_delegated_auth.PENDING_CREDENTIAL_TTL,
+    )
+    db_session.add(pending)
+    db_session.commit()
+
+    with make_client(db_session, monkeypatch) as client:
+        csrf_token = login_admin(client)
+        response = client.delete(f"/api/v1/admin/graph-delivery/oauth/pending/{pending.id}", headers={"X-CSRF-Token": csrf_token})
+
+    assert response.status_code == 204
+    row = db_session.query(GraphDelegatedCredential).one()
+    assert row.id == active.id
+    assert row.service_user_display_name == "Old Service User"
+    assert db_session.query(GraphDelegatedOAuthPendingCredential).count() == 0
+
+
+def test_graph_delivery_oauth_pending_expired_is_rejected(db_session: Session, monkeypatch: pytest.MonkeyPatch):
+    org = db_session.query(Organization).one()
+    pending = GraphDelegatedOAuthPendingCredential(
+        organization_id=org.id,
+        encrypted_refresh_token=encrypt_secret("pending-refresh-token"),
+        expires_at=graph_delegated_auth.utcnow() - graph_delegated_auth.PENDING_CREDENTIAL_TTL,
+    )
+    db_session.add(pending)
+    db_session.commit()
+
+    with make_client(db_session, monkeypatch) as client:
+        csrf_token = login_admin(client)
+        response = client.post(
+            f"/api/v1/admin/graph-delivery/oauth/pending/{pending.id}/confirm",
+            headers={"X-CSRF-Token": csrf_token},
+        )
+
+    assert response.status_code == 404
+    assert db_session.query(GraphDelegatedOAuthPendingCredential).count() == 0
 
 
 def test_graph_delivery_oauth_callback_rejects_invalid_state(db_session: Session, monkeypatch: pytest.MonkeyPatch):

@@ -2277,7 +2277,8 @@ button:disabled {
 
 .delivery-inline-issue {
   display: grid;
-  grid-template-columns: minmax(160px, auto) minmax(0, 1fr);
+  grid-template-columns: minmax(180px, auto) minmax(0, 1fr) auto;
+  align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   border: 1px solid rgba(160, 111, 34, 0.18);
@@ -2302,6 +2303,7 @@ button:disabled {
 .delivery-inline-action {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   flex-wrap: wrap;
   gap: var(--space-2);
 }
@@ -2666,6 +2668,125 @@ button:disabled {
   position: static;
   margin: 0;
   padding: var(--space-3) var(--space-4);
+}
+
+.graph-oauth-page .status-relay-metrics .status-overview-item strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-oauth-card .card-body,
+.graph-oauth-card-body {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.graph-oauth-component-header {
+  grid-template-columns: minmax(280px, 1fr) max-content max-content;
+  grid-template-areas: "identity health actions";
+}
+
+.graph-oauth-component-header > .delivery-status-group {
+  grid-area: health;
+}
+
+.graph-oauth-actions {
+  grid-area: actions;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.graph-oauth-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.graph-oauth-detail-grid .status-detail-section {
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface) 94%, var(--surface-muted));
+}
+
+.graph-oauth-detail-grid .status-detail-facts {
+  grid-template-columns: minmax(120px, 0.32fr) minmax(0, 1fr);
+  gap: 10px var(--space-3);
+}
+
+.graph-oauth-detail-grid .status-detail-facts dd {
+  justify-self: start;
+  max-width: 34ch;
+}
+
+.graph-oauth-permissions {
+  grid-column: 1 / -1;
+}
+
+.graph-oauth-permissions p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.35;
+}
+
+.graph-oauth-success-mark {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--status-ready-dot);
+  background: color-mix(in srgb, var(--status-ready-dot) 12%, var(--surface));
+  box-shadow: 0 0 0 8px color-mix(in srgb, var(--status-ready-dot) 7%, transparent);
+  animation: graph-oauth-success-pop 460ms ease-out both;
+}
+
+.graph-oauth-success-mark svg {
+  width: 22px;
+  height: 22px;
+  stroke-width: 2.4;
+}
+
+@keyframes graph-oauth-success-pop {
+  0% {
+    transform: scale(0.72);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@media (max-width: 760px) {
+  .graph-oauth-detail-grid,
+  .graph-oauth-detail-grid .status-detail-facts {
+    grid-template-columns: 1fr;
+  }
+
+  .graph-oauth-component-header {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "identity"
+      "health"
+      "actions";
+  }
+
+  .graph-oauth-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
 }
 
 @container delivery-card (max-width: 1060px) {
@@ -5227,6 +5348,10 @@ button:disabled {
 
   .delivery-inline-issue {
     grid-template-columns: 1fr;
+  }
+
+  .delivery-inline-action {
+    justify-content: flex-start;
   }
 
   .delivery-status-group,
