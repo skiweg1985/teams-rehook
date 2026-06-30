@@ -423,9 +423,8 @@ function LoginScreen() {
           <ThemeToggle />
         </div>
         <div>
-          <p className="eyebrow">Teams Rehook Workspace</p>
           <h1>Teams Rehook</h1>
-          <p className="lede">Manage stable webhook routes that forward operational messages into Microsoft Teams conversations.</p>
+          <p className="lede">Sign in to continue.</p>
         </div>
         <form className="compact-form" onSubmit={submit}>
           <Field label="Email">
