@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type FocusEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -179,6 +179,10 @@ type RowActionItem = {
   separated?: boolean;
 };
 
+type ResponsiveActionItem = RowActionItem & {
+  buttonTone?: "primary" | "secondary" | "danger";
+};
+
 function RowActionMenu({ label, items }: { label: string; items: RowActionItem[] }) {
   const [open, setOpen] = useState(false);
   const [coords, setCoords] = useState<{ top: number; right: number }>({ top: 0, right: 0 });
@@ -257,6 +261,106 @@ function RowActionMenu({ label, items }: { label: string; items: RowActionItem[]
         </div>
       ) : null}
     </div>
+  );
+}
+
+function ResponsiveActionBar({ items, moreLabel }: { items: ResponsiveActionItem[]; moreLabel: string }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const measureRef = useRef<HTMLDivElement>(null);
+  const [visibleCount, setVisibleCount] = useState(items.length);
+  const overflowItems = items.slice(visibleCount);
+
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    const measure = measureRef.current;
+    if (!container || !measure) return;
+    const actionContainer = container;
+    const actionMeasure = measure;
+
+    function calculateVisibleCount() {
+      const containerWidth = actionContainer.clientWidth;
+      const measuredActions = Array.from(actionMeasure.querySelectorAll<HTMLElement>("[data-measure-action]"));
+      const measuredMenu = actionMeasure.querySelector<HTMLElement>("[data-measure-menu]");
+      if (!containerWidth || measuredActions.length !== items.length || !measuredMenu) return;
+
+      const styles = window.getComputedStyle(actionContainer);
+      const gap = Number.parseFloat(styles.columnGap || styles.gap || "0") || 0;
+      const actionWidths = measuredActions.map((action) => Math.ceil(action.getBoundingClientRect().width));
+      const menuWidth = Math.ceil(measuredMenu.getBoundingClientRect().width);
+      const availableWidth = Math.floor(actionContainer.getBoundingClientRect().width) - 4;
+      const fullWidth = actionWidths.reduce((total, width) => total + width, 0) + Math.max(0, items.length - 1) * gap;
+
+      let nextVisibleCount = items.length;
+      if (fullWidth <= availableWidth) {
+        setVisibleCount((current) => (current === items.length ? current : items.length));
+        return;
+      }
+
+      for (let count = items.length - 1; count >= 0; count -= 1) {
+        const visibleWidths = actionWidths.slice(0, count).reduce((total, width) => total + width, 0);
+        const shownItems = count + 1;
+        const totalGap = Math.max(0, shownItems - 1) * gap;
+        const totalWidth = visibleWidths + menuWidth + totalGap;
+        if (totalWidth <= availableWidth) {
+          nextVisibleCount = count;
+          break;
+        }
+      }
+
+      setVisibleCount((current) => (current === nextVisibleCount ? current : nextVisibleCount));
+    }
+
+    calculateVisibleCount();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", calculateVisibleCount);
+      return () => window.removeEventListener("resize", calculateVisibleCount);
+    }
+    const observer = new ResizeObserver(calculateVisibleCount);
+    observer.observe(actionContainer);
+    return () => observer.disconnect();
+  }, [items]);
+
+  useEffect(() => {
+    setVisibleCount((current) => Math.min(current, items.length));
+  }, [items.length]);
+
+  return (
+    <div className="responsive-action-bar" ref={containerRef}>
+      {items.slice(0, visibleCount).map((item) => (
+        <RouteActionButton item={item} key={item.label} />
+      ))}
+      {overflowItems.length ? <RowActionMenu label={moreLabel} items={overflowItems} /> : null}
+      <div className="responsive-action-bar-measure" ref={measureRef} aria-hidden="true">
+        {items.map((item) => (
+          <RouteActionButton item={item} key={item.label} measure />
+        ))}
+        <button className="icon-button" type="button" data-measure-menu tabIndex={-1}>
+          <MoreHorizontal aria-hidden="true" className="button-icon" focusable="false" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function RouteActionButton({ item, measure = false }: { item: ResponsiveActionItem; measure?: boolean }) {
+  const Icon = item.icon;
+  const tone = item.buttonTone || "secondary";
+  return (
+    <button
+      className={classNames(
+        tone === "primary" ? "primary-button" : tone === "danger" ? "danger-button" : "secondary-button",
+        "button-with-icon",
+        "route-action-button",
+      )}
+      type="button"
+      disabled={item.disabled}
+      onClick={item.onClick}
+      data-measure-action={measure || undefined}
+      tabIndex={measure ? -1 : undefined}
+    >
+      <Icon aria-hidden="true" className={classNames("button-icon", item.spinning && "button-icon--spin")} focusable="false" />
+      {item.label}
+    </button>
   );
 }
 
@@ -2402,6 +2506,59 @@ function WebhookRouteDetailPage({
   const target = routeView.targetPresentation;
   const targetMemberNames = target.kindLabel === "Group chat" ? webhookTargetMemberNames(route) : [];
   const heroTone = routeView.tone;
+  const actionItems: ResponsiveActionItem[] = [
+    {
+      label: testingId === route.id ? "Testing..." : "Test",
+      icon: Send,
+      buttonTone: "primary",
+      disabled: testingId === route.id || !routeView.featureEnabled,
+      onClick: () => onTestRoute(route),
+    },
+    {
+      label: "Edit",
+      icon: Pencil,
+      onClick: () => onEditRoute(route),
+    },
+    {
+      label: "Logs",
+      icon: FileClock,
+      onClick: () => onViewLogs(route),
+    },
+    {
+      label: togglingId === route.id ? "Updating..." : route.is_active ? "Deactivate" : "Activate",
+      icon: route.is_active ? PowerOff : Power,
+      disabled: togglingId === route.id,
+      onClick: () => onToggleRoute(route),
+    },
+    {
+      label: refreshingMembersId === route.id ? "Refreshing members..." : "Refresh members",
+      icon: MessagesSquare,
+      disabled: refreshingMembersId === route.id,
+      spinning: refreshingMembersId === route.id,
+      onClick: () => onRefreshMembers(route),
+    },
+    {
+      label: refreshingRouteNameId === route.id ? "Refreshing names..." : "Refresh Graph names",
+      icon: RefreshCw,
+      disabled: refreshingRouteNameId === route.id || !featurePolicy.graphLookupEnabled,
+      spinning: refreshingRouteNameId === route.id,
+      onClick: () => onRefreshNames(route),
+    },
+    {
+      label: regeneratingId === route.id ? "Regenerating URL..." : "Regenerate URL",
+      icon: RotateCcwKey,
+      disabled: regeneratingId === route.id,
+      onClick: () => onRegenerateRoute(route),
+    },
+    {
+      label: "Delete route",
+      icon: Trash2,
+      tone: "danger",
+      buttonTone: "danger",
+      separated: true,
+      onClick: () => onDeleteRoute(route),
+    },
+  ];
 
   return (
     <div className="webhook-route-workspace" aria-label={`${route.name} route workspace`}>
@@ -2496,85 +2653,10 @@ function WebhookRouteDetailPage({
             <h2>Route actions</h2>
           </div>
         </div>
-        <div className="webhook-route-action-grid">
-          <button
-            className="primary-button button-with-icon"
-            type="button"
-            disabled={testingId === route.id || !routeView.featureEnabled}
-            onClick={() => onTestRoute(route)}
-          >
-            <Send aria-hidden="true" className="button-icon" focusable="false" />
-            {testingId === route.id ? "Sending..." : "Send test"}
-          </button>
-          <button className="secondary-button button-with-icon" type="button" onClick={() => onEditRoute(route)}>
-            <Pencil aria-hidden="true" className="button-icon" focusable="false" />
-            Edit route
-          </button>
-          <button className="secondary-button button-with-icon" type="button" onClick={() => onViewLogs(route)}>
-            <FileClock aria-hidden="true" className="button-icon" focusable="false" />
-            Delivery logs
-          </button>
-          <button
-            className="secondary-button button-with-icon"
-            type="button"
-            disabled={togglingId === route.id}
-            onClick={() => onToggleRoute(route)}
-          >
-            {route.is_active ? <PowerOff aria-hidden="true" className="button-icon" focusable="false" /> : <Power aria-hidden="true" className="button-icon" focusable="false" />}
-            {togglingId === route.id ? "Updating..." : route.is_active ? "Deactivate" : "Activate"}
-          </button>
-        </div>
+        <ResponsiveActionBar items={actionItems} moreLabel="More route actions" />
       </section>
 
       <WebhookRouteRecentDeliveries route={route} />
-
-      <details className="status-detail-disclosure">
-        <summary>
-          <span>Advanced actions</span>
-          <small>Refresh metadata, rotate URL or delete the route</small>
-        </summary>
-        <div className="webhook-route-danger-zone">
-          <button
-            className="secondary-button secondary-button--small button-with-icon"
-            type="button"
-            disabled={refreshingMembersId === route.id}
-            onClick={() => onRefreshMembers(route)}
-          >
-            <MessagesSquare
-              aria-hidden="true"
-              className={classNames("button-icon", refreshingMembersId === route.id && "button-icon--spin")}
-              focusable="false"
-            />
-            {refreshingMembersId === route.id ? "Refreshing..." : "Refresh members"}
-          </button>
-          <button
-            className="secondary-button secondary-button--small button-with-icon"
-            type="button"
-            disabled={refreshingRouteNameId === route.id || !featurePolicy.graphLookupEnabled}
-            onClick={() => onRefreshNames(route)}
-          >
-            <RefreshCw
-              aria-hidden="true"
-              className={classNames("button-icon", refreshingRouteNameId === route.id && "button-icon--spin")}
-              focusable="false"
-            />
-            {refreshingRouteNameId === route.id ? "Refreshing..." : "Refresh Graph names"}
-          </button>
-          <button
-            className="secondary-button secondary-button--small button-with-icon"
-            type="button"
-            disabled={regeneratingId === route.id}
-            onClick={() => onRegenerateRoute(route)}
-          >
-            <RotateCcwKey aria-hidden="true" className="button-icon" focusable="false" />
-            {regeneratingId === route.id ? "Regenerating..." : "Regenerate URL"}
-          </button>
-          <button className="danger-button danger-button--small button-with-icon" type="button" onClick={() => onDeleteRoute(route)}>
-            <Trash2 aria-hidden="true" className="button-icon" focusable="false" />
-            Delete route
-          </button>
-        </div>
-      </details>
 
       <details className="status-detail-disclosure">
         <summary>
