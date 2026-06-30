@@ -77,7 +77,7 @@ import type {
 } from "./types";
 import { classNames, compactJson, formatDateTime, formatRelativeTime } from "./utils";
 
-type RouteName = "dashboard" | "status" | "webhooks" | "payload-generator" | "delivery" | "users" | "settings" | "logs" | "system-logs";
+type RouteName = "dashboard" | "webhooks" | "payload-generator" | "delivery" | "users" | "settings" | "logs" | "system-logs";
 type DeliveryStatusFilter = "all" | WebhookDeliveryStatus;
 type PayloadGeneratorMode = "text" | "adaptive";
 type PayloadAccent = "neutral" | "success" | "warning" | "critical";
@@ -100,7 +100,6 @@ type PayloadAction = {
 
 const NAV: Array<{ route: RouteName; label: string; path: string; icon: string }> = [
   { route: "dashboard", label: "Dashboard", path: "/dashboard", icon: "D" },
-  { route: "status", label: "Status", path: "/status", icon: "S" },
   { route: "webhooks", label: "Webhooks", path: "/webhooks", icon: "W" },
   { route: "payload-generator", label: "Payload Generator", path: "/payload-generator", icon: "P" },
   { route: "delivery", label: "Delivery", path: "/delivery", icon: "D" },
@@ -270,9 +269,17 @@ function EmptyGuidance({ title, body }: { title: string; body: string }) {
   );
 }
 
+function AppLogo() {
+  return (
+    <span className="app-logo" aria-hidden="true">
+      <img className="app-logo-image app-logo-image--light" src="/brand/logo-light.png" alt="" />
+      <img className="app-logo-image app-logo-image--dark" src="/brand/logo-dark.png" alt="" />
+    </span>
+  );
+}
+
 function routeFromPath(pathname: string): RouteName {
   if (pathname === "/" || pathname === "/dashboard") return "dashboard";
-  if (pathname === "/status") return "status";
   if (pathname === "/webhooks" || pathname.startsWith("/webhooks/")) return "webhooks";
   if (pathname === "/payload-generator") return "payload-generator";
   if (pathname === "/delivery") return "delivery";
@@ -308,7 +315,7 @@ function LoginScreen() {
     <main className="login-screen">
       <section className="login-panel">
         <div className="login-panel-header">
-          <div className="app-mark">T</div>
+          <AppLogo />
           <ThemeToggle />
         </div>
         <div>
@@ -377,7 +384,7 @@ function FirstAdminSetupScreen() {
     <main className="login-screen">
       <section className="login-panel setup-panel">
         <div className="login-panel-header">
-          <div className="app-mark">T</div>
+          <AppLogo />
           <ThemeToggle />
         </div>
         <div>
@@ -467,7 +474,7 @@ function WebhookCopyPage() {
     <main className="public-copy-screen">
       <section className="public-copy-panel">
         <div className="login-panel-header">
-          <div className="app-mark">T</div>
+          <AppLogo />
           <ThemeToggle />
         </div>
         <div>
@@ -522,6 +529,12 @@ function AppShell() {
   const route = routeFromPath(path);
 
   useEffect(() => {
+    if (path !== "/status") return;
+    window.history.replaceState(null, "", "/dashboard");
+    setPath("/dashboard");
+  }, [path]);
+
+  useEffect(() => {
     const onPop = () => {
       setPath(window.location.pathname);
       setSidebarOpen(false);
@@ -561,7 +574,7 @@ function AppShell() {
       />
       <aside className={classNames("sidebar", sidebarOpen && "sidebar--open")} id="app-sidebar">
         <div className="brand-row">
-          <div className="app-mark">T</div>
+          <AppLogo />
           <div>
             <strong>Teams Rehook</strong>
             <span>Webhook Relay</span>
@@ -583,6 +596,10 @@ function AppShell() {
             </button>
           ))}
         </nav>
+        <div className="sidebar-theme-control">
+          <span>Theme</span>
+          <ThemeToggle id="sidebar-theme-toggle" />
+        </div>
         <div className="sidebar-footer">
           <div>
             <strong>{session.user.display_name}</strong>
@@ -606,10 +623,8 @@ function AppShell() {
             <Menu aria-hidden="true" />
             <span>Menu</span>
           </button>
-          <ThemeToggle />
         </header>
         {route === "dashboard" ? <DashboardPage /> : null}
-        {route === "status" ? <StatusPage /> : null}
         {route === "webhooks" ? <WebhooksPage /> : null}
         {route === "payload-generator" ? <PayloadGeneratorPage /> : null}
         {route === "delivery" ? <DeliveryMethodsPage /> : null}
@@ -4335,81 +4350,6 @@ const DELIVERY_IDENTITY_SETTING_KEYS = [
   "ms_app_client_id",
   "ms_app_client_secret",
 ] as const;
-
-function StatusPage() {
-  const { notify, session } = useAppContext();
-  const [readiness, setReadiness] = useState<AdminReadinessOut | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
-
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      setReadiness(await api.adminReadiness(csrfToken));
-    } catch (err) {
-      setError(isApiError(err) ? err.message : "Status data could not be loaded.");
-    } finally {
-      setLoading(false);
-    }
-  }, [csrfToken]);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  async function copyDiagnosticValue(value: string, label: string) {
-    await navigator.clipboard.writeText(value);
-    notify({ tone: "success", title: `${label} copied` });
-  }
-
-  return (
-    <>
-      <PageIntro
-        eyebrow="System"
-        title="Status"
-        description="General runtime information for the application. Delivery operations now live on the Delivery page."
-        actions={readiness ? <StatusBadge label={readiness.app_version} tone="neutral" /> : null}
-      />
-      {loading ? (
-        <Card>
-          <div className="table-state" role="status" aria-live="polite">
-            <div className="spinner spinner--small" aria-hidden="true" />
-            <p>Loading status...</p>
-          </div>
-        </Card>
-      ) : error ? (
-        <Card>
-          <div className="table-state table-state--error" role="alert">
-            <h3>Could not load status</h3>
-            <p>{error}</p>
-            <button className="secondary-button secondary-button--small" type="button" onClick={() => void refresh()}>
-              Retry
-            </button>
-          </div>
-        </Card>
-      ) : readiness ? (
-        <div className="status-command-center">
-          <section className="status-overview" aria-label="System overview">
-            <StatusOverviewMetric label="Application" value={readiness.app_name} detail={`Version ${readiness.app_version}`} />
-            <StatusOverviewMetric
-              label="Settings"
-              value={settingsEncryptionLabel(readiness.runtime.settings_encryption_key_source, readiness.runtime.settings_encryption_ready)}
-              detail="Encryption state for stored runtime settings."
-              tone={readiness.runtime.settings_encryption_ready ? "success" : "warn"}
-            />
-            <StatusOverviewMetric label="Payload limit" value={formatBytes(readiness.runtime.webhook_max_payload_bytes)} detail="Maximum accepted webhook request body." />
-            <StatusOverviewMetric label="Retention" value={`${readiness.runtime.log_retention_days} days`} detail="Event and audit data retention window." />
-          </section>
-          <section className="status-operations-grid" aria-label="Operational context">
-            <RuntimeSnapshotCard readiness={readiness} onCopy={copyDiagnosticValue} />
-          </section>
-        </div>
-      ) : null}
-    </>
-  );
-}
 
 function deliveryAuthRefreshToastTone(result: DeliveryAuthRefreshOut): "success" | "info" {
   return deliveryAuthRefreshComponents(result).some((component) => component.status === "skipped") ? "info" : "success";

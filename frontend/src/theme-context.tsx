@@ -34,6 +34,12 @@ function systemPrefersDark(): boolean {
   return window.matchMedia("(prefers-color-scheme: dark)").matches;
 }
 
+function applyFavicon(resolved: "light" | "dark") {
+  const link = document.querySelector<HTMLLinkElement>("#app-favicon");
+  if (!link) return;
+  link.href = resolved === "dark" ? "/brand/favicon-dark.png" : "/brand/favicon-light.png";
+}
+
 function applyDocumentTheme(preference: ThemePreference, systemDark: boolean): "light" | "dark" {
   const resolved: "light" | "dark" =
     preference === "system" ? (systemDark ? "dark" : "light") : preference;
@@ -41,6 +47,7 @@ function applyDocumentTheme(preference: ThemePreference, systemDark: boolean): "
   root.dataset.themePreference = preference;
   root.classList.toggle("dark", resolved === "dark");
   root.style.colorScheme = resolved === "dark" ? "dark" : "light";
+  applyFavicon(resolved);
   return resolved;
 }
 
