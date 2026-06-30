@@ -1687,9 +1687,9 @@ html.dark .app-logo-image--dark {
 }
 
 .webhook-route-url-action {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: flex-start;
 }
 
 .webhook-target-panel > div {
@@ -1721,7 +1721,14 @@ html.dark .app-logo-image--dark {
   min-width: 0;
   color: var(--ink-secondary);
   font-size: 0.8125rem;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.webhook-route-url-action .secondary-button {
+  flex: none;
+  white-space: nowrap;
 }
 
 .webhook-route-action-grid,

@@ -1599,6 +1599,33 @@ function webhookTargetSummary(route: WebhookRouteOut): string {
   return route.member_summary || deliveryBackendLabel(route.delivery_backend);
 }
 
+function webhookDetailTargetTitle(route: WebhookRouteOut, targetKindLabel: string): string {
+  if (targetKindLabel === "Group chat") return "Teams group chat";
+  if (targetKindLabel === "1:1 chat") return route.target_name || "Teams 1:1 chat";
+  if (targetKindLabel === "Channel") return route.target_name || route.graph_team_name || "Teams channel";
+  return route.target_name || targetKindLabel;
+}
+
+function webhookDetailTargetSubtitle(route: WebhookRouteOut, targetKindLabel: string): string {
+  if (route.member_summary) return route.member_summary;
+  if (route.delivery_backend === "graph") {
+    return route.graph_user_principal_name || route.graph_team_name || route.graph_target_id || deliveryBackendLabel(route.delivery_backend);
+  }
+  return deliveryBackendLabel(route.delivery_backend);
+}
+
+function webhookUrlPreview(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const token = parts.length ? parts[parts.length - 1] : "";
+    const tokenPreview = token.length > 18 ? `${token.slice(0, 10)}...${token.slice(-6)}` : token;
+    return `${parsed.origin}/${parts.slice(0, -1).join("/")}/${tokenPreview}`;
+  } catch {
+    return url.length > 48 ? `${url.slice(0, 30)}...${url.slice(-12)}` : url;
+  }
+}
+
 function webhookRouteBackendShortLabel(backend: DeliveryBackend): string {
   return backend === "graph" ? "Graph" : "Bot";
 }
@@ -2356,12 +2383,12 @@ function WebhookRouteDetailPage({
             <h3>Target</h3>
             <div className="webhook-target-panel">
               <div>
-                <strong>{route.target_name || "Unnamed target"}</strong>
+                <strong>{webhookDetailTargetTitle(route, routeView.targetKindLabel)}</strong>
                 <span className="webhook-target-kind-row">
                   <StatusBadge label={routeView.targetKindLabel} tone="neutral" />
                   <span>{deliveryBackendLabel(route.delivery_backend)}</span>
                 </span>
-                {route.member_summary ? <small>{route.member_summary}</small> : null}
+                <small>{webhookDetailTargetSubtitle(route, routeView.targetKindLabel)}</small>
                 {route.members_refreshed_at ? <small>Members refreshed {formatRelativeTime(route.members_refreshed_at)}</small> : null}
                 {route.members_lookup_error ? <small className="form-error">{route.members_lookup_error}</small> : null}
               </div>
@@ -2371,7 +2398,7 @@ function WebhookRouteDetailPage({
           <div className="webhook-route-inspector-section">
             <h3>Relay URL</h3>
             <div className="webhook-route-url-action">
-              <code>{route.webhook_url || "Unavailable for old route"}</code>
+              <code title={route.webhook_url || undefined}>{route.webhook_url ? webhookUrlPreview(route.webhook_url) : "Unavailable for old route"}</code>
               <button
                 className="secondary-button secondary-button--small button-with-icon"
                 type="button"
@@ -2379,7 +2406,7 @@ function WebhookRouteDetailPage({
                 onClick={() => onCopyRoute(route)}
               >
                 <ClipboardCopy aria-hidden="true" className="button-icon" focusable="false" />
-                Copy URL
+                Copy
               </button>
             </div>
           </div>
