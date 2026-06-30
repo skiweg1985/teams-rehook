@@ -273,7 +273,7 @@ function EmptyGuidance({ title, body }: { title: string; body: string }) {
 function routeFromPath(pathname: string): RouteName {
   if (pathname === "/" || pathname === "/dashboard") return "dashboard";
   if (pathname === "/status") return "status";
-  if (pathname === "/webhooks") return "webhooks";
+  if (pathname === "/webhooks" || pathname.startsWith("/webhooks/")) return "webhooks";
   if (pathname === "/payload-generator") return "payload-generator";
   if (pathname === "/delivery") return "delivery";
   if (pathname === "/users") return "users";
@@ -517,12 +517,13 @@ function WebhookCopyPage() {
 
 function AppShell() {
   const { session, logout } = useAppContext();
-  const [route, setRoute] = useState<RouteName>(() => routeFromPath(window.location.pathname));
+  const [path, setPath] = useState(() => window.location.pathname);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const route = routeFromPath(path);
 
   useEffect(() => {
     const onPop = () => {
-      setRoute(routeFromPath(window.location.pathname));
+      setPath(window.location.pathname);
       setSidebarOpen(false);
     };
     window.addEventListener("popstate", onPop);
@@ -542,9 +543,9 @@ function AppShell() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [sidebarOpen]);
 
-  function navigate(next: RouteName, path: string) {
+  function navigate(path: string) {
     window.history.pushState(null, "", path);
-    setRoute(next);
+    setPath(path);
     setSidebarOpen(false);
   }
 
@@ -575,7 +576,7 @@ function AppShell() {
               key={item.route}
               type="button"
               className={classNames("nav-link", route === item.route && "nav-link--active")}
-              onClick={() => navigate(item.route, item.path)}
+              onClick={() => navigate(item.path)}
             >
               <span aria-hidden="true">{item.icon}</span>
               {item.label}
@@ -613,7 +614,7 @@ function AppShell() {
         {route === "payload-generator" ? <PayloadGeneratorPage /> : null}
         {route === "delivery" ? <DeliveryMethodsPage /> : null}
         {route === "users" ? <UsersPage /> : null}
-        {route === "settings" ? window.location.pathname.startsWith("/settings/graph-delivery/") ? <GraphDeliveryOAuthPage /> : <SettingsPage /> : null}
+        {route === "settings" ? path.startsWith("/settings/graph-delivery/") ? <GraphDeliveryOAuthPage /> : <SettingsPage /> : null}
         {route === "logs" ? <MessageLogsPage /> : null}
         {route === "system-logs" ? <SystemLogsPage /> : null}
       </main>
@@ -1474,6 +1475,7 @@ type WebhookRouteView = {
   tone: StatusTone;
   statusLabel: string;
   summary: string;
+  targetKindLabel: string;
   targetSummary: string;
   deliveryLabel: string;
   lastActivityLabel: string;
@@ -1491,6 +1493,7 @@ function buildWebhookRouteView(route: WebhookRouteOut, policy: DeliveryFeaturePo
   const tone = webhookRouteTone(route, featureEnabled);
   const statusLabel = webhookRouteStatusLabel(route, featureEnabled);
   const topIssue = webhookRouteTopIssue(route, featureEnabled);
+  const targetKindLabel = webhookTargetKindLabel(route);
   const targetSummary = webhookTargetSummary(route);
 
   return {
@@ -1502,6 +1505,7 @@ function buildWebhookRouteView(route: WebhookRouteOut, policy: DeliveryFeaturePo
         ? `Accepts relay requests for ${route.target_name || "the selected Teams target"}.`
         : "Route is active, but its delivery feature is disabled."
       : "Route is disabled and rejects incoming webhook requests.",
+    targetKindLabel,
     targetSummary,
     deliveryLabel,
     lastActivityLabel,
@@ -1511,6 +1515,7 @@ function buildWebhookRouteView(route: WebhookRouteOut, policy: DeliveryFeaturePo
     facts: [
       { label: "State", value: route.is_active ? "Active" : "Disabled", tone: route.is_active ? "success" : "warn" },
       { label: "Backend", value: deliveryBackendLabel(route.delivery_backend) },
+      { label: "Target", value: targetKindLabel },
       { label: "Client IP access", value: clientIpAccessLabel(route) },
       { label: "Delivery", value: deliveryLabel, tone: webhookDeliveryTone(route) },
       { label: "Last activity", value: lastActivityLabel },
@@ -1574,10 +1579,29 @@ function webhookRouteIssueDetail(route: WebhookRouteOut, featureEnabled: boolean
 
 function webhookTargetSummary(route: WebhookRouteOut): string {
   if (route.delivery_backend === "graph") {
-    const type = route.graph_target_kind ? capitalize(route.graph_target_kind) : "Graph target";
-    return `${type} · ${route.target_name || route.graph_target_id || "No target name"}`;
+    return route.graph_user_principal_name || route.graph_team_name || route.target_name || route.graph_target_id || "No target name";
   }
-  return route.target_name || "Bot conversation";
+  return route.member_summary || deliveryBackendLabel(route.delivery_backend);
+}
+
+function webhookRouteBackendShortLabel(backend: DeliveryBackend): string {
+  return backend === "graph" ? "Graph" : "Bot";
+}
+
+function webhookTargetKindLabel(route: WebhookRouteOut): string {
+  if (route.delivery_backend === "graph") {
+    if (route.graph_target_kind === "channel") return "Channel";
+    if (route.graph_target_kind === "chat") return "Group chat";
+    if (route.graph_target_kind === "user") return "1:1 chat";
+    if (route.graph_target_kind === "team") return "Team";
+    return "Graph target";
+  }
+  const targetName = route.target_name.toLowerCase();
+  const summary = route.member_summary.toLowerCase();
+  if (targetName.includes(" / ") || route.graph_channel_id) return "Channel";
+  if (route.member_count > 2 || summary.includes(",") || summary.includes(" members")) return "Group chat";
+  if (route.member_count > 0 && route.member_count <= 2) return "1:1 chat";
+  return "1:1 chat";
 }
 
 function clientIpAccessLabel(route: WebhookRouteOut): string {
@@ -1590,6 +1614,11 @@ function clientIpAccessLabel(route: WebhookRouteOut): string {
 
 function capitalize(value: string): string {
   return value ? value.charAt(0).toUpperCase() + value.slice(1) : value;
+}
+
+function currentWebhookRouteId(): string {
+  const match = window.location.pathname.match(/^\/webhooks\/([^/]+)$/);
+  return match ? decodeURIComponent(match[1]) : "";
 }
 
 function WebhooksPage() {
@@ -1611,8 +1640,8 @@ function WebhooksPage() {
   const [togglingId, setTogglingId] = useState("");
   const [refreshingRouteNameId, setRefreshingRouteNameId] = useState("");
   const [refreshingMembersId, setRefreshingMembersId] = useState("");
-  const [selectedRouteId, setSelectedRouteId] = useState("");
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
+  const routeDetailId = currentWebhookRouteId();
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -1642,6 +1671,7 @@ function WebhooksPage() {
       await api.deleteWebhookRoute(csrfToken, route.id);
       notify({ tone: "info", title: "Webhook route deleted", description: route.name });
       await refresh();
+      if (currentWebhookRouteId() === route.id) navigateInApp("/webhooks");
       setConfirmingDelete(null);
     } catch (err) {
       notify({
@@ -1780,68 +1810,61 @@ function WebhooksPage() {
   }
 
   const routeViews = routes.map((route) => buildWebhookRouteView(route, featurePolicy));
-  const defaultSelectedRouteId =
-    routeViews.find((view) => view.tone === "danger")?.route.id ??
-    routeViews.find((view) => view.tone === "warn")?.route.id ??
-    routeViews[0]?.route.id ??
-    "";
-  const selectedRouteView =
-    routeViews.find((view) => view.route.id === selectedRouteId) ??
-    routeViews.find((view) => view.route.id === defaultSelectedRouteId) ??
-    routeViews[0] ??
-    null;
-  const selectedRouteIdEffective = selectedRouteView?.route.id ?? defaultSelectedRouteId;
+  const selectedRouteView = routeDetailId ? routeViews.find((view) => view.route.id === routeDetailId) ?? null : null;
+  const pageTitle = routeDetailId && selectedRouteView ? selectedRouteView.route.name : "Webhooks";
+  const pageDescription =
+    routeDetailId && selectedRouteView
+      ? selectedRouteView.summary
+      : "Operate relay endpoints, validate delivery and inspect route health.";
 
   return (
     <>
       <PageIntro
-        eyebrow="Teams Rehook"
-        title="Webhook routes"
-        description="Operate relay endpoints, validate delivery and inspect route health without digging through raw diagnostics."
+        eyebrow={routeDetailId ? "Route workspace" : "Operations"}
+        title={pageTitle}
+        description={pageDescription}
         actions={
           <div className="row-actions">
-            <button
-              className="secondary-button button-with-icon"
-              type="button"
-              onClick={() => setViewingBotReferences(true)}
-            >
-              <MessageSquareText aria-hidden="true" className="button-icon" focusable="false" />
-              Known conversations
-            </button>
-            <button
-              className="primary-button button-with-icon"
-              type="button"
-              onClick={() => setEditing(emptyWebhookRoute(botDefaultServiceUrl))}
-            >
-              <Plus aria-hidden="true" className="button-icon" focusable="false" />
-              New route
-            </button>
+            {routeDetailId ? (
+              <button className="secondary-button button-with-icon" type="button" onClick={() => navigateInApp("/webhooks")}>
+                <ChevronLeft aria-hidden="true" className="button-icon" focusable="false" />
+                Back to routes
+              </button>
+            ) : (
+              <>
+                <button
+                  className="secondary-button button-with-icon"
+                  type="button"
+                  onClick={() => setViewingBotReferences(true)}
+                >
+                  <MessageSquareText aria-hidden="true" className="button-icon" focusable="false" />
+                  Known conversations
+                </button>
+                <button
+                  className="primary-button button-with-icon"
+                  type="button"
+                  onClick={() => setEditing(emptyWebhookRoute(botDefaultServiceUrl))}
+                >
+                  <Plus aria-hidden="true" className="button-icon" focusable="false" />
+                  New route
+                </button>
+              </>
+            )}
           </div>
         }
       />
-      <div className="webhooks-command-center">
-        <WebhookRouteSummary routeViews={routeViews} loading={loading} />
-        <WebhookRouteConsole
+      {routeDetailId ? (
+        <WebhookRouteDetailPage
           error={error}
-          loading={loading}
-          onCopyRoute={(route) => void copyText(route.webhook_url ?? "", route.name)}
-          onCreateRoute={() => setEditing(emptyWebhookRoute(botDefaultServiceUrl))}
-          onEditRoute={setEditing}
-          onRetry={() => void refresh()}
-          onSelectRoute={setSelectedRouteId}
-          onTestRoute={(route) => void testRoute(route)}
-          routeViews={routeViews}
-          selectedRouteId={selectedRouteIdEffective}
-          testingId={testingId}
-        />
-        <WebhookRouteInspector
           featurePolicy={featurePolicy}
+          loading={loading}
           onCopyRoute={(route) => void copyText(route.webhook_url ?? "", route.name)}
           onDeleteRoute={setConfirmingDelete}
           onEditRoute={setEditing}
           onRefreshMembers={(route) => void refreshRouteMembers(route)}
           onRefreshNames={(route) => void refreshRouteGraphNames(route)}
           onRegenerateRoute={setConfirmingRegeneration}
+          onRetry={() => void refresh()}
           onTestRoute={(route) => void testRoute(route)}
           onToggleRoute={(route) => void toggleRouteActive(route)}
           onViewLogs={setViewingLogs}
@@ -1852,7 +1875,23 @@ function WebhooksPage() {
           testingId={testingId}
           togglingId={togglingId}
         />
-      </div>
+      ) : (
+        <div className="webhooks-command-center">
+          <WebhookRouteSummary routeViews={routeViews} loading={loading} />
+          <WebhookRouteOverviewTable
+            error={error}
+            loading={loading}
+            onCopyRoute={(route) => void copyText(route.webhook_url ?? "", route.name)}
+            onCreateRoute={() => setEditing(emptyWebhookRoute(botDefaultServiceUrl))}
+            onEditRoute={setEditing}
+            onOpenRoute={(routeId) => navigateInApp(`/webhooks/${encodeURIComponent(routeId)}`)}
+            onRetry={() => void refresh()}
+            onTestRoute={(route) => void testRoute(route)}
+            routeViews={routeViews}
+            testingId={testingId}
+          />
+        </div>
+      )}
       {editing ? (
         <WebhookRouteModal
           route={editing.id ? editing : null}
@@ -1950,17 +1989,16 @@ function WebhookRouteSummary({ loading, routeViews }: { loading: boolean; routeV
   );
 }
 
-function WebhookRouteConsole({
+function WebhookRouteOverviewTable({
   error,
   loading,
   onCopyRoute,
   onCreateRoute,
   onEditRoute,
+  onOpenRoute,
   onRetry,
-  onSelectRoute,
   onTestRoute,
   routeViews,
-  selectedRouteId,
   testingId,
 }: {
   error: string;
@@ -1968,11 +2006,10 @@ function WebhookRouteConsole({
   onCopyRoute: (route: WebhookRouteOut) => void;
   onCreateRoute: () => void;
   onEditRoute: (route: WebhookRouteOut) => void;
+  onOpenRoute: (routeId: string) => void;
   onRetry: () => void;
-  onSelectRoute: (routeId: string) => void;
   onTestRoute: (route: WebhookRouteOut) => void;
   routeViews: WebhookRouteView[];
-  selectedRouteId: string;
   testingId: string;
 }) {
   if (loading) {
@@ -2018,23 +2055,31 @@ function WebhookRouteConsole({
   }
 
   return (
-    <section className="webhook-route-console" aria-label="Relay route console">
+    <section className="webhook-route-console webhook-route-console--overview" aria-label="Relay route console">
       <div className="webhook-route-console-header">
         <div>
           <p className="integration-kicker">Relay routes</p>
-          <h2>Route health</h2>
+          <h2>Operational overview</h2>
         </div>
         <span>{routeViews.length} routes</span>
       </div>
-      <div className="webhook-route-list" role="list">
+      <div className="webhook-route-table" role="table" aria-label="Webhook relay routes">
+        <div className="webhook-route-table-head" role="row">
+          <span>Route</span>
+          <span>Backend</span>
+          <span>Target</span>
+          <span>Status</span>
+          <span>Last activity</span>
+          <span>Delivery</span>
+          <span aria-label="Actions" />
+        </div>
         {routeViews.map((view) => (
-          <WebhookRouteRow
+          <WebhookRouteTableRow
             key={view.route.id}
             onCopyRoute={onCopyRoute}
             onEditRoute={onEditRoute}
-            onSelectRoute={onSelectRoute}
+            onOpenRoute={onOpenRoute}
             onTestRoute={onTestRoute}
-            selected={selectedRouteId === view.route.id}
             testing={testingId === view.route.id}
             view={view}
           />
@@ -2044,46 +2089,55 @@ function WebhookRouteConsole({
   );
 }
 
-function WebhookRouteRow({
+function WebhookRouteTableRow({
   onCopyRoute,
   onEditRoute,
-  onSelectRoute,
+  onOpenRoute,
   onTestRoute,
-  selected,
   testing,
   view,
 }: {
   onCopyRoute: (route: WebhookRouteOut) => void;
   onEditRoute: (route: WebhookRouteOut) => void;
-  onSelectRoute: (routeId: string) => void;
+  onOpenRoute: (routeId: string) => void;
   onTestRoute: (route: WebhookRouteOut) => void;
-  selected: boolean;
   testing: boolean;
   view: WebhookRouteView;
 }) {
   return (
-    <article className={classNames("webhook-route-row", selected && "webhook-route-row--selected")} role="listitem">
+    <article className="webhook-route-table-row" role="row" data-route-id={view.route.id}>
       <button
-        aria-pressed={selected}
-        className="webhook-route-row-main"
+        aria-label={`Open route ${view.route.name}`}
+        className="webhook-route-table-main"
         type="button"
-        onClick={() => onSelectRoute(view.route.id)}
+        onClick={() => onOpenRoute(view.route.id)}
       >
-        <span className={classNames("status-dot", `status-dot--${view.tone}`)} aria-hidden="true" />
-        <span className="webhook-route-row-title">
+        <span className="webhook-route-table-cell webhook-route-table-route">
           <strong>{view.route.name}</strong>
-          <small>{view.targetSummary}</small>
+          <small>{view.summary}</small>
         </span>
-        <span className="webhook-route-row-status">
+        <span className="webhook-route-table-cell webhook-route-table-backend">
+          <strong>{webhookRouteBackendShortLabel(view.route.delivery_backend)}</strong>
+          <small>{view.statusLabel}</small>
+        </span>
+        <WebhookRouteTargetCell view={view} />
+        <span className="webhook-route-table-cell">
+          <span className="webhook-route-status-line">
+            <span className={classNames("status-dot", `status-dot--${view.tone}`)} aria-hidden="true" />
+            <strong>{view.statusLabel}</strong>
+          </span>
+          <small>{view.topIssue}</small>
+        </span>
+        <span className="webhook-route-table-cell">
+          <strong>{view.lastActivityLabel}</strong>
+          <small>{view.route.last_delivery_at ? formatDateTime(view.route.last_delivery_at) : "No event recorded"}</small>
+        </span>
+        <span className="webhook-route-table-cell">
           <strong>{view.statusLabel}</strong>
-          <small>{view.lastActivityLabel}</small>
-        </span>
-        <span className="webhook-route-row-issue">
-          <span>{view.topIssue}</span>
           <small>{view.deliveryLabel}</small>
         </span>
       </button>
-      <div className="webhook-route-row-actions">
+      <div className="webhook-route-table-actions">
         {view.route.webhook_url ? (
           <IconButton label="Copy relay URL" icon={ClipboardCopy} onClick={() => onCopyRoute(view.route)} />
         ) : null}
@@ -2099,14 +2153,76 @@ function WebhookRouteRow({
   );
 }
 
-function WebhookRouteInspector({
+function WebhookRouteTargetCell({ view }: { view: WebhookRouteView }) {
+  const route = view.route;
+  const members = route.members.filter((member) => memberDisplayName(member));
+  const detailRows = webhookTargetDetailRows(view);
+
+  return (
+    <span className="webhook-route-table-cell webhook-route-target-cell">
+      <strong>{route.target_name || "Unnamed target"}</strong>
+      <small>{view.targetKindLabel}</small>
+      <span className="webhook-target-popover" aria-hidden="true">
+        <span className="webhook-target-popover-title">{view.targetKindLabel}</span>
+        <span className="webhook-target-popover-subtitle">{route.target_name || view.targetSummary}</span>
+        {members.length ? (
+          <span className="webhook-target-member-list">
+            {members.slice(0, 8).map((member) => (
+              <span className="webhook-target-member" key={member.id || member.aad_object_id || memberDisplayName(member)}>
+                <strong>{memberDisplayName(member)}</strong>
+                <small>{member.user_principal_name || member.email || member.aad_object_id || "Teams member"}</small>
+              </span>
+            ))}
+            {members.length > 8 ? <span className="webhook-target-popover-note">+{members.length - 8} more members</span> : null}
+          </span>
+        ) : (
+          <span className="webhook-target-detail-list">
+            {detailRows.map((row) => (
+              <span className="webhook-target-detail-row" key={row.label}>
+                <small>{row.label}</small>
+                <strong>{row.value}</strong>
+              </span>
+            ))}
+          </span>
+        )}
+      </span>
+    </span>
+  );
+}
+
+function memberDisplayName(member: WebhookRouteOut["members"][number]): string {
+  return member.name || member.user_principal_name || member.email || member.aad_object_id;
+}
+
+function webhookTargetDetailRows(view: WebhookRouteView): Array<{ label: string; value: string }> {
+  const route = view.route;
+  const rows = [
+    { label: "Type", value: view.targetKindLabel },
+    { label: "Backend", value: deliveryBackendLabel(route.delivery_backend) },
+    { label: "Target", value: route.target_name || "Unnamed target" },
+  ];
+  if (route.delivery_backend === "graph") {
+    if (route.graph_team_name) rows.push({ label: "Team", value: route.graph_team_name });
+    if (route.graph_user_principal_name) rows.push({ label: "User", value: route.graph_user_principal_name });
+    if (route.graph_target_id) rows.push({ label: "Graph target", value: shortId(route.graph_target_id) });
+  }
+  if (route.member_summary) rows.push({ label: "Members", value: route.member_summary });
+  if (route.members_refreshed_at) rows.push({ label: "Members refreshed", value: formatRelativeTime(route.members_refreshed_at) });
+  if (route.members_lookup_error) rows.push({ label: "Lookup", value: route.members_lookup_error });
+  return rows.slice(0, 7);
+}
+
+function WebhookRouteDetailPage({
+  error,
   featurePolicy,
+  loading,
   onCopyRoute,
   onDeleteRoute,
   onEditRoute,
   onRefreshMembers,
   onRefreshNames,
   onRegenerateRoute,
+  onRetry,
   onTestRoute,
   onToggleRoute,
   onViewLogs,
@@ -2117,13 +2233,16 @@ function WebhookRouteInspector({
   testingId,
   togglingId,
 }: {
+  error: string;
   featurePolicy: DeliveryFeaturePolicy;
+  loading: boolean;
   onCopyRoute: (route: WebhookRouteOut) => void;
   onDeleteRoute: (route: WebhookRouteOut) => void;
   onEditRoute: (route: WebhookRouteOut) => void;
   onRefreshMembers: (route: WebhookRouteOut) => void;
   onRefreshNames: (route: WebhookRouteOut) => void;
   onRegenerateRoute: (route: WebhookRouteOut) => void;
+  onRetry: () => void;
   onTestRoute: (route: WebhookRouteOut) => void;
   onToggleRoute: (route: WebhookRouteOut) => void;
   onViewLogs: (route: WebhookRouteOut) => void;
@@ -2134,22 +2253,66 @@ function WebhookRouteInspector({
   testingId: string;
   togglingId: string;
 }) {
-  if (!routeView) return null;
+  if (loading) {
+    return (
+      <Card>
+        <div className="table-state" role="status" aria-live="polite">
+          <div className="spinner spinner--small" aria-hidden="true" />
+          <p>Loading route workspace...</p>
+        </div>
+      </Card>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card>
+        <div className="table-state table-state--error" role="alert">
+          <h3>Could not load route</h3>
+          <p>{error}</p>
+          <button className="secondary-button secondary-button--small" type="button" onClick={onRetry}>
+            Retry
+          </button>
+        </div>
+      </Card>
+    );
+  }
+
+  if (!routeView) {
+    return (
+      <Card>
+        <EmptyState title="Route not found" body="This webhook route no longer exists or is not available to the current organization." />
+        <div className="form-actions form-actions--start">
+          <button className="secondary-button button-with-icon" type="button" onClick={() => navigateInApp("/webhooks")}>
+            <ChevronLeft aria-hidden="true" className="button-icon" focusable="false" />
+            Back to routes
+          </button>
+        </div>
+      </Card>
+    );
+  }
+
   const route = routeView.route;
+  const heroTone = routeView.tone;
 
   return (
-    <aside className="webhook-route-inspector" aria-label={`${route.name} route details`}>
-      <div className="webhook-route-inspector-header">
-        <div>
-          <p className="integration-kicker">Selected route</p>
-          <h2>{route.name}</h2>
-          <p>{routeView.summary}</p>
+    <div className="webhook-route-workspace" aria-label={`${route.name} route workspace`}>
+      <section className={classNames("status-relay-hero", `status-relay-hero--${heroTone}`)} aria-label="Route health">
+        <div className="status-relay-hero-main">
+          <div className={classNames("status-relay-indicator", `status-relay-indicator--${heroTone}`)} aria-hidden="true" />
+          <div>
+            <p className="integration-kicker">Route health</p>
+            <h2>{routeView.statusLabel === "Ready" ? "Route is ready for relay traffic" : routeView.topIssue}</h2>
+            <p>{routeView.topIssueDetail}</p>
+          </div>
         </div>
-        <div className={classNames("status-health-pill", `status-health-pill--${routeView.tone}`)}>
-          <span aria-hidden="true" />
-          <strong>{routeView.statusLabel}</strong>
+        <div className="status-relay-metrics">
+          <StatusOverviewMetric label="Status" value={routeView.statusLabel} detail={routeView.topIssue} tone={heroTone} />
+          <StatusOverviewMetric label="Backend" value={deliveryBackendLabel(route.delivery_backend)} detail={routeView.featureEnabled ? "Delivery feature ready." : "Feature is unavailable."} tone={routeView.featureEnabled ? "success" : "warn"} />
+          <StatusOverviewMetric label="Delivery" value={routeView.deliveryLabel} detail={routeView.lastActivityLabel} tone={webhookDeliveryTone(route)} />
+          <StatusOverviewMetric label="Access" value={clientIpAccessLabel(route)} detail={route.is_active ? "Accepts incoming requests." : "Incoming requests are paused."} tone={route.is_active ? "success" : "warn"} />
         </div>
-      </div>
+      </section>
 
       {routeView.tone !== "success" ? (
         <div className={classNames("status-detail-alert", routeView.tone === "danger" && "status-detail-alert--danger")}>
@@ -2158,42 +2321,63 @@ function WebhookRouteInspector({
         </div>
       ) : null}
 
-      <section className="webhook-route-inspector-section">
-        <h3>Overview</h3>
-        <StatusFactList facts={routeView.facts} />
-      </section>
+      <div className="webhook-route-workspace-grid">
+        <section className="webhook-route-inspector webhook-route-workspace-card">
+          <div className="webhook-route-inspector-header">
+            <div>
+              <p className="integration-kicker">Overview</p>
+              <h2>Operational state</h2>
+            </div>
+            <div className={classNames("status-health-pill", `status-health-pill--${routeView.tone}`)}>
+              <span aria-hidden="true" />
+              <strong>{routeView.statusLabel}</strong>
+            </div>
+          </div>
+          <StatusFactList facts={routeView.facts} />
+        </section>
 
-      <section className="webhook-route-inspector-section">
-        <h3>Target</h3>
-        <div className="webhook-target-panel">
+        <section className="webhook-route-inspector webhook-route-workspace-card">
+          <div className="webhook-route-inspector-section">
+            <h3>Target</h3>
+            <div className="webhook-target-panel">
+              <div>
+                <strong>{route.target_name || "Unnamed target"}</strong>
+                <span className="webhook-target-kind-row">
+                  <StatusBadge label={routeView.targetKindLabel} tone="neutral" />
+                  <span>{deliveryBackendLabel(route.delivery_backend)}</span>
+                </span>
+                {route.member_summary ? <small>{route.member_summary}</small> : null}
+                {route.members_refreshed_at ? <small>Members refreshed {formatRelativeTime(route.members_refreshed_at)}</small> : null}
+                {route.members_lookup_error ? <small className="form-error">{route.members_lookup_error}</small> : null}
+              </div>
+            </div>
+          </div>
+
+          <div className="webhook-route-inspector-section">
+            <h3>Relay URL</h3>
+            <div className="webhook-route-url-action">
+              <code>{route.webhook_url || "Unavailable for old route"}</code>
+              <button
+                className="secondary-button secondary-button--small button-with-icon"
+                type="button"
+                disabled={!route.webhook_url}
+                onClick={() => onCopyRoute(route)}
+              >
+                <ClipboardCopy aria-hidden="true" className="button-icon" focusable="false" />
+                Copy URL
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section className="webhook-route-inspector webhook-route-workspace-card">
+        <div className="webhook-route-inspector-header">
           <div>
-            <strong>{route.target_name || "Unnamed target"}</strong>
-            <span>{deliveryBackendLabel(route.delivery_backend)}</span>
-            {route.member_summary ? <small>{route.member_summary}</small> : null}
-            {route.members_refreshed_at ? <small>Members refreshed {formatRelativeTime(route.members_refreshed_at)}</small> : null}
-            {route.members_lookup_error ? <small className="form-error">{route.members_lookup_error}</small> : null}
+            <p className="integration-kicker">Operate</p>
+            <h2>Route actions</h2>
           </div>
         </div>
-      </section>
-
-      <section className="webhook-route-inspector-section">
-        <h3>Relay URL</h3>
-        <div className="webhook-route-url-action">
-          {!route.webhook_url ? <span className="muted">Unavailable for old route</span> : null}
-          <button
-            className="secondary-button secondary-button--small button-with-icon"
-            type="button"
-            disabled={!route.webhook_url}
-            onClick={() => onCopyRoute(route)}
-          >
-            <ClipboardCopy aria-hidden="true" className="button-icon" focusable="false" />
-            Copy URL
-          </button>
-        </div>
-      </section>
-
-      <section className="webhook-route-inspector-section">
-        <h3>Operator actions</h3>
         <div className="webhook-route-action-grid">
           <button
             className="primary-button button-with-icon"
@@ -2223,6 +2407,8 @@ function WebhookRouteInspector({
           </button>
         </div>
       </section>
+
+      <WebhookRouteRecentDeliveries route={route} />
 
       <details className="status-detail-disclosure">
         <summary>
@@ -2286,7 +2472,74 @@ function WebhookRouteInspector({
           </dl>
         </div>
       </details>
-    </aside>
+    </div>
+  );
+}
+
+function WebhookRouteRecentDeliveries({ route }: { route: WebhookRouteOut }) {
+  const [events, setEvents] = useState<WebhookDeliveryEventOut[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let mounted = true;
+    setLoading(true);
+    setError("");
+    api
+      .webhookRouteDeliveries(route.id)
+      .then((rows) => {
+        if (mounted) setEvents(rows.slice(0, 5));
+      })
+      .catch((err) => {
+        if (mounted) setError(isApiError(err) ? err.message : "Recent deliveries could not be loaded.");
+      })
+      .finally(() => {
+        if (mounted) setLoading(false);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [route.id]);
+
+  return (
+    <section className="webhook-route-inspector webhook-route-workspace-card">
+      <div className="webhook-route-inspector-header">
+        <div>
+          <p className="integration-kicker">Inspect</p>
+          <h2>Recent deliveries</h2>
+        </div>
+      </div>
+      {loading ? (
+        <div className="table-state" role="status" aria-live="polite">
+          <div className="spinner spinner--small" aria-hidden="true" />
+          <p>Loading delivery events...</p>
+        </div>
+      ) : null}
+      {error ? <p className="form-error">{error}</p> : null}
+      {!loading && !error && !events.length ? (
+        <EmptyGuidance title="No deliveries yet" body="Send a test message to create a first delivery event for this route." />
+      ) : null}
+      {events.length ? (
+        <div className="webhook-delivery-preview-table" role="table" aria-label="Recent route deliveries">
+          <div className="webhook-delivery-preview-head" role="row">
+            <span>Time</span>
+            <span>Status</span>
+            <span>Message</span>
+            <span>Result</span>
+          </div>
+          {events.map((event) => (
+            <div className="webhook-delivery-preview-row" role="row" key={event.id}>
+              <span>{formatRelativeTime(event.created_at)}</span>
+              <span>
+                <DeliveryEventStatusBadge status={event.status} />
+              </span>
+              <span>{eventTitle(event)}</span>
+              <span>{event.error || eventDeliveryMode(event)}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </section>
   );
 }
 
