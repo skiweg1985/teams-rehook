@@ -4903,24 +4903,26 @@ function DeliveryComponentCard({
               <p>{integration.description}</p>
             </span>
           </div>
-          <div className="delivery-component-health" aria-label={`${integration.title} health`}>
-            <DeliveryStatusGroup integration={integration} overridden={Boolean(item?.source === "environment" && item.is_overridden)} tokenLabel={tokenTooltip} />
-          </div>
-          <div className="delivery-component-state" aria-label={`${integration.title} state`}>
-            {item ? (
-              <label className="settings-switch delivery-method-switch" htmlFor={inputId}>
-                <input
-                  id={inputId}
-                  type="checkbox"
-                  checked={enabled}
-                  disabled={busy || graphDeliveryBlocked}
-                  onChange={(event) => void toggle(event.target.checked)}
-                  aria-describedby={error ? `${inputId}-error` : undefined}
-                />
-                <span aria-hidden="true" />
-                <strong>{busy ? "Saving..." : enabled ? "Enabled" : "Disabled"}</strong>
-              </label>
-            ) : null}
+          <div className="delivery-component-control">
+            <div className="delivery-component-health" aria-label={`${integration.title} health`}>
+              <DeliveryStatusGroup integration={integration} overridden={Boolean(item?.source === "environment" && item.is_overridden)} tokenLabel={tokenTooltip} />
+            </div>
+            <div className="delivery-component-state" aria-label={`${integration.title} state`}>
+              {item ? (
+                <label className="settings-switch delivery-method-switch" htmlFor={inputId}>
+                  <input
+                    id={inputId}
+                    type="checkbox"
+                    checked={enabled}
+                    disabled={busy || graphDeliveryBlocked}
+                    onChange={(event) => void toggle(event.target.checked)}
+                    aria-describedby={error ? `${inputId}-error` : undefined}
+                  />
+                  <span aria-hidden="true" />
+                  <strong>{busy ? "Saving..." : enabled ? "Enabled" : "Disabled"}</strong>
+                </label>
+              ) : null}
+            </div>
           </div>
           <div className="delivery-detail-hub" aria-label={`${integration.title} actions`}>
             <button
@@ -5974,7 +5976,7 @@ function buildBotIntegrationView(readiness: AdminReadinessOut, onCopy: (value: s
   return {
     id: "bot-framework",
     title: "Bot Framework",
-    description: "Teams conversation delivery",
+    description: "Teams delivery",
     enabled: readiness.bot.enabled,
     statusLabel: healthStateLabel(authStatus),
     tone: authStatusTone(authStatus),
@@ -6023,7 +6025,7 @@ function buildGraphLookupIntegrationView(readiness: AdminReadinessOut, onCopy: (
   return {
     id: "graph-lookup",
     title: "Graph lookup",
-    description: "Target discovery and names",
+    description: "Target lookup",
     enabled: readiness.graph_lookup.enabled,
     statusLabel: healthStateLabel(authStatus),
     tone: authStatusTone(authStatus),
@@ -6073,7 +6075,7 @@ function buildGraphDeliveryIntegrationView(
   return {
     id: "graph-delivery",
     title: "Graph delivery",
-    description: "Delegated Teams sends",
+    description: "Delegated sends",
     enabled: readiness.enabled,
     statusLabel: healthStateLabel(readiness.auth_status),
     tone: authStatusTone(readiness.auth_status),

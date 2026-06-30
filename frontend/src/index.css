@@ -2488,12 +2488,11 @@ html.dark .app-logo-image--dark {
   min-width: 0;
   display: grid;
   grid-template-columns:
-    minmax(240px, 1fr)
+    minmax(220px, 280px)
     max-content
-    max-content
-    max-content
+    minmax(max-content, 1fr)
     max-content;
-  grid-template-areas: "identity health state actions overflow";
+  grid-template-areas: "identity control actions overflow";
   align-items: center;
   gap: var(--space-4);
 }
@@ -2568,7 +2567,7 @@ html.dark .app-logo-image--dark {
   color: #6d28d9;
 }
 
-.delivery-component-health,
+.delivery-component-control,
 .delivery-component-state,
 .delivery-overflow-action {
   min-width: 0;
@@ -2576,13 +2575,20 @@ html.dark .app-logo-image--dark {
   align-items: center;
 }
 
-.delivery-component-health {
-  grid-area: health;
+.delivery-component-control {
+  grid-area: control;
   justify-content: flex-start;
+  gap: var(--space-3);
+}
+
+.delivery-component-health {
+  width: 86px;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
 }
 
 .delivery-component-state {
-  grid-area: state;
   justify-content: center;
 }
 
@@ -3225,10 +3231,9 @@ html.dark .app-logo-image--dark {
 @container delivery-card (max-width: 1060px) {
   .delivery-component-header {
     grid-template-columns:
-      minmax(220px, 1fr)
+      minmax(210px, 240px)
       max-content
-      max-content
-      max-content
+      minmax(max-content, 1fr)
       max-content;
     gap: var(--space-3);
   }
@@ -3263,16 +3268,11 @@ html.dark .app-logo-image--dark {
 @container delivery-card (max-width: 920px) {
   .delivery-component-header {
     grid-template-columns:
-      minmax(210px, 1fr)
+      minmax(200px, 220px)
       max-content
-      max-content
-      max-content
+      minmax(max-content, 1fr)
       max-content;
-    gap: var(--space-2);
-  }
-
-  .delivery-method-switch strong {
-    display: none;
+    gap: var(--space-3);
   }
 
   .delivery-detail-button--secondary,
@@ -3298,7 +3298,7 @@ html.dark .app-logo-image--dark {
     grid-template-columns: minmax(0, 1fr) max-content;
     grid-template-areas:
       "identity overflow"
-      "health state"
+      "control control"
       "actions actions";
     row-gap: var(--space-2);
   }
@@ -3308,13 +3308,17 @@ html.dark .app-logo-image--dark {
     border-right: 0;
   }
 
-  .delivery-component-state,
+  .delivery-component-control,
   .delivery-detail-hub {
     justify-content: flex-start;
   }
 }
 
 @container delivery-card (max-width: 520px) {
+  .delivery-method-switch strong {
+    display: none;
+  }
+
   .delivery-detail-hub {
     width: 100%;
     gap: var(--space-1);
@@ -3384,6 +3388,10 @@ html.dark .app-logo-image--dark {
 
 .delivery-method-switch {
   justify-self: end;
+}
+
+.delivery-method-switch strong {
+  min-width: 64px;
 }
 
 .delivery-method-row > .settings-warning,
