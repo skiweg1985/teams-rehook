@@ -364,11 +364,11 @@ function RouteActionButton({ item, measure = false }: { item: ResponsiveActionIt
   );
 }
 
-function EmptyGuidance({ title, body }: { title: string; body: string }) {
+function EmptyGuidance({ title, body }: { title: string; body?: string }) {
   return (
     <div className="empty-guidance">
       <strong>{title}</strong>
-      <p>{body}</p>
+      {body ? <p>{body}</p> : null}
     </div>
   );
 }
@@ -784,55 +784,47 @@ function DashboardPage() {
 
   return (
     <>
-      <PageIntro
-        eyebrow="Overview"
-        title="Teams Rehook dashboard"
-        description="Monitor relay routes, Teams conversations and recent delivery health from one operational view."
-      />
+      <PageIntro title="Dashboard" />
       <div className="metric-grid">
         <Card className="metric-card">
           <div className="metric-card__head">
             <span className="metric-icon" aria-hidden="true">
               <Webhook size={18} strokeWidth={2} />
             </span>
-            <span className="metric-label">Webhook routes</span>
+            <span className="metric-label">Routes</span>
           </div>
           <strong className="metric-value">{metricValue(counts.routes)}</strong>
-          <span className="metric-context">All configured relay routes</span>
         </Card>
         <Card className="metric-card">
           <div className="metric-card__head">
             <span className="metric-icon" aria-hidden="true">
               <Radio size={18} strokeWidth={2} />
             </span>
-            <span className="metric-label">Active routes</span>
+            <span className="metric-label">Active</span>
           </div>
           <strong className="metric-value">{metricValue(counts.active)}</strong>
-          <span className="metric-context">Currently accepting requests</span>
         </Card>
         <Card className={classNames("metric-card", !loading && !error && counts.attention > 0 ? "metric-card--alert" : null)}>
           <div className="metric-card__head">
             <span className="metric-icon" aria-hidden="true">
               <AlertTriangle size={18} strokeWidth={2} />
             </span>
-            <span className="metric-label">Needs attention</span>
+            <span className="metric-label">Delivery issues</span>
           </div>
           <strong className="metric-value">{metricValue(counts.attention)}</strong>
-          <span className="metric-context">Failed or rejected deliveries</span>
         </Card>
         <Card className="metric-card">
           <div className="metric-card__head">
             <span className="metric-icon" aria-hidden="true">
               <MessagesSquare size={18} strokeWidth={2} />
             </span>
-            <span className="metric-label">Known conversations</span>
+            <span className="metric-label">Conversations</span>
           </div>
           <strong className="metric-value">{metricValue(counts.conversations)}</strong>
-          <span className="metric-context">Captured Teams targets</span>
         </Card>
       </div>
       <div className="attention-grid">
-        <Card title="Needs attention" description="Routes with failed or rejected last delivery status.">
+        <Card title="Delivery issues">
           {attentionRoutes.length ? (
             <ul className="compact-list">
               {attentionRoutes.map((route) => (
@@ -843,57 +835,60 @@ function DashboardPage() {
               ))}
             </ul>
           ) : (
-            <EmptyGuidance
-              title="No delivery problems"
-              body="Failed or rejected route status will appear here after webhook requests or manual tests."
-            />
+            <EmptyGuidance title="No delivery issues" />
           )}
         </Card>
-        <Card title="Setup gaps" description="Routes and conversations that still need operator action.">
+        <Card title="Setup">
           <ul className="compact-list">
             {!references.length ? (
               <li>
-                <strong>No known conversations</strong>
-                <span>Add the bot to a Teams chat or channel, then send or mention the bot once.</span>
+                <strong>No conversations</strong>
+                <span>Add the bot, then send one message.</span>
               </li>
             ) : null}
             {untestedRoutes.map((route) => (
               <li key={route.id}>
                 <strong>{route.name}</strong>
-                <span>Send a test message before sharing the relay URL.</span>
+                <span>Send a test before sharing.</span>
               </li>
             ))}
             {inactiveRoutes.map((route) => (
               <li key={route.id}>
                 <strong>{route.name}</strong>
-                <span>Route is disabled and will reject incoming webhook requests.</span>
+                <span>Disabled.</span>
               </li>
             ))}
             {references.length && !untestedRoutes.length && !inactiveRoutes.length ? (
               <li>
-                <strong>No setup gaps</strong>
-                <span>Active routes have delivery history and known conversations are available.</span>
+                <strong>Setup complete</strong>
               </li>
             ) : null}
           </ul>
         </Card>
       </div>
-      <Card title="Recent webhook routes" description="Latest relay routes and their current delivery status.">
+      <Card title="Recent routes">
         <DataTable
+          className="data-table--dashboard-routes"
           columns={["Route", "Target", "Active", "Last delivery", "Updated"]}
-          rows={recentRoutes.map((route) => [
-            <strong>{route.name}</strong>,
-            <div className="stacked-cell">
-              <span>{route.target_name}</span>
-            </div>,
-            route.is_active ? <StatusBadge label="Active" tone="success" /> : <StatusBadge label="Disabled" tone="warn" />,
-            <DeliveryStatusBadge route={route} />,
-            formatDateTime(route.updated_at),
-          ])}
-          emptyTitle="No webhook routes"
-          emptyBody="Start by adding the bot to a Teams conversation, capture that conversation, create a route, then send a test message."
+          rows={recentRoutes.map((route) => {
+            const target = dashboardRouteTargetDisplay(route);
+            return [
+              <span className="dashboard-route-name" title={route.name}>
+                {route.name}
+              </span>,
+              <div className="stacked-cell dashboard-target-cell" title={target.full}>
+                <span className="dashboard-target-kind">{target.primary}</span>
+                {target.secondary ? <span className="dashboard-target-detail">{target.secondary}</span> : null}
+              </div>,
+              route.is_active ? <StatusBadge label="Active" tone="success" /> : <StatusBadge label="Disabled" tone="warn" />,
+              <DeliveryStatusBadge route={route} />,
+              formatDateTime(route.updated_at),
+            ];
+          })}
+          emptyTitle="No routes"
+          emptyBody="Create a route after the bot has captured a conversation."
           loading={loading}
-          loadingLabel="Loading recent webhook routes..."
+          loadingLabel="Loading routes..."
           error={error}
           onRetry={() => void refresh()}
           rowKey={(index) => recentRoutes[index]?.id ?? index}
@@ -901,6 +896,45 @@ function DashboardPage() {
       </Card>
     </>
   );
+}
+
+function dashboardRouteTargetDisplay(route: WebhookRouteOut): { primary: string; secondary: string; full: string } {
+  const target = webhookTargetPresentation(route);
+  const fallback = webhookRouteTargetSecondaryDetail(route, target);
+  const full = [target.kindLabel, fallback || target.title || route.target_name].filter(Boolean).join(": ");
+
+  if (target.kindLabel === "Group chat") {
+    const memberNames = webhookTargetMemberNames(route).map(compactDashboardPersonName);
+    return {
+      primary: target.kindLabel,
+      secondary: memberNames.length ? compactMemberSummary(memberNames, route.member_count || memberNames.length) : compactDashboardTargetText(fallback),
+      full,
+    };
+  }
+
+  if (target.kindLabel === "1:1 chat") {
+    return {
+      primary: target.kindLabel,
+      secondary: compactDashboardPersonName(fallback || target.title),
+      full,
+    };
+  }
+
+  return {
+    primary: target.kindLabel,
+    secondary: compactDashboardTargetText(fallback || target.title || route.target_name),
+    full,
+  };
+}
+
+function compactDashboardPersonName(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  return trimmed.split(" - ")[0]?.trim() || trimmed;
+}
+
+function compactDashboardTargetText(value: string): string {
+  return value.trim().replace(/\s+\+\s+(\d+)$/, " +$1");
 }
 
 function newPayloadFact(name = "", value = ""): PayloadFact {
@@ -2040,15 +2074,12 @@ function WebhooksPage() {
   const routeViews = routes.map((route) => buildWebhookRouteView(route, featurePolicy));
   const selectedRouteView = routeDetailId ? routeViews.find((view) => view.route.id === routeDetailId) ?? null : null;
   const pageTitle = routeDetailId && selectedRouteView ? selectedRouteView.route.name : "Webhooks";
-  const pageDescription =
-    routeDetailId && selectedRouteView
-      ? selectedRouteView.summary
-      : "Operate relay endpoints, validate delivery and inspect route health.";
+  const pageDescription = routeDetailId && selectedRouteView ? selectedRouteView.summary : undefined;
 
   return (
     <>
       <PageIntro
-        eyebrow={routeDetailId ? "Route workspace" : "Operations"}
+        eyebrow={routeDetailId ? "Route workspace" : undefined}
         title={pageTitle}
         description={pageDescription}
         actions={
@@ -2066,7 +2097,7 @@ function WebhooksPage() {
                   onClick={() => setViewingBotReferences(true)}
                 >
                   <MessageSquareText aria-hidden="true" className="button-icon" focusable="false" />
-                  Known conversations
+                  Conversations
                 </button>
                 <button
                   className="primary-button button-with-icon"
@@ -2074,7 +2105,7 @@ function WebhooksPage() {
                   onClick={() => setEditing(emptyWebhookRoute(botDefaultServiceUrl))}
                 >
                   <Plus aria-hidden="true" className="button-icon" focusable="false" />
-                  New route
+                  New
                 </button>
               </>
             )}
@@ -2191,19 +2222,16 @@ function WebhookRouteSummary({ loading, routeViews }: { loading: boolean; routeV
       <StatusOverviewMetric
         label="Routes"
         value={loading ? "..." : String(routeViews.length)}
-        detail={routeViews.length === 1 ? "1 relay endpoint." : `${routeViews.length} relay endpoints.`}
         tone="neutral"
       />
       <StatusOverviewMetric
         label="Active"
         value={loading ? "..." : `${activeCount}/${routeViews.length || 0}`}
-        detail={activeCount === routeViews.length && routeViews.length ? "All routes accept traffic." : "Some routes are paused."}
         tone={routeViews.length && activeCount === routeViews.length ? "success" : activeCount ? "warn" : "neutral"}
       />
       <StatusOverviewMetric
-        label="Attention"
+        label="Issues"
         value={loading ? "..." : attentionCount ? String(attentionCount) : "None"}
-        detail={attentionCount ? "Review the selected route." : "No open route issue."}
         tone={attentionCount ? "warn" : "success"}
       />
       <StatusOverviewMetric
@@ -2285,14 +2313,13 @@ function WebhookRouteOverviewTable({
     <section className="webhook-route-console webhook-route-console--overview" aria-label="Relay route console">
       <div className="webhook-route-console-header">
         <div>
-          <p className="integration-kicker">Relay routes</p>
-          <h2>Operational overview</h2>
+          <h2>Routes</h2>
         </div>
         <span>{routeViews.length} routes</span>
       </div>
       <div className="webhook-route-table" role="table" aria-label="Webhook relay routes">
         <div className="webhook-route-table-head" role="row">
-          <span>Route</span>
+          <span>Name</span>
           <span>Target</span>
           <span>Status</span>
           <span>Last activity</span>
@@ -2348,7 +2375,7 @@ function WebhookRouteTableRow({
             <span className={classNames("status-dot", `status-dot--${view.tone}`)} aria-hidden="true" />
             <strong>{view.statusLabel}</strong>
           </span>
-          <small>{view.topIssue}</small>
+          {view.topIssue === "No active issue" ? null : <small>{view.topIssue}</small>}
         </span>
         <span className="webhook-route-table-cell">
           <strong>{view.lastActivityLabel}</strong>
@@ -6301,7 +6328,7 @@ function StatusOverviewMetric({
   tone = "neutral",
   value,
 }: {
-  detail: string;
+  detail?: string;
   label: string;
   tone?: StatusTone;
   value: string;
@@ -6310,7 +6337,7 @@ function StatusOverviewMetric({
     <div className={classNames("status-overview-item", tone !== "neutral" && `status-overview-item--${tone}`)}>
       <span>{label}</span>
       <strong>{value}</strong>
-      <p>{detail}</p>
+      {detail ? <p>{detail}</p> : null}
     </div>
   );
 }

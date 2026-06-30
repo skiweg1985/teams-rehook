@@ -715,6 +715,70 @@ html.dark .app-logo-image--dark {
   border-bottom: 0;
 }
 
+.data-table--dashboard-routes {
+  table-layout: fixed;
+}
+
+.data-table--dashboard-routes th:nth-child(1),
+.data-table--dashboard-routes td:nth-child(1) {
+  width: 22%;
+}
+
+.data-table--dashboard-routes th:nth-child(2),
+.data-table--dashboard-routes td:nth-child(2) {
+  width: 31%;
+}
+
+.data-table--dashboard-routes th:nth-child(3),
+.data-table--dashboard-routes td:nth-child(3) {
+  width: 10%;
+}
+
+.data-table--dashboard-routes th:nth-child(4),
+.data-table--dashboard-routes td:nth-child(4) {
+  width: 13%;
+}
+
+.data-table--dashboard-routes th:nth-child(5),
+.data-table--dashboard-routes td:nth-child(5) {
+  width: 16%;
+}
+
+.dashboard-route-name {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 1rem;
+  font-weight: 800;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+}
+
+.dashboard-target-cell {
+  min-width: 0;
+}
+
+.dashboard-target-kind,
+.dashboard-target-detail {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-target-kind {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+.dashboard-target-detail {
+  color: var(--ink-secondary);
+  font-size: 0.875rem;
+}
+
 .data-table-row--interactive {
   cursor: pointer;
 }
