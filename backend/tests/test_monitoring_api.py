@@ -263,6 +263,11 @@ def test_monitoring_status_has_null_success_rate_without_delivery_events(client:
 def test_monitoring_prtg_returns_advanced_sensor_json_for_warning_status(
     client: TestClient, db_session: Session
 ):
+    admin = db_session.scalar(select(User).where(User.email == "admin@example.com"))
+    assert admin is not None
+    set_override(db_session, key="graph_delivery_enabled", value="false", updated_by_id=admin.id)
+    set_override(db_session, key="graph_lookup_enabled", value="false", updated_by_id=admin.id)
+    db_session.commit()
     now = utcnow()
     healthy = add_route(
         db_session,
@@ -288,8 +293,11 @@ def test_monitoring_prtg_returns_advanced_sensor_json_for_warning_status(
     body = response.json()
     assert set(body) == {"prtg"}
     assert isinstance(body["prtg"]["result"], list)
-    assert body["prtg"]["text"].startswith("Teams Rehook warn;")
-    assert "routes active=3/3, issues=2 (inactive=0, failed=1, rejected=0, untested_active=1)" in body["prtg"]["text"]
+    assert body["prtg"]["text"] == (
+        "Teams Rehook warning: 1 route last failed: Failed route; "
+        "1 active route has not been tested yet: Untested route; "
+        "recent webhook deliveries failed or were rejected in the last 5 minutes."
+    )
     assert channel_by_name(body, "Service State") == {
         "channel": "Service State",
         "value": 1,
@@ -394,7 +402,9 @@ def test_monitoring_prtg_maps_ok_status(client: TestClient, db_session: Session)
     assert response.status_code == 200
     body = response.json()
     assert channel_by_name(body, "Service State")["value"] == 0
-    assert body["prtg"]["text"].startswith("Teams Rehook ok;")
+    assert body["prtg"]["text"] == (
+        "Teams Rehook OK: All monitored components are ready and recent deliveries look healthy."
+    )
 
 
 def test_monitoring_prtg_maps_critical_status(db_session: Session, monkeypatch: pytest.MonkeyPatch):
@@ -404,4 +414,4 @@ def test_monitoring_prtg_maps_critical_status(db_session: Session, monkeypatch: 
     assert response.status_code == 200
     body = response.json()
     assert channel_by_name(body, "Service State")["value"] == 2
-    assert body["prtg"]["text"].startswith("Teams Rehook crit;")
+    assert body["prtg"]["text"] == "Teams Rehook critical: bot delivery is not ready (incomplete)."

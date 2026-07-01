@@ -213,26 +213,108 @@ def _prtg_service_state(status_value: str) -> int:
 
 
 def _prtg_text(status_out: MonitoringStatusOut) -> str:
+    status_label = {"ok": "OK", "warn": "warning", "crit": "critical"}.get(status_out.status, status_out.status)
+    return f"{status_out.service} {status_label}: {_prtg_status_message(status_out)}"
+
+
+def _prtg_status_message(status_out: MonitoringStatusOut) -> str:
+    if status_out.status == "ok":
+        return "All monitored components are ready and recent deliveries look healthy."
+
+    details = _prtg_status_details(status_out)
+    if details:
+        return "; ".join(details) + "."
+    return "Check the sensor channels for details."
+
+
+def _prtg_status_details(status_out: MonitoringStatusOut) -> list[str]:
     routes = status_out.routes
     short_window = status_out.rolling_windows.get("5m", MonitoringRollingWindowOut())
-    database = "ok" if status_out.database.ok else "failed"
-    recent_issues = short_window.delivery_failure_count + short_window.delivery_rejection_count
-    return (
-        f"{status_out.service} {status_out.status}; database {database}; "
-        f"routes active={routes.active}/{routes.total}, {_prtg_route_issues_text(routes)}; "
-        f"5m delivered={short_window.delivery_success_count}, issues={recent_issues}"
-    )
+    critical_details: list[str] = []
+    if not status_out.database.ok:
+        critical_details.append("the database check failed")
+    if status_out.readiness.bot.enabled and not status_out.readiness.bot.ready:
+        critical_details.append(f"bot delivery is not ready ({status_out.readiness.bot.auth_status})")
+    if status_out.status == "crit" and critical_details:
+        return critical_details
+
+    details = critical_details
+    if status_out.readiness.graph_lookup.enabled and not status_out.readiness.graph_lookup.ready:
+        details.append(f"Graph lookup is not ready ({status_out.readiness.graph_lookup.auth_status})")
+    if status_out.readiness.graph_delivery.enabled and not status_out.readiness.graph_delivery.ready:
+        details.append(f"Graph delivery is not ready ({status_out.readiness.graph_delivery.auth_status})")
+    details.extend(_prtg_route_problem_details(routes, status_out.problem_routes))
+    if short_window.delivery_failure_count or short_window.delivery_rejection_count:
+        details.append("recent webhook deliveries failed or were rejected in the last 5 minutes")
+    return details
 
 
-def _prtg_route_issues_text(routes: MonitoringRoutesOut) -> str:
-    route_issues = routes.inactive + routes.with_last_failure + routes.with_last_rejection + routes.untested_active
-    if not route_issues:
-        return "issues=0"
-    return (
-        f"issues={route_issues} "
-        f"(inactive={routes.inactive}, failed={routes.with_last_failure}, "
-        f"rejected={routes.with_last_rejection}, untested_active={routes.untested_active})"
+def _prtg_route_problem_details(
+    routes: MonitoringRoutesOut, problem_routes: list[MonitoringProblemRouteOut]
+) -> list[str]:
+    details: list[str] = []
+    inactive_names = _problem_route_names(
+        route for route in problem_routes if not route.is_active
     )
+    failed_names = _problem_route_names(
+        route for route in problem_routes if route.last_delivery_status == "failed"
+    )
+    rejected_names = _problem_route_names(
+        route for route in problem_routes if route.last_delivery_status == "rejected"
+    )
+    untested_names = _problem_route_names(
+        route for route in problem_routes if route.is_active and route.last_delivery_status is None
+    )
+    if routes.inactive:
+        details.append(_route_detail("route is inactive", "routes are inactive", routes.inactive, inactive_names))
+    if routes.with_last_failure:
+        details.append(
+            _route_detail(
+                "route last failed",
+                "routes last failed",
+                routes.with_last_failure,
+                failed_names,
+            )
+        )
+    if routes.with_last_rejection:
+        details.append(
+            _route_detail(
+                "route was last rejected",
+                "routes were last rejected",
+                routes.with_last_rejection,
+                rejected_names,
+            )
+        )
+    if routes.untested_active:
+        details.append(
+            _route_detail(
+                "active route has not been tested yet",
+                "active routes have not been tested yet",
+                routes.untested_active,
+                untested_names,
+            )
+        )
+    return details
+
+
+def _problem_route_names(routes) -> list[str]:
+    return [route.name for route in routes]
+
+
+def _route_detail(singular: str, plural: str, count: int, names: list[str]) -> str:
+    label = singular if count == 1 else plural
+    if not names:
+        return f"{count} {label}"
+    return f"{count} {label}: {_format_problem_route_names(names, count)}"
+
+
+def _format_problem_route_names(names: list[str], count: int) -> str:
+    visible_names = names[:3]
+    remaining = max(count - len(visible_names), 0)
+    formatted = ", ".join(visible_names)
+    if remaining:
+        return f"{formatted}, and {remaining} more"
+    return formatted
 
 
 def _route_counts(db: Session, *, delivery_backends: set[str] | None = None) -> MonitoringRoutesOut:
