@@ -294,13 +294,14 @@ def test_monitoring_prtg_returns_advanced_sensor_json_for_warning_status(
         "value": 1,
         "unit": "Custom",
         "customunit": "state",
-        "limitmode": 1,
-        "limitmaxwarning": 0.5,
-        "limitmaxerror": 1.5,
-        "limitwarningmsg": "Teams Rehook warning",
-        "limiterrormsg": "Teams Rehook critical",
+        "valuelookup": "prtg.standardlookups.wmi.diskhealth.health",
     }
-    assert channel_by_name(body, "Database OK") == {"channel": "Database OK", "value": 1, "unit": "Count"}
+    assert channel_by_name(body, "Database OK") == {
+        "channel": "Database OK",
+        "value": 1,
+        "unit": "Count",
+        "valuelookup": "prtg.standardlookups.boolean.statetrueok",
+    }
     assert channel_by_name(body, "Routes Total") == {"channel": "Routes Total", "value": 3, "unit": "Count"}
     assert channel_by_name(body, "Routes Last Failed") == {
         "channel": "Routes Last Failed",

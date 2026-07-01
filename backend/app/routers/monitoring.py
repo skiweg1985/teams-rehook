@@ -34,6 +34,8 @@ WINDOWS: dict[str, timedelta] = {
     "1h": timedelta(hours=1),
 }
 PROBLEM_ROUTE_LIMIT = 25
+PRTG_SERVICE_STATE_LOOKUP = "prtg.standardlookups.wmi.diskhealth.health"
+PRTG_BOOLEAN_TRUE_OK_LOOKUP = "prtg.standardlookups.boolean.statetrueok"
 
 
 def require_monitoring_api_key(authorization: str | None = Header(default=None, alias="Authorization")) -> None:
@@ -161,16 +163,12 @@ def _prtg_channels(status_out: MonitoringStatusOut) -> list[dict[str, object]]:
             "value": _prtg_service_state(status_out.status),
             "unit": "Custom",
             "customunit": "state",
-            "limitmode": 1,
-            "limitmaxwarning": 0.5,
-            "limitmaxerror": 1.5,
-            "limitwarningmsg": "Teams Rehook warning",
-            "limiterrormsg": "Teams Rehook critical",
+            "valuelookup": PRTG_SERVICE_STATE_LOOKUP,
         },
-        _prtg_count_channel("Database OK", int(status_out.database.ok)),
-        _prtg_count_channel("Bot Ready", int(status_out.readiness.bot.ready)),
-        _prtg_count_channel("Graph Lookup Ready", int(status_out.readiness.graph_lookup.ready)),
-        _prtg_count_channel("Graph Delivery Ready", int(status_out.readiness.graph_delivery.ready)),
+        _prtg_boolean_channel("Database OK", status_out.database.ok),
+        _prtg_boolean_channel("Bot Ready", status_out.readiness.bot.ready),
+        _prtg_boolean_channel("Graph Lookup Ready", status_out.readiness.graph_lookup.ready),
+        _prtg_boolean_channel("Graph Delivery Ready", status_out.readiness.graph_delivery.ready),
         _prtg_count_channel("Routes Total", status_out.routes.total),
         _prtg_count_channel("Routes Active", status_out.routes.active),
         _prtg_count_channel("Routes Inactive", status_out.routes.inactive),
@@ -193,6 +191,15 @@ def _prtg_channels(status_out: MonitoringStatusOut) -> list[dict[str, object]]:
 
 def _prtg_count_channel(channel: str, value: int) -> dict[str, object]:
     return {"channel": channel, "value": value, "unit": "Count"}
+
+
+def _prtg_boolean_channel(channel: str, value: bool) -> dict[str, object]:
+    return {
+        "channel": channel,
+        "value": int(value),
+        "unit": "Count",
+        "valuelookup": PRTG_BOOLEAN_TRUE_OK_LOOKUP,
+    }
 
 
 def _prtg_percent_channel(channel: str, success_rate: float | None) -> dict[str, object]:

@@ -173,7 +173,13 @@ curl "http://localhost:8080/api/v1/monitoring/prtg" \
     "result": [
       {
         "channel": "Service State",
-        "value": 0
+        "value": 0,
+        "valuelookup": "prtg.standardlookups.wmi.diskhealth.health"
+      },
+      {
+        "channel": "Database OK",
+        "value": 1,
+        "valuelookup": "prtg.standardlookups.boolean.statetrueok"
       }
     ],
     "text": "Teams Rehook ok; database ok; routes active=1/1, issues=0; 5m delivered=1, issues=0"
