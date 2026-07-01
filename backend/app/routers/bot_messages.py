@@ -669,7 +669,6 @@ def _route_command_activity(route: WebhookRoute, verb: str, reveal_url: str, cap
             ("Target", target_name),
             ("Scope", _scope_for(captured)),
         ],
-        long_fields=[("Webhook URL", "Open the button below to view and copy this URL.")],
         technical_fields=_technical_fields(captured),
         actions=[_copy_webhook_url_action(reveal_url)] if reveal_url else [],
     )
@@ -685,7 +684,6 @@ def _webhook_command_activity(route: WebhookRoute, reveal_url: str) -> dict[str,
             ("Status", "active" if route.is_active else "inactive"),
             ("Client IP access", _client_ip_access_summary(route)),
         ],
-        long_fields=[("Webhook URL", "Available through the button below.")],
         actions=[_copy_webhook_url_action(reveal_url)] if reveal_url else [],
     )
 
@@ -696,7 +694,6 @@ def _info_detail_command_activity(
     linked_route: WebhookRoute | None,
     reveal_url: str = "",
 ) -> dict[str, Any]:
-    long_fields = [("Webhook URL", "Available through the button below.")] if reveal_url else []
     actions = [_copy_webhook_url_action(reveal_url)] if reveal_url else []
     facts = [
         *_visible_context_facts(captured, linked_route),
@@ -709,7 +706,6 @@ def _info_detail_command_activity(
         "Teams conversation captured",
         "This is the Teams context currently available to the relay bot.",
         facts=facts,
-        long_fields=long_fields,
         technical_fields=_technical_fields(captured),
         actions=actions,
     )
