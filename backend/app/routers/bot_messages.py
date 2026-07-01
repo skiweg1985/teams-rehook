@@ -284,6 +284,7 @@ def delete_bot_conversation_reference(
     linked_route_ids = [route.id for route in linked_routes]
     for route in linked_routes:
         db.execute(update(WebhookDeliveryEvent).where(WebhookDeliveryEvent.route_id == route.id).values(route_id=None))
+        db.execute(delete(WebhookUrlRevealToken).where(WebhookUrlRevealToken.route_id == route.id))
         record_audit(
             db,
             action="webhook_route.deleted",
@@ -551,7 +552,7 @@ def _authorize_bot_command(
     )
     active_bot_user = bot_user if bot_user and bot_user.is_active else None
     group_ids, cache_status, cache_error = _bot_group_ids_for_sender(db, organization.id, aad_object_id)
-    if cache_status == "error":
+    if cache_status == "error" and active_bot_user is None:
         return BotCommandAuthorization(
             allowed=False,
             status="denied",
@@ -561,7 +562,7 @@ def _authorize_bot_command(
             cache_status=cache_status,
             cache_error=cache_error,
         )
-    bot_groups = _matching_bot_groups(db, organization.id, group_ids)
+    bot_groups = [] if cache_status == "error" else _matching_bot_groups(db, organization.id, group_ids)
     permissions = _union_bot_permissions([source for source in [active_bot_user, *bot_groups] if source is not None])
     if active_bot_user is None and not bot_groups:
         return BotCommandAuthorization(
@@ -1635,6 +1636,7 @@ def _delete_linked_route_command(db: Session, captured: dict[str, str], route_na
     route_name = route.name
     target_name = route.target_name
     db.execute(update(WebhookDeliveryEvent).where(WebhookDeliveryEvent.route_id == route_id).values(route_id=None))
+    db.execute(delete(WebhookUrlRevealToken).where(WebhookUrlRevealToken.route_id == route_id))
     _record_bot_route_audit(db, "webhook_route.deleted", route, captured)
     db.delete(route)
     db.flush()

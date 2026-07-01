@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from datetime import timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -69,6 +70,7 @@ ABUSE_REASON_PAYLOAD_TOO_LARGE = "payload_too_large"
 ABUSE_REASON_ROUTE_DISABLED = "route_disabled"
 ABUSE_REASON_UNKNOWN_ROUTE = "unknown_route"
 IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9._:-]{8,120}$")
+IDEMPOTENCY_PENDING_STALE_AFTER = timedelta(minutes=15)
 
 
 class PayloadTooLargeError(ValueError):
@@ -644,30 +646,26 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
 
     request_metadata = _request_metadata(request, body, idempotency_key=idempotency_key)
     if idempotency_key:
-        previous_delivery = _find_idempotent_delivery(db, route, idempotency_key)
-        if previous_delivery is not None:
-            if previous_delivery.status == "failed":
-                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=previous_delivery.error)
-            if previous_delivery.status == "pending":
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Webhook delivery is already being processed")
+        delivery, should_deliver = _reserve_idempotent_delivery(db, route, idempotency_key, request_metadata, message)
+        if not should_deliver:
             return WebhookDeliveryOut(
-                ok=previous_delivery.status == "delivered",
-                status=previous_delivery.status,
+                ok=delivery.status == "delivered",
+                status=delivery.status,
                 route_id=route.id,
-                delivery_event_id=previous_delivery.id,
+                delivery_event_id=delivery.id,
                 message="Webhook delivery already processed",
             )
-
+    else:
+        delivery = _record_event(
+            db,
+            route=route,
+            route_token_hash=route.route_token_hash,
+            status_value="pending",
+            request_metadata=request_metadata,
+            normalized_message=message.to_dict(),
+            delivery_result={"backend": _route_delivery_backend(route)},
+        )
     record_success(db, client_host=client_host, route_token_hash=token_hash)
-    delivery = _record_event(
-        db,
-        route=route,
-        route_token_hash=route.route_token_hash,
-        status_value="pending",
-        request_metadata=request_metadata,
-        normalized_message=message.to_dict(),
-        delivery_result={"backend": _route_delivery_backend(route)},
-    )
     db.commit()
     delivery = _deliver_to_route(db, route, message, request_metadata=request_metadata, delivery_event=delivery)
     db.commit()
@@ -717,20 +715,76 @@ def _request_idempotency_key(request: Request) -> str:
 
 
 def _find_idempotent_delivery(db: Session, route: WebhookRoute, idempotency_key: str) -> WebhookDeliveryEvent | None:
+    event = db.scalar(
+        select(WebhookDeliveryEvent)
+        .where(
+            WebhookDeliveryEvent.route_id == route.id,
+            WebhookDeliveryEvent.route_token_hash == route.route_token_hash,
+            WebhookDeliveryEvent.idempotency_key == idempotency_key,
+        )
+        .with_for_update()
+        .order_by(WebhookDeliveryEvent.created_at.desc(), WebhookDeliveryEvent.id.desc())
+    )
+    if event is not None:
+        return event
     events = db.scalars(
         select(WebhookDeliveryEvent)
         .where(
             WebhookDeliveryEvent.route_id == route.id,
             WebhookDeliveryEvent.route_token_hash == route.route_token_hash,
+            WebhookDeliveryEvent.idempotency_key.is_(None),
+            WebhookDeliveryEvent.request_metadata_json.contains(idempotency_key),
         )
         .order_by(WebhookDeliveryEvent.created_at.desc(), WebhookDeliveryEvent.id.desc())
-        .limit(50)
     ).all()
-    for event in events:
-        metadata = loads_json(event.request_metadata_json, {})
+    for legacy_event in events:
+        metadata = loads_json(legacy_event.request_metadata_json, {})
         if metadata.get("idempotency_key") == idempotency_key:
-            return event
+            return legacy_event
     return None
+
+
+def _reserve_idempotent_delivery(
+    db: Session,
+    route: WebhookRoute,
+    idempotency_key: str,
+    request_metadata: dict,
+    message: NormalizedMessage,
+) -> tuple[WebhookDeliveryEvent, bool]:
+    previous_delivery = _find_idempotent_delivery(db, route, idempotency_key)
+    if previous_delivery is not None:
+        return _idempotent_delivery_outcome(previous_delivery)
+    try:
+        with db.begin_nested():
+            delivery = _record_event(
+                db,
+                route=route,
+                route_token_hash=route.route_token_hash,
+                status_value="pending",
+                request_metadata=request_metadata,
+                normalized_message=message.to_dict(),
+                delivery_result={"backend": _route_delivery_backend(route)},
+                idempotency_key=idempotency_key,
+            )
+        return delivery, True
+    except IntegrityError:
+        previous_delivery = _find_idempotent_delivery(db, route, idempotency_key)
+        if previous_delivery is None:
+            raise
+        return _idempotent_delivery_outcome(previous_delivery)
+
+
+def _idempotent_delivery_outcome(delivery: WebhookDeliveryEvent) -> tuple[WebhookDeliveryEvent, bool]:
+    if delivery.status == "failed":
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=delivery.error)
+    if delivery.status == "pending" and not _pending_delivery_is_stale(delivery):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Webhook delivery is already being processed")
+    return delivery, delivery.status == "pending"
+
+
+def _pending_delivery_is_stale(delivery: WebhookDeliveryEvent) -> bool:
+    created_at = ensure_utc(delivery.created_at)
+    return created_at is None or utcnow() - created_at > IDEMPOTENCY_PENDING_STALE_AFTER
 
 
 def _get_org_route(db: Session, organization_id: str, route_id: str) -> WebhookRoute:
@@ -1026,6 +1080,7 @@ def _record_event(
     delivery_result: dict | None = None,
     error: str = "",
     event: WebhookDeliveryEvent | None = None,
+    idempotency_key: str | None = None,
 ) -> WebhookDeliveryEvent:
     if event is None:
         event = WebhookDeliveryEvent()
@@ -1033,6 +1088,8 @@ def _record_event(
     event.organization_id = route.organization_id if route else None
     event.route_id = route.id if route else None
     event.route_token_hash = route_token_hash
+    if idempotency_key is not None:
+        event.idempotency_key = idempotency_key
     event.status = status_value
     event.request_metadata_json = dumps_json(request_metadata)
     event.normalized_message_json = dumps_json(normalized_message or {})
