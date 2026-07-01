@@ -172,6 +172,27 @@ def test_webhook_url_reveal_rejects_unknown_token(client: TestClient):
     assert response.status_code == 404
 
 
+def test_delete_route_removes_webhook_url_reveal_tokens(client: TestClient, db_session: Session):
+    route = add_route(db_session, token="delete-route-token")
+    csrf_token = login_admin(client)
+    db_session.add(
+        WebhookUrlRevealToken(
+            organization_id=route.organization_id,
+            route_id=route.id,
+            token_hash=lookup_secret_hash("delete-route-reveal-token"),
+            expires_at=utcnow() + timedelta(hours=24),
+        )
+    )
+    db_session.commit()
+
+    response = client.delete(f"/api/v1/webhook-routes/{route.id}", headers={"X-CSRF-Token": csrf_token})
+
+    assert response.status_code == 204
+    assert db_session.get(WebhookRoute, route.id) is None
+    reveal_tokens = db_session.scalars(select(WebhookUrlRevealToken).where(WebhookUrlRevealToken.route_id == route.id)).all()
+    assert reveal_tokens == []
+
+
 def test_bot_conversation_reference_detail_returns_linked_routes(client: TestClient, db_session: Session):
     org = db_session.scalar(select(Organization).where(Organization.slug == "default"))
     assert org is not None

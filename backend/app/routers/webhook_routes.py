@@ -5,7 +5,7 @@ import re
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -326,6 +326,7 @@ def delete_webhook_route(
 ):
     route = _get_org_route(db, admin.organization_id, route_id)
     db.execute(update(WebhookDeliveryEvent).where(WebhookDeliveryEvent.route_id == route.id).values(route_id=None))
+    db.execute(delete(WebhookUrlRevealToken).where(WebhookUrlRevealToken.route_id == route.id))
     record_audit(
         db,
         action="webhook_route.deleted",
