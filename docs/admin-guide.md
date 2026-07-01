@@ -84,7 +84,6 @@ Real Bot Framework delivery requires:
 MS_APP_TENANT_ID=
 MS_APP_CLIENT_ID=
 MS_APP_CLIENT_SECRET=
-BOT_DEFAULT_SERVICE_URL=
 ```
 
 Delivery feature switches default to enabled and are controlled from the app's Delivery page. Disabled integrations are shown as disabled in readiness, excluded from the global monitoring rollup, and cannot be used for route setup or delivery.

@@ -22,7 +22,6 @@ from app.schemas import (
     WebhookDeliveryEventPageOut,
     WebhookDeliveryEventSummaryOut,
     LogCleanupOut,
-    WebhookRouteDefaultsOut,
     WebhookRouteCreate,
     WebhookRouteCreatedOut,
     WebhookRouteNameRefreshOut,
@@ -87,13 +86,6 @@ def list_webhook_routes(admin: User = Depends(require_admin), db: Session = Depe
         .order_by(WebhookRoute.updated_at.desc())
     ).all()
     return [_route_out(route) for route in routes]
-
-
-@router.get("/webhook-routes/defaults", response_model=WebhookRouteDefaultsOut)
-def webhook_route_defaults(admin: User = Depends(require_admin)):
-    _ = admin
-    settings = get_effective_settings()
-    return WebhookRouteDefaultsOut(bot_default_service_url=settings.bot_default_service_url.strip())
 
 
 @router.post(

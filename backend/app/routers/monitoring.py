@@ -216,12 +216,22 @@ def _prtg_text(status_out: MonitoringStatusOut) -> str:
     routes = status_out.routes
     short_window = status_out.rolling_windows.get("5m", MonitoringRollingWindowOut())
     database = "ok" if status_out.database.ok else "failed"
-    route_issues = routes.inactive + routes.with_last_failure + routes.with_last_rejection + routes.untested_active
     recent_issues = short_window.delivery_failure_count + short_window.delivery_rejection_count
     return (
         f"{status_out.service} {status_out.status}; database {database}; "
-        f"routes active={routes.active}/{routes.total}, issues={route_issues}; "
+        f"routes active={routes.active}/{routes.total}, {_prtg_route_issues_text(routes)}; "
         f"5m delivered={short_window.delivery_success_count}, issues={recent_issues}"
+    )
+
+
+def _prtg_route_issues_text(routes: MonitoringRoutesOut) -> str:
+    route_issues = routes.inactive + routes.with_last_failure + routes.with_last_rejection + routes.untested_active
+    if not route_issues:
+        return "issues=0"
+    return (
+        f"issues={route_issues} "
+        f"(inactive={routes.inactive}, failed={routes.with_last_failure}, "
+        f"rejected={routes.with_last_rejection}, untested_active={routes.untested_active})"
     )
 
 

@@ -1312,7 +1312,6 @@ def _bot_readiness(settings, delivery_mode: str) -> BotReadinessOut:
         "tenant_id": _configured_status(settings.ms_app_tenant_id),
         "client_id": _configured_status(settings.ms_app_client_id),
         "client_secret": _configured_status(settings.ms_app_client_secret),
-        "default_service_url": _configured_status(settings.bot_default_service_url),
     }
     credentials_configured = all(
         credential_fields[field] == "configured"
@@ -1332,7 +1331,6 @@ def _bot_readiness(settings, delivery_mode: str) -> BotReadinessOut:
             token_request_succeeded=False,
             mode=delivery_mode,
             credentials_configured=credentials_configured,
-            default_service_url_configured=credential_fields["default_service_url"] == "configured",
             credential_fields=credential_fields,
             oauth=oauth,
             message="Mock delivery is active. Token checks are skipped and Teams messages are simulated.",
@@ -1345,7 +1343,6 @@ def _bot_readiness(settings, delivery_mode: str) -> BotReadinessOut:
             token_request_succeeded=False,
             mode=delivery_mode,
             credentials_configured=False,
-            default_service_url_configured=credential_fields["default_service_url"] == "configured",
             credential_fields=credential_fields,
             oauth=oauth,
             message="Real delivery requires MS_APP_TENANT_ID, MS_APP_CLIENT_ID and MS_APP_CLIENT_SECRET.",
@@ -1372,7 +1369,6 @@ def _bot_readiness(settings, delivery_mode: str) -> BotReadinessOut:
             token_request_succeeded=False,
             mode=delivery_mode,
             credentials_configured=True,
-            default_service_url_configured=credential_fields["default_service_url"] == "configured",
             credential_fields=credential_fields,
             oauth=_oauth_diagnostics(
                 credential_source="ms_app",
@@ -1403,7 +1399,6 @@ def _bot_readiness(settings, delivery_mode: str) -> BotReadinessOut:
         token_request_succeeded=True,
         mode=delivery_mode,
         credentials_configured=True,
-        default_service_url_configured=credential_fields["default_service_url"] == "configured",
         credential_fields=credential_fields,
         oauth=oauth,
         message="Bot Framework token request succeeded. Delivery still requires a valid Teams conversation reference and bot permissions.",
@@ -1415,7 +1410,6 @@ def _disabled_bot_readiness(settings, delivery_mode: str) -> BotReadinessOut:
         "tenant_id": _configured_status(settings.ms_app_tenant_id),
         "client_id": _configured_status(settings.ms_app_client_id),
         "client_secret": _configured_status(settings.ms_app_client_secret),
-        "default_service_url": _configured_status(settings.bot_default_service_url),
     }
     return BotReadinessOut(
         enabled=False,
@@ -1428,7 +1422,6 @@ def _disabled_bot_readiness(settings, delivery_mode: str) -> BotReadinessOut:
             credential_fields[field] == "configured"
             for field in ["tenant_id", "client_id", "client_secret"]
         ),
-        default_service_url_configured=credential_fields["default_service_url"] == "configured",
         credential_fields=credential_fields,
         oauth=_oauth_diagnostics(
             credential_source="disabled",

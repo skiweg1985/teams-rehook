@@ -44,7 +44,6 @@ curl -i -X POST "http://localhost:8080/api/v1/auth/login" \
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `GET` | `/api/v1/webhook-routes` | Admin session | List routes for the current organization. |
-| `GET` | `/api/v1/webhook-routes/defaults` | Admin session | Returns route defaults such as `bot_default_service_url`. |
 | `POST` | `/api/v1/webhook-routes` | Admin session + CSRF | Create a route. |
 | `PATCH` | `/api/v1/webhook-routes/{route_id}` | Admin session + CSRF | Update a route. |
 | `DELETE` | `/api/v1/webhook-routes/{route_id}` | Admin session + CSRF | Delete a route and detach its delivery events. |

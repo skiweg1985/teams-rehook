@@ -330,10 +330,6 @@ export type WebhookDeliveryOut = {
   message: string;
 };
 
-export type WebhookRouteDefaultsOut = {
-  bot_default_service_url: string;
-};
-
 export type WebhookRouteNameRefreshOut = {
   ok: boolean;
   routes_checked: number;
@@ -437,7 +433,6 @@ export type AdminReadinessOut = {
     token_request_succeeded: boolean;
     mode: string;
     credentials_configured: boolean;
-    default_service_url_configured: boolean;
     credential_fields: Record<string, string>;
     oauth: OAuthDiagnosticsOut;
   };

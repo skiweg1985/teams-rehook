@@ -38,7 +38,6 @@ import type {
   WebhookDeliveryOut,
   WebhookDeliveryStatus,
   WebhookRouteCreate,
-  WebhookRouteDefaultsOut,
   WebhookRouteNameRefreshOut,
   WebhookRouteOut,
   WebhookRouteTestRequest,
@@ -318,9 +317,6 @@ export const api = {
   },
   webhookRoutes() {
     return request<WebhookRouteOut[]>("/api/v1/webhook-routes");
-  },
-  webhookRouteDefaults() {
-    return request<WebhookRouteDefaultsOut>("/api/v1/webhook-routes/defaults");
   },
   botConversationReferences() {
     return request<BotConversationReferenceOut[]>("/api/v1/bot/conversation-references");

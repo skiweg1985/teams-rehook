@@ -47,7 +47,6 @@ class Settings(BaseSettings):
     botframework_scope: str = "https://api.botframework.com/.default"
     graph_scope: str = "https://graph.microsoft.com/.default"
     bot_delivery_mode: str = "real"
-    bot_default_service_url: str = ""
     webhook_max_payload_bytes: int = 64_000
     webhook_abuse_blocking_enabled: bool = True
     webhook_abuse_failure_limit: int = 10

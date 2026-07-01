@@ -289,6 +289,7 @@ def test_monitoring_prtg_returns_advanced_sensor_json_for_warning_status(
     assert set(body) == {"prtg"}
     assert isinstance(body["prtg"]["result"], list)
     assert body["prtg"]["text"].startswith("Teams Rehook warn;")
+    assert "routes active=3/3, issues=2 (inactive=0, failed=1, rejected=0, untested_active=1)" in body["prtg"]["text"]
     assert channel_by_name(body, "Service State") == {
         "channel": "Service State",
         "value": 1,

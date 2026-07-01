@@ -43,9 +43,6 @@ APPLICATION_SETTINGS: dict[str, SettingDefinition] = {
 }
 
 OVERRIDABLE_SETTINGS: dict[str, SettingDefinition] = {
-    "bot_default_service_url": SettingDefinition(
-        "bot_default_service_url", "Bot default service URL", "url", False
-    ),
     "webhook_max_payload_bytes": SettingDefinition(
         "webhook_max_payload_bytes", "Webhook payload limit", "int", False
     ),

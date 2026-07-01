@@ -1975,7 +1975,6 @@ function WebhooksPage() {
   const [confirmingDelete, setConfirmingDelete] = useState<WebhookRouteOut | null>(null);
   const [regeneratedUrl, setRegeneratedUrl] = useState<{ routeName: string; url: string } | null>(null);
   const [viewingBotReferences, setViewingBotReferences] = useState(false);
-  const [botDefaultServiceUrl, setBotDefaultServiceUrl] = useState("");
   const [featurePolicy, setFeaturePolicy] = useState<DeliveryFeaturePolicy>(DEFAULT_DELIVERY_FEATURE_POLICY);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -2006,10 +2005,6 @@ function WebhooksPage() {
   useEffect(() => {
     void refresh();
   }, [csrfToken, refresh]);
-
-  useEffect(() => {
-    void api.webhookRouteDefaults().then((defaults) => setBotDefaultServiceUrl(defaults.bot_default_service_url));
-  }, []);
 
   async function deleteRoute(route: WebhookRouteOut) {
     setDeletingId(route.id);
@@ -2179,7 +2174,7 @@ function WebhooksPage() {
                 <button
                   className="primary-button button-with-icon"
                   type="button"
-                  onClick={() => setEditing(emptyWebhookRoute(botDefaultServiceUrl))}
+                  onClick={() => setEditing(emptyWebhookRoute())}
                 >
                   <Plus aria-hidden="true" className="button-icon" focusable="false" />
                   New
@@ -2227,7 +2222,7 @@ function WebhooksPage() {
             error={error}
             loading={loading}
             onCopyRoute={(route) => void copyText(route.webhook_url ?? "", route.name)}
-            onCreateRoute={() => setEditing(emptyWebhookRoute(botDefaultServiceUrl))}
+            onCreateRoute={() => setEditing(emptyWebhookRoute())}
             onEditRoute={setEditing}
             onOpenRoute={(routeId) => navigateInApp(`/webhooks/${encodeURIComponent(routeId)}`)}
             onRetry={() => void refresh()}
@@ -3467,7 +3462,7 @@ function DeliveryStatusBadge({ route }: { route: WebhookRouteOut }) {
   );
 }
 
-function emptyWebhookRoute(botDefaultServiceUrl = ""): WebhookRouteOut {
+function emptyWebhookRoute(): WebhookRouteOut {
   return {
     id: "",
     organization_id: "",
@@ -3478,7 +3473,7 @@ function emptyWebhookRoute(botDefaultServiceUrl = ""): WebhookRouteOut {
     client_ip_allowlist: "",
     target_type: "bot_conversation",
     target_name: "",
-    bot_service_url: botDefaultServiceUrl,
+    bot_service_url: "",
     bot_conversation_id: "",
     graph_target_kind: "",
     graph_target_id: "",
@@ -3508,7 +3503,7 @@ function emptyWebhookRoute(botDefaultServiceUrl = ""): WebhookRouteOut {
 function webhookRouteFromReference(reference: BotConversationReferenceOut): WebhookRouteOut {
   const kind = referenceGraphKind(reference);
   return {
-    ...emptyWebhookRoute(reference.service_url),
+    ...emptyWebhookRoute(),
     target_name: referenceTargetName(reference),
     bot_service_url: reference.service_url,
     bot_conversation_id: reference.conversation_id,
@@ -6455,13 +6450,6 @@ const SETTING_META: Record<string, SettingMeta> = {
     display: "switch",
     sourceLabel: "App",
   },
-  bot_default_service_url: {
-    section: "runtime",
-    label: "Default service URL",
-    description: "Fallback Bot Framework endpoint for routes without a captured URL.",
-    display: "technical",
-    sourceLabel: "Bot Framework",
-  },
   webhook_max_payload_bytes: {
     section: "runtime",
     label: "Payload limit",
@@ -6572,7 +6560,6 @@ const RUNTIME_SETTING_KEYS = [
   "frontend_base_url",
   "cors_origins",
   "session_secure_cookie",
-  "bot_default_service_url",
   "webhook_max_payload_bytes",
   "webhook_url_reveal_ttl_hours",
   "webhook_abuse_blocking_enabled",
@@ -7588,11 +7575,10 @@ function RuntimeDefaultsCard({
   settings,
   settingsByKey,
 }: SettingsCardProps) {
-  const urlSettings = settings.filter((item) => item.type === "url" && item.key !== "bot_default_service_url");
+  const urlSettings = settings.filter((item) => item.type === "url");
   const browserSettings = settings.filter((item) => item.key === "cors_origins" || item.key === "session_secure_cookie");
   const limitSettings = settings.filter((item) => item.type === "int" && !item.key.startsWith("webhook_abuse_"));
   const abuseSettings = orderedSettings(ABUSE_SETTING_KEYS, settingsByKey);
-  const fallbackSettings = settings.filter((item) => item.key === "bot_default_service_url");
   const proxySettings = settings.filter((item) => item.key === "trust_x_forwarded_for");
 
   return (
@@ -7603,7 +7589,7 @@ function RuntimeDefaultsCard({
             <h3>URLs</h3>
             <p>Copied into generated links and fallback delivery paths.</p>
           </div>
-          {[...urlSettings, ...browserSettings, ...fallbackSettings].map((item) => (
+          {[...urlSettings, ...browserSettings].map((item) => (
             <RuntimeSettingControl
               key={item.key}
               item={item}
@@ -8012,21 +7998,12 @@ function buildBotIntegrationView(readiness: AdminReadinessOut, onCopy: (value: s
     lastCheckedLabel: oauth.token.checked ? "Current request" : "Not checked",
     badges: [
       { label: readiness.bot.enabled ? "Enabled" : "Disabled", tone: readiness.bot.enabled ? "success" : "neutral" },
-      {
-        label: readiness.bot.default_service_url_configured ? "Service URL set" : "No service URL",
-        tone: readiness.bot.default_service_url_configured ? "success" : "warn",
-      },
     ],
     facts: oauthFacts(oauth),
     healthChecks: [
       { label: "Availability", value: readiness.bot.enabled ? "Enabled" : "Disabled", tone: readiness.bot.enabled ? "success" : "neutral" },
       { label: "App credentials", value: readiness.bot.credentials_configured ? "Configured" : "Missing", tone: readiness.bot.credentials_configured ? "success" : "warn" },
       { label: "Token request", value: tokenFact(oauth), tone: oauth.token.succeeded ? "success" : oauth.token.checked ? "danger" : "neutral" },
-      {
-        label: "Default service URL",
-        value: readiness.bot.default_service_url_configured ? "Configured" : "Missing",
-        tone: readiness.bot.default_service_url_configured ? "success" : "warn",
-      },
     ],
     capabilities: [
       { label: "Message path", value: "Bot conversation" },
@@ -8036,7 +8013,6 @@ function buildBotIntegrationView(readiness: AdminReadinessOut, onCopy: (value: s
       ["Tenant ID", credentialStatusLabel(readiness.bot.credential_fields.tenant_id)],
       ["Client ID", credentialStatusLabel(readiness.bot.credential_fields.client_id)],
       ["Client secret", credentialStatusLabel(readiness.bot.credential_fields.client_secret)],
-      ["Default service URL", credentialStatusLabel(readiness.bot.credential_fields.default_service_url)],
     ],
     permissionSummary: permissionSummary(oauth),
     permissionBadges: oauthPermissionBadges(oauth, permissionTone),

@@ -73,7 +73,6 @@ def make_client(db_session: Session, monkeypatch: pytest.MonkeyPatch, **env: str
         "MS_APP_TENANT_ID": "",
         "MS_APP_CLIENT_ID": "",
         "MS_APP_CLIENT_SECRET": "",
-        "BOT_DEFAULT_SERVICE_URL": "",
         "APP_PUBLIC_BASE_URL": "http://localhost:5173",
         "FRONTEND_BASE_URL": "http://localhost:5173",
         "CORS_ORIGINS": "http://localhost:5173,http://localhost",
@@ -259,7 +258,6 @@ def test_readiness_checks_bot_token_for_real_delivery(db_session: Session, monke
         "tenant_id": "configured",
         "client_id": "configured",
         "client_secret": "configured",
-        "default_service_url": "missing",
     }
     assert body["bot"]["oauth"]["tenant_id"] == "tenant"
     assert body["bot"]["oauth"]["client_id"] == "client"

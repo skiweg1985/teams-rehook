@@ -482,10 +482,6 @@ class WebhookDeliveryOut(BaseModel):
     message: str
 
 
-class WebhookRouteDefaultsOut(BaseModel):
-    bot_default_service_url: str = ""
-
-
 class WebhookUrlRevealOut(BaseModel):
     webhook_url: str
     route_name: str
@@ -603,7 +599,6 @@ class OAuthDiagnosticsOut(BaseModel):
 class BotReadinessOut(ReadinessComponentOut):
     mode: str
     credentials_configured: bool
-    default_service_url_configured: bool
     credential_fields: dict[str, str]
     oauth: OAuthDiagnosticsOut
 
