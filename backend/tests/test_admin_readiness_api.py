@@ -741,6 +741,9 @@ def test_graph_delivery_oauth_pending_confirm_promotes_credential(db_session: Se
         )
 
     assert response.status_code == 200
+    body = response.json()
+    assert body["graph_delivery"]["service_user_display_name"] == "Pending User"
+    assert body["runtime"]["app_public_base_url"] == "http://localhost:5173"
     row = db_session.query(GraphDelegatedCredential).one()
     assert row.id == active.id
     assert row.service_user_display_name == "Pending User"

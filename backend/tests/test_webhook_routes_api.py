@@ -376,7 +376,13 @@ def test_bot_conversation_reference_delete_removes_linked_routes_and_preserves_o
         route_token_hash=linked.route_token_hash,
         status="delivered",
     )
-    db_session.add(event)
+    reveal = WebhookUrlRevealToken(
+        organization_id=org.id,
+        route_id=linked.id,
+        token_hash=lookup_secret_hash("linked-chat-reveal-token"),
+        expires_at=utcnow() + timedelta(hours=24),
+    )
+    db_session.add_all([event, reveal])
     db_session.commit()
     linked_id = linked.id
     other_id = other.id
@@ -392,6 +398,7 @@ def test_bot_conversation_reference_delete_removes_linked_routes_and_preserves_o
     assert db_session.get(BotConversationReference, reference.id) is None
     assert db_session.get(WebhookRoute, linked_id) is None
     assert db_session.get(WebhookRoute, other_id) is not None
+    assert db_session.scalars(select(WebhookUrlRevealToken).where(WebhookUrlRevealToken.route_id == linked_id)).all() == []
     db_session.expire_all()
     delivery_event = db_session.get(WebhookDeliveryEvent, event_id)
     assert delivery_event is not None
@@ -729,6 +736,101 @@ def test_public_webhook_idempotency_key_prevents_duplicate_delivery(
     assert second.status_code == 200
     assert second.json()["delivery_event_id"] == first.json()["delivery_event_id"]
     assert deliveries == 1
+    events = db_session.scalars(select(WebhookDeliveryEvent).where(WebhookDeliveryEvent.route_id == route.id)).all()
+    assert len(events) == 1
+    assert events[0].idempotency_key == "retry-key-123"
+
+
+def test_public_webhook_idempotency_key_finds_legacy_event_beyond_recent_window(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    route = add_route(db_session, token="legacy-idempotent-token")
+    deliveries = 0
+    legacy_key = "legacy-retry-key-123"
+    legacy = WebhookDeliveryEvent(
+        organization_id=route.organization_id,
+        route_id=route.id,
+        route_token_hash=route.route_token_hash,
+        status="delivered",
+        request_metadata_json=dumps_json({"idempotency_key": legacy_key}),
+        created_at=utcnow() - timedelta(hours=2),
+    )
+    db_session.add(legacy)
+    for index in range(55):
+        db_session.add(
+            WebhookDeliveryEvent(
+                organization_id=route.organization_id,
+                route_id=route.id,
+                route_token_hash=route.route_token_hash,
+                status="delivered",
+                created_at=utcnow() - timedelta(minutes=55 - index),
+            )
+        )
+    db_session.commit()
+
+    def fake_send_bot_activity(**kwargs):
+        nonlocal deliveries
+        deliveries += 1
+        raise AssertionError("Legacy idempotent retry should not send again")
+
+    monkeypatch.setattr("app.routers.webhook_routes.send_bot_activity", fake_send_bot_activity)
+
+    response = client.post(
+        "/api/v1/webhooks/legacy-idempotent-token",
+        json={"text": "hello again"},
+        headers={"Idempotency-Key": legacy_key},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["delivery_event_id"] == legacy.id
+    assert deliveries == 0
+
+
+def test_public_webhook_retries_stale_pending_idempotency_event(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    route = add_route(db_session, token="stale-pending-token")
+    stale_key = "stale-retry-key-123"
+    pending = WebhookDeliveryEvent(
+        organization_id=route.organization_id,
+        route_id=route.id,
+        route_token_hash=route.route_token_hash,
+        idempotency_key=stale_key,
+        status="pending",
+        request_metadata_json=dumps_json({"idempotency_key": stale_key}),
+        created_at=utcnow() - timedelta(minutes=30),
+    )
+    db_session.add(pending)
+    db_session.commit()
+
+    class FakeBotResult:
+        def to_dict(self):
+            return {"mode": "mock", "activity_id": "activity-id", "status_code": 202, "activity": {"type": "message"}}
+
+    deliveries = 0
+
+    def fake_send_bot_activity(**kwargs):
+        nonlocal deliveries
+        deliveries += 1
+        return FakeBotResult()
+
+    monkeypatch.setattr("app.routers.webhook_routes.send_bot_activity", fake_send_bot_activity)
+
+    response = client.post(
+        "/api/v1/webhooks/stale-pending-token",
+        json={"text": "hello"},
+        headers={"Idempotency-Key": stale_key},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["delivery_event_id"] == pending.id
+    assert deliveries == 1
+    db_session.refresh(pending)
+    assert pending.status == "delivered"
     events = db_session.scalars(select(WebhookDeliveryEvent).where(WebhookDeliveryEvent.route_id == route.id)).all()
     assert len(events) == 1
 

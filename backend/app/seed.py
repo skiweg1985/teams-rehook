@@ -392,6 +392,9 @@ def _ensure_additive_schema() -> None:
         "bot_authorized_groups": {
             "role_id": "VARCHAR(36) NULL",
         },
+        "webhook_delivery_events": {
+            "idempotency_key": "VARCHAR(120) NULL",
+        },
         "webhook_abuse_buckets": {
             "last_client_host": "TEXT DEFAULT '' NOT NULL",
         },
@@ -420,6 +423,15 @@ def _ensure_additive_schema() -> None:
             for column_name, column_type in columns_to_add.items():
                 if column_name not in existing_columns:
                     connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
+        connection.execute(
+            text(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS ix_webhook_delivery_events_route_id_idempotency_key_unique
+                ON webhook_delivery_events (route_id, idempotency_key)
+                WHERE idempotency_key IS NOT NULL
+                """
+            )
+        )
 
 
 def _ensure_obsolete_webhook_route_columns_removed() -> None:

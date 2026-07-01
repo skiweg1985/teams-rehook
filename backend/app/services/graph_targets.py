@@ -15,6 +15,7 @@ from app.security import utcnow
 
 
 GraphTargetKind = Literal["user", "team", "channel", "chat", "group"]
+MAX_GRAPH_PAGINATION_PAGES = 25
 
 
 class GraphConfigError(RuntimeError):
@@ -175,7 +176,7 @@ def list_group_transitive_members(
         return GraphGroupMemberPage(items=[], offset=offset, limit=limit, has_more=False)
     limit = max(1, min(limit, 200))
     offset = max(offset, 0)
-    data_pages = _graph_get_pages(
+    data_pages = _iter_graph_pages(
         f"/groups/{urllib.parse.quote(group_id, safe='')}/transitiveMembers/microsoft.graph.user",
         {"$select": "id,displayName,userPrincipalName,mail", "$top": "999"},
     )
@@ -451,15 +452,21 @@ def _graph_get_text(path: str, params: dict[str, str], *, headers: dict[str, str
 
 
 def _graph_get_pages(path: str, params: dict[str, str]) -> list[dict]:
+    return list(_iter_graph_pages(path, params))
+
+
+def _iter_graph_pages(path: str, params: dict[str, str], *, max_pages: int = MAX_GRAPH_PAGINATION_PAGES):
     token = get_graph_token_manager().get_token()
     query = urllib.parse.urlencode(params)
     url = f"https://graph.microsoft.com/v1.0{path}?{query}"
-    pages: list[dict] = []
+    page_count = 0
     while url:
+        page_count += 1
+        if page_count > max_pages:
+            raise GraphRequestError("Microsoft Graph pagination exceeded the safety limit")
         data = _graph_get_url(url, token=token)
-        pages.append(data)
+        yield data
         url = str(data.get("@odata.nextLink") or "")
-    return pages
 
 
 def _graph_get_url(url: str, *, token: str) -> dict:

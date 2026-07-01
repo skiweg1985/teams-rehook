@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text as sql_text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -246,12 +246,24 @@ class WebhookDeliveryEvent(Base):
     organization_id: Mapped[str | None] = mapped_column(ForeignKey("organizations.id"), nullable=True, index=True)
     route_id: Mapped[str | None] = mapped_column(ForeignKey("webhook_routes.id"), nullable=True, index=True)
     route_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(32), index=True)
     request_metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     normalized_message_json: Mapped[str] = mapped_column(Text, default="{}")
     delivery_result_json: Mapped[str] = mapped_column(Text, default="{}")
     error: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
+
+    __table_args__ = (
+        Index(
+            "ix_webhook_delivery_events_route_id_idempotency_key_unique",
+            "route_id",
+            "idempotency_key",
+            unique=True,
+            sqlite_where=sql_text("idempotency_key IS NOT NULL"),
+            postgresql_where=sql_text("idempotency_key IS NOT NULL"),
+        ),
+    )
 
 
 class WebhookUrlRevealToken(Base):

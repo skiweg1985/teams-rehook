@@ -250,7 +250,7 @@ def get_graph_delivery_oauth_pending(
 
 @router.post(
     "/graph-delivery/oauth/pending/{pending_id}/confirm",
-    response_model=GraphDeliveryReadinessOut,
+    response_model=AdminReadinessOut,
     dependencies=[Depends(require_csrf)],
 )
 def confirm_graph_delivery_oauth_pending(
@@ -277,8 +277,8 @@ def confirm_graph_delivery_oauth_pending(
         },
     )
     db.commit()
-    readiness = _graph_delivery_readiness(db, admin.organization_id, get_effective_settings())
-    if readiness.token_checked:
+    readiness = _admin_readiness(db, admin, settings=get_effective_settings())
+    if readiness.graph_delivery.token_checked:
         db.commit()
     return readiness
 

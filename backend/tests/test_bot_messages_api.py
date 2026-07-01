@@ -965,6 +965,33 @@ def test_graph_failure_with_valid_cache_still_authorizes_group(monkeypatch):
     db.close()
 
 
+def test_graph_failure_still_authorizes_direct_bot_user(monkeypatch):
+    monkeypatch.setattr("app.routers.bot_messages.send_bot_activity", lambda **kwargs: None)
+    monkeypatch.setattr("app.routers.bot_messages.list_user_transitive_group_ids", lambda user_id: (_ for _ in ()).throw(GraphRequestError("Graph down")))
+    client, db = make_client()
+    create_bot_group(db, can_create_private_chat_routes=True)
+    activity = {
+        "type": "message",
+        "text": "register Direct User Alerts",
+        "serviceUrl": "https://smba.trafficmanager.net/emea/",
+        "conversation": {"id": "conversation-id", "conversationType": "personal"},
+        "from": {"id": "29:user", "name": "Ada Admin", "aadObjectId": "aad-user-id"},
+        "channelData": {"tenant": {"id": "tenant-id"}},
+    }
+
+    response = client.post("/api/v1/bot/messages", json=activity)
+
+    assert response.status_code == 200
+    assert db.scalar(select(WebhookRoute).where(WebhookRoute.name == "Direct User Alerts")) is not None
+    event = db.scalar(select(BotActivityEvent).where(BotActivityEvent.activity_type == "message"))
+    assert event is not None
+    assert event.bot_authorization_reason == "authorized"
+    audit = db.scalar(select(AuditEvent).where(AuditEvent.action == "bot_command.authorized"))
+    assert audit is not None
+    assert loads_json(audit.metadata_json, {})["authorization_sources"]["cache_status"] == "error"
+    db.close()
+
+
 def test_graph_failure_without_valid_cache_denies_safely(monkeypatch):
     monkeypatch.setattr("app.routers.bot_messages.send_bot_activity", lambda **kwargs: None)
     monkeypatch.setattr("app.routers.bot_messages.list_user_transitive_group_ids", lambda user_id: (_ for _ in ()).throw(GraphRequestError("Graph down")))
@@ -1524,7 +1551,13 @@ def test_delete_command_removes_named_linked_route_and_detaches_delivery_events(
         route_token_hash=route.route_token_hash,
         status="delivered",
     )
-    db.add(delivery)
+    reveal = WebhookUrlRevealToken(
+        organization_id=route.organization_id,
+        route_id=route.id,
+        token_hash="delete-command-reveal-token-hash",
+        expires_at=utcnow() + timedelta(hours=1),
+    )
+    db.add_all([delivery, reveal])
     db.commit()
 
     response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "delete Personal Alerts"})
@@ -1533,6 +1566,7 @@ def test_delete_command_removes_named_linked_route_and_detaches_delivery_events(
     assert response.json()["command"] == "delete"
     assert "deleted" in response.json()["reply_text"]
     assert db.scalar(select(WebhookRoute).where(WebhookRoute.name == "Personal Alerts")) is None
+    assert db.scalar(select(WebhookUrlRevealToken).where(WebhookUrlRevealToken.route_id == route.id)) is None
     db.refresh(delivery)
     assert delivery.route_id is None
     audit = db.scalar(select(AuditEvent).where(AuditEvent.action == "webhook_route.deleted"))
