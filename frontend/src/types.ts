@@ -57,6 +57,90 @@ export type UserPasswordUpdate = {
   password: string;
 };
 
+export type BotUserRole = string;
+
+export type BotUserPermissions = {
+  can_view_routes: boolean;
+  can_reveal_webhook_urls: boolean;
+  can_manage_route_status: boolean;
+  can_delete_routes: boolean;
+  can_manage_allowlist: boolean;
+  can_create_private_chat_routes: boolean;
+  can_create_channel_routes: boolean;
+};
+
+export type BotAccessRoleOut = BotUserPermissions & {
+  id: string;
+  organization_id: string;
+  name: string;
+  description: string;
+  is_system: boolean;
+  system_key: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BotAccessRoleCreate = BotUserPermissions & {
+  name: string;
+  description: string;
+};
+
+export type BotAccessRoleUpdate = Partial<BotAccessRoleCreate>;
+
+export type BotAuthorizedUserOut = BotUserPermissions & {
+  id: string;
+  organization_id: string;
+  aad_object_id: string;
+  display_name: string;
+  user_principal_name: string;
+  role_id: string | null;
+  role: BotUserRole;
+  is_active: boolean;
+  last_seen_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BotAuthorizedUserCreate = BotUserPermissions & {
+  aad_object_id: string;
+  display_name: string;
+  user_principal_name: string;
+  role_id?: string | null;
+  role: BotUserRole;
+  is_active: boolean;
+};
+
+export type BotAuthorizedUserUpdate = Partial<Omit<BotAuthorizedUserCreate, "aad_object_id">>;
+
+export type BotAuthorizedGroupOut = BotUserPermissions & {
+  id: string;
+  organization_id: string;
+  group_object_id: string;
+  display_name: string;
+  mail: string;
+  security_enabled: boolean;
+  group_types: string[];
+  role_id: string | null;
+  role: BotUserRole;
+  is_active: boolean;
+  last_matched_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BotAuthorizedGroupCreate = BotUserPermissions & {
+  group_object_id: string;
+  display_name: string;
+  mail: string;
+  security_enabled: boolean;
+  group_types: string[];
+  role_id?: string | null;
+  role: BotUserRole;
+  is_active: boolean;
+};
+
+export type BotAuthorizedGroupUpdate = Partial<Omit<BotAuthorizedGroupCreate, "group_object_id">>;
+
 export type ToastTone = "success" | "error" | "info";
 
 export type Toast = {
@@ -96,6 +180,9 @@ export type SystemLogEventOut = {
   auth_service_url: string;
   auth_service_url_matched: boolean;
   auth_validated_at: string | null;
+  bot_authorization_status: string;
+  bot_authorized_user_id: string;
+  bot_authorization_reason: string;
   created_at: string;
 };
 
@@ -154,7 +241,15 @@ export type WebhookAbuseCleanupOut = {
 export type WebhookTargetType = "bot_conversation";
 export type DeliveryBackend = "bot_framework" | "graph";
 export type ClientIpAccessMode = "public" | "restricted";
-export type GraphTargetKind = "user" | "team" | "channel" | "chat";
+export type GraphTargetKind = "user" | "team" | "channel" | "chat" | "group";
+
+export type ConversationMemberOut = {
+  id: string;
+  name: string;
+  aad_object_id: string;
+  email: string;
+  user_principal_name: string;
+};
 
 export type WebhookRouteOut = {
   id: string;
@@ -176,6 +271,11 @@ export type WebhookRouteOut = {
   graph_user_id: string;
   graph_user_display_name: string;
   graph_user_principal_name: string;
+  member_summary: string;
+  member_count: number;
+  members: ConversationMemberOut[];
+  members_refreshed_at: string | null;
+  members_lookup_error: string;
   bot_target_source: string;
   bot_registered_by_id: string;
   bot_registered_at: string | null;
@@ -185,6 +285,12 @@ export type WebhookRouteOut = {
   last_delivery_at: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type WebhookUrlRevealOut = {
+  webhook_url: string;
+  route_name: string;
+  expires_at: string;
 };
 
 export type WebhookRouteCreate = {
@@ -224,10 +330,6 @@ export type WebhookDeliveryOut = {
   message: string;
 };
 
-export type WebhookRouteDefaultsOut = {
-  bot_default_service_url: string;
-};
-
 export type WebhookRouteNameRefreshOut = {
   ok: boolean;
   routes_checked: number;
@@ -237,7 +339,7 @@ export type WebhookRouteNameRefreshOut = {
   error: string;
 };
 
-export type WebhookDeliveryStatus = "delivered" | "failed" | "rejected";
+export type WebhookDeliveryStatus = "delivered" | "failed" | "rejected" | "pending";
 
 export type WebhookDeliveryEventOut = {
   id: string;
@@ -298,10 +400,24 @@ export type SettingItemOut = {
   env_default: string;
   effective_value: string;
   is_overridden: boolean;
+  source: "environment" | "application";
 };
 
 export type GraphDeliveryOAuthStartOut = {
   authorization_url: string;
+};
+
+export type GraphDeliveryOAuthPendingOut = {
+  id: string;
+  tenant_id: string;
+  client_id: string;
+  scopes: string[];
+  service_user_id: string;
+  service_user_display_name: string;
+  service_user_principal_name: string;
+  access_token_expires_at: string | null;
+  refresh_checked_at: string | null;
+  expires_at: string;
 };
 
 export type AdminReadinessOut = {
@@ -317,7 +433,6 @@ export type AdminReadinessOut = {
     token_request_succeeded: boolean;
     mode: string;
     credentials_configured: boolean;
-    default_service_url_configured: boolean;
     credential_fields: Record<string, string>;
     oauth: OAuthDiagnosticsOut;
   };
@@ -332,6 +447,11 @@ export type AdminReadinessOut = {
     credential_source: "ms_app" | "missing" | string;
     credential_fields: Record<string, string>;
     oauth: OAuthDiagnosticsOut;
+    group_membership_lookup_ready: boolean;
+    group_membership_required_roles: string[];
+    group_membership_alternative_roles: string[];
+    group_membership_missing_roles: string[];
+    group_membership_message: string;
   };
   graph_delivery: {
     enabled: boolean;
@@ -361,6 +481,7 @@ export type AdminReadinessOut = {
     trusted_proxy_ips: string;
     trusted_proxy_chain: string;
     webhook_max_payload_bytes: number;
+    webhook_url_reveal_ttl_hours: number;
     log_retention_days: number;
     log_cleanup_interval_minutes: number;
     event_debug_previews_enabled: boolean;
@@ -368,6 +489,23 @@ export type AdminReadinessOut = {
     settings_encryption_key_source: "configured" | "generated" | "missing" | string;
     settings_encryption_ready: boolean;
   };
+};
+
+export type DeliveryAuthRefreshStatus = "refreshed" | "cleared" | "skipped" | "failed";
+
+export type DeliveryAuthRefreshComponentOut = {
+  status: DeliveryAuthRefreshStatus;
+  message: string;
+};
+
+export type DeliveryAuthRefreshOut = {
+  ok: boolean;
+  refreshed_at: string;
+  bot_delivery: DeliveryAuthRefreshComponentOut;
+  graph_lookup: DeliveryAuthRefreshComponentOut;
+  graph_delivery: DeliveryAuthRefreshComponentOut;
+  bot_inbound_auth: DeliveryAuthRefreshComponentOut;
+  readiness: AdminReadinessOut;
 };
 
 export type OAuthDiagnosticsOut = {
@@ -411,6 +549,27 @@ export type TeamsTargetSearchResult = {
   team_id: string | null;
   team_name: string | null;
   channel_id: string | null;
+  mail: string;
+  security_enabled: boolean | null;
+  group_types: string[];
+};
+
+export type TeamsGroupMember = {
+  id: string;
+  display_name: string;
+  user_principal_name: string;
+  mail: string;
+};
+
+export type TeamsGroupMemberPage = {
+  items: TeamsGroupMember[];
+  offset: number;
+  limit: number;
+  has_more: boolean;
+};
+
+export type TeamsGroupMemberCount = {
+  count: number;
 };
 
 export type BotConversationReferenceOut = {
@@ -428,8 +587,29 @@ export type BotConversationReferenceOut = {
   user_id: string;
   user_name: string;
   graph_user_id: string;
+  member_summary: string;
+  member_count: number;
+  members: ConversationMemberOut[];
+  members_refreshed_at: string | null;
+  members_lookup_error: string;
   raw_activity_type: string;
   last_seen_at: string;
   created_at: string;
   updated_at: string;
+};
+
+export type BotConversationLinkedRouteOut = {
+  id: string;
+  name: string;
+  is_active: boolean;
+  delivery_backend: DeliveryBackend;
+  target_name: string;
+  last_delivery_status: "delivered" | "failed" | "rejected" | null;
+  last_delivery_at: string | null;
+  updated_at: string;
+};
+
+export type BotConversationReferenceDetailOut = BotConversationReferenceOut & {
+  linked_routes: BotConversationLinkedRouteOut[];
+  linked_route_count: number;
 };

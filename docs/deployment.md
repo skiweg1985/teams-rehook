@@ -69,7 +69,7 @@ Default local URLs:
 
 - HTTP UI: `http://localhost:8080`
 - HTTPS UI with local cert: `https://localhost:8443`
-- API docs through proxy: `http://localhost:8080/api/v1/docs`
+- API docs through proxy with the recommended local profile: `https://localhost:8443/api/v1/docs`
 
 If a port is already in use, rerun `./manage.sh setup` and choose a different port.
 

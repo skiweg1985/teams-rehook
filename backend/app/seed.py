@@ -10,8 +10,14 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings, is_placeholder_session_secret, is_placeholder_settings_enc_key
 from app.core.settings_overrides import load_overrides
 from app.database import Base, engine
-from app.models import AppSetting, BotActivityEvent, BotConversationReference, Organization, User, WebhookRoute
+from app.models import AppSetting, BotActivityEvent, BotAuthorizedGroup, BotAuthorizedUser, BotConversationReference, Organization, User, WebhookRoute
 from app.security import issue_plain_secret
+from app.services.bot_access_roles import (
+    ROUTE_OPERATOR_SYSTEM_KEY,
+    ROUTE_VIEWER_SYSTEM_KEY,
+    ensure_bot_access_system_roles,
+    role_permissions,
+)
 from app.services.log_retention import cleanup_log_events
 
 INSTANCE_SESSION_SECRET_KEY = "__instance_session_secret"
@@ -38,6 +44,8 @@ def init_db() -> None:
             db.add(org)
             db.flush()
 
+        _ensure_bot_access_roles_for_organizations(db)
+        _backfill_bot_access_role_assignments(db)
         db.commit()
 
 
@@ -127,11 +135,60 @@ def _backfill_webhook_route_targets(db: Session) -> None:
         route.graph_team_id = reference.graph_team_id
         route.graph_team_name = reference.team_name
         route.graph_channel_id = reference.channel_id if route.graph_target_kind == "channel" else ""
+        route.member_summary = reference.member_summary
+        route.member_count = reference.member_count
+        route.member_list_json = reference.member_list_json
+        route.members_refreshed_at = reference.members_refreshed_at
+        route.members_lookup_error = reference.members_lookup_error
         if not route.bot_registered_by_id:
             route.bot_registered_by_id = reference.graph_user_id or reference.user_id
         changed = True
     if changed:
         db.commit()
+
+
+def _ensure_bot_access_roles_for_organizations(db: Session) -> None:
+    for organization in db.scalars(select(Organization)).all():
+        ensure_bot_access_system_roles(db, organization.id)
+
+
+def _backfill_bot_access_role_assignments(db: Session) -> None:
+    changed = False
+    for organization in db.scalars(select(Organization)).all():
+        roles = ensure_bot_access_system_roles(db, organization.id)
+        viewer = roles[ROUTE_VIEWER_SYSTEM_KEY]
+        operator = roles[ROUTE_OPERATOR_SYSTEM_KEY]
+        grants = [
+            *db.scalars(
+                select(BotAuthorizedUser).where(
+                    BotAuthorizedUser.organization_id == organization.id,
+                    BotAuthorizedUser.role_id.is_(None),
+                )
+            ).all(),
+            *db.scalars(
+                select(BotAuthorizedGroup).where(
+                    BotAuthorizedGroup.organization_id == organization.id,
+                    BotAuthorizedGroup.role_id.is_(None),
+                )
+            ).all(),
+        ]
+        for grant in grants:
+            if grant.role == "custom":
+                continue
+            permissions = {field: bool(getattr(grant, field)) for field in role_permissions(operator)}
+            if grant.role in {"viewer", "route_viewer"} and permissions == role_permissions(viewer):
+                grant.role_id = viewer.id
+                grant.role = viewer.system_key or "route_viewer"
+                changed = True
+            elif grant.role in {"operator", "route_operator", "route_manager"} and permissions == role_permissions(operator):
+                grant.role_id = operator.id
+                grant.role = operator.system_key or "route_operator"
+                changed = True
+            elif grant.role in {"viewer", "operator", "route_manager"}:
+                grant.role = "custom"
+                changed = True
+    if changed:
+        db.flush()
 
 
 def _apply_reference_metadata(
@@ -161,10 +218,16 @@ def _reference_target_name(reference: BotConversationReference) -> str:
         return _clip(reference.channel_name, 200)
     if reference.team_name:
         return _clip(reference.team_name, 200)
+    if reference.member_summary:
+        return _clip(reference.member_summary, 200)
+    if reference.scope == "chat" or reference.conversation_type.lower() == "groupchat":
+        return "Group chat"
     return _clip(reference.user_name or reference.graph_user_id or reference.user_id or reference.conversation_id, 200)
 
 
 def _reference_graph_kind(reference: BotConversationReference) -> str:
+    if reference.scope == "chat" or reference.conversation_type.lower() == "groupchat":
+        return "chat"
     if reference.scope == "channel" or reference.channel_id:
         return "channel"
     if reference.scope == "team" or reference.graph_team_id:
@@ -178,6 +241,8 @@ def _reference_graph_target_id(reference: BotConversationReference) -> str:
         return reference.channel_id
     if kind == "team":
         return reference.graph_team_id
+    if kind == "chat":
+        return reference.conversation_id
     return reference.graph_user_id or reference.user_id
 
 
@@ -208,6 +273,7 @@ def _extract_bot_activity(event: BotActivityEvent, raw: dict[str, Any]) -> dict[
         "graph_team_id": _string(team.get("aadGroupId")) or event.graph_team_id,
         "channel_id": channel_id or event.channel_id,
         "conversation_type": _clip(conversation_type or event.conversation_type, 40),
+        "is_group": _bool_string(conversation.get("isGroup")),
         "team_name": _clip(_string(team.get("name")) or event.team_name, 200),
         "channel_name": _clip(
             _string(channel.get("name"))
@@ -229,6 +295,8 @@ def _scope_for(captured: dict[str, str]) -> str:
         return "channel"
     if captured["team_id"]:
         return "team"
+    if _is_group_conversation(captured):
+        return "chat"
     return "user"
 
 
@@ -256,6 +324,14 @@ def _string(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+def _bool_string(value: Any) -> str:
+    return "true" if value is True else ""
+
+
+def _is_group_conversation(captured: dict[str, str]) -> bool:
+    return captured.get("is_group") == "true" or captured.get("conversation_type", "").lower() in {"groupchat", "group", "chat"}
+
+
 def _ensure_additive_schema() -> None:
     table_columns = {
         "webhook_routes": {
@@ -271,6 +347,11 @@ def _ensure_additive_schema() -> None:
             "graph_user_id": "TEXT DEFAULT '' NOT NULL",
             "graph_user_display_name": "VARCHAR(255) DEFAULT '' NOT NULL",
             "graph_user_principal_name": "VARCHAR(255) DEFAULT '' NOT NULL",
+            "member_summary": "VARCHAR(500) DEFAULT '' NOT NULL",
+            "member_count": "INTEGER DEFAULT 0 NOT NULL",
+            "member_list_json": "TEXT DEFAULT '[]' NOT NULL",
+            "members_refreshed_at": "TIMESTAMP NULL",
+            "members_lookup_error": "TEXT DEFAULT '' NOT NULL",
             "bot_target_source": "VARCHAR(40) DEFAULT '' NOT NULL",
             "bot_registered_by_id": "TEXT DEFAULT '' NOT NULL",
             "bot_registered_at": "TIMESTAMP NULL",
@@ -288,6 +369,9 @@ def _ensure_additive_schema() -> None:
             "auth_service_url": "TEXT DEFAULT '' NOT NULL",
             "auth_service_url_matched": "BOOLEAN DEFAULT FALSE NOT NULL",
             "auth_validated_at": "TIMESTAMP NULL",
+            "bot_authorization_status": "VARCHAR(40) DEFAULT 'not_applicable' NOT NULL",
+            "bot_authorized_user_id": "TEXT DEFAULT '' NOT NULL",
+            "bot_authorization_reason": "TEXT DEFAULT '' NOT NULL",
         },
         "bot_conversation_references": {
             "graph_team_id": "TEXT DEFAULT '' NOT NULL",
@@ -296,6 +380,20 @@ def _ensure_additive_schema() -> None:
             "channel_name": "VARCHAR(200) DEFAULT '' NOT NULL",
             "user_name": "VARCHAR(200) DEFAULT '' NOT NULL",
             "graph_user_id": "TEXT DEFAULT '' NOT NULL",
+            "member_summary": "VARCHAR(500) DEFAULT '' NOT NULL",
+            "member_count": "INTEGER DEFAULT 0 NOT NULL",
+            "member_list_json": "TEXT DEFAULT '[]' NOT NULL",
+            "members_refreshed_at": "TIMESTAMP NULL",
+            "members_lookup_error": "TEXT DEFAULT '' NOT NULL",
+        },
+        "bot_authorized_users": {
+            "role_id": "VARCHAR(36) NULL",
+        },
+        "bot_authorized_groups": {
+            "role_id": "VARCHAR(36) NULL",
+        },
+        "webhook_delivery_events": {
+            "idempotency_key": "VARCHAR(120) NULL",
         },
         "webhook_abuse_buckets": {
             "last_client_host": "TEXT DEFAULT '' NOT NULL",
@@ -325,6 +423,15 @@ def _ensure_additive_schema() -> None:
             for column_name, column_type in columns_to_add.items():
                 if column_name not in existing_columns:
                     connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
+        connection.execute(
+            text(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS ix_webhook_delivery_events_route_id_idempotency_key_unique
+                ON webhook_delivery_events (route_id, idempotency_key)
+                WHERE idempotency_key IS NOT NULL
+                """
+            )
+        )
 
 
 def _ensure_obsolete_webhook_route_columns_removed() -> None:

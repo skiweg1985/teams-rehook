@@ -1,5 +1,7 @@
 # Graph Delivery Variant A
 
+Status note: this is a historical design note. Delegated Graph delivery is now implemented in the codebase; use [Architecture](architecture.md), [Admin guide](admin-guide.md), [API reference](api.md), and [Configuration](configuration.md) as the current operational documentation.
+
 ## Purpose
 
 This note defines the Variant A delivery model for Microsoft Graph delivery in
@@ -22,9 +24,8 @@ Teams Rehook currently has two separate Microsoft integration surfaces:
   Graph token flow uses `MS_APP_*` client credentials with
   `GRAPH_SCOPE=https://graph.microsoft.com/.default`.
 
-The README currently describes this correctly: Graph access is optional and only
-supports target search and name resolution; Teams delivery itself still uses Bot
-Framework credentials plus captured Teams conversation references.
+This section reflects the pre-implementation state that motivated the decision.
+The current codebase also implements delegated Graph delivery as a route backend.
 
 ## Microsoft Graph Delivery Constraints
 
@@ -60,7 +61,7 @@ Important constraints for this product:
 | Target type | V1 decision | Required route identifiers | Delivery endpoint | Delegated permissions |
 | --- | --- | --- | --- | --- |
 | Team channel | Supported first | `team_id`, `channel_id` | `POST /teams/{team-id}/channels/{channel-id}/messages` | `ChannelMessage.Send` |
-| Existing group chat | Supported for chats the service user belongs to | `chat_id` | `POST /chats/{chat-id}/messages` | `ChatMessage.Send`; `Chat.ReadBasic` for service-user chat search |
+| Existing group chat | Supported for chats the service user belongs to | `chat_id` | `POST /chats/{chat-id}/messages` | `ChatMessage.Send`; `Chat.ReadBasic` for service-user chat search and member refresh |
 | User / 1:1 | Supported in V1 via route-setup chat resolution/creation | `chat_id` once resolved or created | `POST /chats/{chat-id}/messages` | `ChatMessage.Send`; `Chat.Create` for route setup resolving/creating the 1:1 chat |
 
 V1 should not treat a Graph user ID alone as a sendable delivery target. A user
@@ -93,8 +94,8 @@ Minimum delegated permission set for V1:
 - `User.Read` as the delegated sign-in baseline.
 - `ChannelMessage.Send` for channel routes.
 - `ChatMessage.Send` for existing chat routes.
-- `Chat.ReadBasic` for listing existing chats that the delegated service user
-  belongs to.
+- `Chat.ReadBasic` for listing existing chats and refreshing chat members that
+  the delegated service user can read.
 - `Chat.Create` for one-on-one route setup so Teams Rehook can resolve or
   create the chat target before later message delivery.
 
@@ -104,10 +105,16 @@ The Entra app registration must also include this web redirect URI:
 {APP_PUBLIC_BASE_URL}/api/v1/admin/graph-delivery/oauth/callback
 ```
 
-With the local `.env.example` defaults, that is:
+With the HTTP `.env.example` defaults, that is:
 
 ```text
 http://localhost:8080/api/v1/admin/graph-delivery/oauth/callback
+```
+
+With the current recommended `./manage.sh setup` local profile, use:
+
+```text
+https://localhost:8443/api/v1/admin/graph-delivery/oauth/callback
 ```
 
 ## Route Metadata

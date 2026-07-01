@@ -3,9 +3,9 @@
 Teams Rehook uses two configuration layers:
 
 1. Environment settings loaded from `.env` or process environment through `backend/app/core/config.py`.
-2. Database overrides for selected runtime settings through the admin settings API/UI and the `app_settings` table.
+2. Database-backed admin settings through the admin settings API/UI and the `app_settings` table.
 
-Database overrides are loaded at startup and after setting changes. Resetting an override restores the environment value.
+Environment-backed settings reset to the environment value. Application-managed settings, including delivery feature switches, reset to their code default.
 
 ## Environment Variables
 
@@ -43,11 +43,7 @@ Use `.env.example` as the safe template. For local Docker setup, prefer `./manag
 | `MS_APP_CLIENT_SECRET` | Entra app client secret. The repository keeps this commented in `.env.example` because operators can also set it in the Settings UI. | Required for real Microsoft integrations | Empty | `change-me` | Yes |
 | `BOTFRAMEWORK_SCOPE` | OAuth scope requested for Bot Framework tokens. The repository keeps this commented in `.env.example` because operators can also set it in the Settings UI. | No | `https://api.botframework.com/.default` | `https://api.botframework.com/.default` | No |
 | `GRAPH_SCOPE` | OAuth scope requested for Microsoft Graph app-only tokens. The repository keeps this commented in `.env.example` because operators can also set it in the Settings UI. | No | `https://graph.microsoft.com/.default` | `https://graph.microsoft.com/.default` | No |
-| `BOT_FRAMEWORK_ENABLED` | Enables Bot Framework route setup, delivery, and readiness impact. The repository keeps this commented in `.env.example` because operators can also set it in the Settings UI. | No | `true` | `true` | No |
-| `GRAPH_LOOKUP_ENABLED` | Enables Graph target search, name refresh, and readiness impact. The repository keeps this commented in `.env.example` because operators can also set it in the Settings UI. | No | `true` | `true` | No |
-| `GRAPH_DELIVERY_ENABLED` | Enables delegated Graph delivery. Requires Graph lookup to remain enabled. The repository keeps this commented in `.env.example` because operators can also set it in the Settings UI. | No | `true` | `true` | No |
 | `BOT_DELIVERY_MODE` | `real` sends through Microsoft services; `mock` simulates delivery. Invalid values normalize to `mock`. This remains an environment-only developer override and is not editable in the Settings UI. | No | `real` | `mock` | No |
-| `BOT_DEFAULT_SERVICE_URL` | Optional fallback Bot Framework service URL. Route-specific values still take precedence. | Required for some real Bot Framework setups | Empty | `https://smba.trafficmanager.net/emea/` | No |
 | `MONITORING_API_KEY` | Bearer token for `/api/v1/monitoring/status`. Empty disables the endpoint with `503`. | Required for monitoring endpoint | Empty | `change-me` | Yes |
 | `SESSION_SECRET` | Secret used for session signing and OAuth state protection. If omitted, an instance secret is generated and stored at first startup. | No | Generated instance secret | Secret manager value | Yes |
 | `SETTINGS_ENC_KEY` | Stable secret string used for encrypted settings overrides and delegated refresh material. If omitted, first startup creates a separate generated key in the database for local/simple shared-database deployments. | No | Generated settings encryption key | Secret manager value | Yes |
@@ -81,16 +77,16 @@ Do not reuse these values for production. `POSTGRES_*` values are applied by the
 
 If production database credentials contain URL-special characters, set `DATABASE_URL` explicitly with proper URL encoding instead of relying on the Compose fallback assembled from `POSTGRES_*`.
 
-## Admin-Overridable Runtime Settings
+## Admin Runtime Settings
 
-These settings are defined in `backend/app/core/settings_overrides.py` and can be changed through the admin settings API/UI:
+These settings are defined in `backend/app/core/settings_overrides.py` and can be changed through the admin settings API/UI.
+Delivery feature switches are application-managed settings: they default to `true`, are stored in `app_settings` after the UI changes them, and are not read from `.env`.
 
 | Key | Type | Secret | Validation / Notes |
 |---|---|---:|---|
-| `bot_framework_enabled` | bool | No | Enables Bot Framework setup, delivery, and readiness impact. |
-| `graph_lookup_enabled` | bool | No | Enables Graph target search and name refresh. |
-| `graph_delivery_enabled` | bool | No | Requires `graph_lookup_enabled=true`. |
-| `bot_default_service_url` | url | No | Empty or valid `http`/`https` URL. |
+| `bot_framework_enabled` | bool | No | Application-managed default `true`; enables Bot Framework setup, delivery, and readiness impact. |
+| `graph_lookup_enabled` | bool | No | Application-managed default `true`; enables Graph target search and name refresh. |
+| `graph_delivery_enabled` | bool | No | Application-managed default `true`; requires `graph_lookup_enabled=true`. |
 | `webhook_max_payload_bytes` | int | No | Minimum `1024`. |
 | `webhook_abuse_blocking_enabled` | bool | No | Enables temporary blocking for repeated failed webhook attempts. |
 | `webhook_abuse_failure_limit` | int | No | Minimum `1`; default code value is `10`. |
@@ -106,12 +102,12 @@ These settings are defined in `backend/app/core/settings_overrides.py` and can b
 | `ms_app_tenant_id` | string | No | Shared Microsoft tenant ID. |
 | `ms_app_client_id` | string | No | Shared Microsoft client ID. |
 | `ms_app_client_secret` | secret | Yes | Write-only in API responses. |
-| `botframework_scope` | string | No | Bot Framework OAuth scope. |
-| `graph_scope` | string | No | Microsoft Graph OAuth scope. |
 
 Secret overrides are encrypted at rest using Fernet with `SETTINGS_ENC_KEY`. `SESSION_SECRET` is not used for settings encryption.
 
 Advanced webhook abuse timings stay in environment configuration. Only `webhook_abuse_blocking_enabled`, `webhook_abuse_failure_limit`, and `webhook_abuse_window_minutes` are admin-overridable runtime settings.
+
+`BOTFRAMEWORK_SCOPE` and `GRAPH_SCOPE` are environment settings only. The current admin settings API does not expose runtime overrides for those OAuth scopes.
 
 `TRUSTED_PROXY_IPS` is environment-only because the bundled HAProxy consumes the same value at container start. The admin readiness view reports the effective compose subnet, trusted upstream proxies, and combined trust chain as read-only diagnostics.
 

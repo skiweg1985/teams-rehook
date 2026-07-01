@@ -84,18 +84,9 @@ Real Bot Framework delivery requires:
 MS_APP_TENANT_ID=
 MS_APP_CLIENT_ID=
 MS_APP_CLIENT_SECRET=
-BOT_DEFAULT_SERVICE_URL=
 ```
 
-Delivery feature policy is controlled separately:
-
-```text
-BOT_FRAMEWORK_ENABLED=true
-GRAPH_LOOKUP_ENABLED=true
-GRAPH_DELIVERY_ENABLED=true
-```
-
-Disabled integrations are shown as disabled in readiness, excluded from the global monitoring rollup, and cannot be used for route setup or delivery.
+Delivery feature switches default to enabled and are controlled from the app's delivery settings controls. Disabled integrations are shown as disabled in readiness, excluded from the global monitoring rollup, and cannot be used for route setup or delivery.
 
 ## Microsoft Graph Permissions
 
@@ -104,6 +95,12 @@ Graph lookup uses app-only client credentials for target search and display-name
 - `User.Read.All`
 - `Team.ReadBasic.All`
 - `Channel.ReadBasic.All`
+- `Group.Read.All`
+- `GroupMember.Read.All`
+
+Bot Access groups use the same app-only Graph credentials. Group search requires `Group.Read.All`; runtime membership checks and the group member view require the app to read transitive memberships, so keep `User.Read.All` and `GroupMember.Read.All` granted. `Directory.Read.All` is an acceptable broader alternative when the tenant intentionally grants directory-wide read access.
+
+When group search fails with `Authorization_RequestDenied` or `Insufficient privileges to complete the operation`, verify that `Group.Read.All` is configured as a Microsoft Graph **Application permission** and that tenant admin consent has been granted after adding it. When group member lookup fails with the same error, verify `GroupMember.Read.All` or `Directory.Read.All`.
 
 Graph delivery uses a delegated service-user connection. Configure delegated permissions as required by the tenant:
 
@@ -113,6 +110,11 @@ Graph delivery uses a delegated service-user connection. Configure delegated per
 - `ChatMessage.Send`
 - `Chat.ReadBasic`
 - `Chat.Create`
+
+Group-chat participant summaries do not require additional permissions beyond the existing delivery setup:
+
+- Bot Framework captured chats use the Bot Framework Connector member endpoint with the bot app token, not Microsoft Graph.
+- Graph chat route member refresh uses the delegated service-user connection and the existing `Chat.ReadBasic` scope.
 
 Add this redirect URI under the app registration web authentication platform:
 
@@ -134,6 +136,16 @@ http://localhost:8080/api/v1/admin/graph-delivery/oauth/callback
 
 Graph delivery messages appear as the connected delegated service user. The service user must be licensed and must already be a member of selected Teams channels or chats. For one-on-one routes, Teams Rehook can resolve or create the 1:1 chat during route setup and then stores the resulting chat target for delivery.
 
+For Graph chat routes, administrators can refresh the stored participant summary from the route actions. The refresh reads current chat members through Microsoft Graph and updates the route display label, member count, refresh timestamp, and any lookup error.
+
+## Bot Access
+
+The **Users** page includes app user management and Bot Access management. App users sign in to the web UI. Bot Access entries control what authenticated Teams senders can do through bot commands.
+
+Bot Access can authorize individual Entra users or Entra groups. Roles are permission bundles; the repository seeds system roles for route viewing and route operation, and administrators can add custom roles. Available bot-command permissions include viewing routes, revealing webhook URLs, changing route status, deleting routes, managing route IP allowlists, and creating private-chat or channel routes.
+
+Group-based Bot Access depends on Microsoft Graph application permissions. See the Microsoft Graph permissions section above for the required group and membership reads.
+
 ## Start, Stop, Restart
 
 Start:
@@ -148,10 +160,10 @@ Stop:
 docker compose down
 ```
 
-Restart backend after configuration changes:
+Recreate services after environment-backed configuration changes:
 
 ```bash
-docker compose restart backend
+./manage.sh restart
 ```
 
 View logs:
@@ -179,6 +191,37 @@ Machine monitoring endpoint:
 ```text
 GET /api/v1/monitoring/status
 Authorization: Bearer <MONITORING_API_KEY>
+```
+
+PRTG HTTP Data Advanced Sensor endpoint:
+
+```text
+GET /api/v1/monitoring/prtg
+Authorization: Bearer <MONITORING_API_KEY>
+```
+
+The PRTG endpoint returns JSON in the HTTP Data Advanced Sensor format. It uses the same monitoring API key as `/api/v1/monitoring/status`; no additional credential or environment variable is required.
+
+```json
+{
+  "prtg": {
+    "result": [
+      {
+        "channel": "Service State",
+        "value": 0,
+        "valuelookup": "prtg.standardlookups.wmi.diskhealth.health"
+      },
+      {
+        "channel": "Database OK",
+        "value": 1,
+        "unit": "Custom",
+        "customunit": "state",
+        "valuelookup": "prtg.standardlookups.boolean.statetrueok"
+      }
+    ],
+    "text": "Teams Rehook ok; database ok; routes active=1/1, issues=0; 5m delivered=1, issues=0"
+  }
+}
 ```
 
 If `MONITORING_API_KEY` is empty, the endpoint returns `503` and does not expose status data. The response excludes relay URLs, route tokens, Bot service URLs, conversation IDs, OAuth tokens, secrets, and raw auth responses.

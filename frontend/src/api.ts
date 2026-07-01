@@ -2,15 +2,29 @@ import type {
   AdminReadinessOut,
   ApiError,
   AuditEventOut,
+  BotAccessRoleCreate,
+  BotAccessRoleOut,
+  BotAccessRoleUpdate,
+  BotAuthorizedGroupCreate,
+  BotAuthorizedGroupOut,
+  BotAuthorizedGroupUpdate,
+  BotAuthorizedUserCreate,
+  BotAuthorizedUserOut,
+  BotAuthorizedUserUpdate,
+  BotConversationReferenceDetailOut,
   BotConversationReferenceOut,
+  DeliveryAuthRefreshOut,
   EventLogEntryPageOut,
   FirstAdminCreate,
+  GraphDeliveryOAuthPendingOut,
   GraphDeliveryOAuthStartOut,
   LogCleanupOut,
   SessionResponse,
   SettingItemOut,
   SetupStatusOut,
   SystemLogEventOut,
+  TeamsGroupMemberCount,
+  TeamsGroupMemberPage,
   TeamsTargetSearchResult,
   UserCreate,
   UserOut,
@@ -24,11 +38,11 @@ import type {
   WebhookDeliveryOut,
   WebhookDeliveryStatus,
   WebhookRouteCreate,
-  WebhookRouteDefaultsOut,
   WebhookRouteNameRefreshOut,
   WebhookRouteOut,
   WebhookRouteTestRequest,
   WebhookRouteUpdate,
+  WebhookUrlRevealOut,
 } from "./types";
 
 type HttpMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
@@ -137,6 +151,75 @@ export const api = {
       body,
     });
   },
+  adminBotRoles(csrfToken: string) {
+    return request<BotAccessRoleOut[]>("/api/v1/admin/bot-roles", { csrfToken });
+  },
+  createAdminBotRole(csrfToken: string, body: BotAccessRoleCreate) {
+    return request<BotAccessRoleOut>("/api/v1/admin/bot-roles", {
+      method: "POST",
+      csrfToken,
+      body,
+    });
+  },
+  updateAdminBotRole(csrfToken: string, id: string, body: BotAccessRoleUpdate) {
+    return request<BotAccessRoleOut>(`/api/v1/admin/bot-roles/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      csrfToken,
+      body,
+    });
+  },
+  deleteAdminBotRole(csrfToken: string, id: string) {
+    return request<void>(`/api/v1/admin/bot-roles/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      csrfToken,
+    });
+  },
+  adminBotUsers(csrfToken: string) {
+    return request<BotAuthorizedUserOut[]>("/api/v1/admin/bot-users", { csrfToken });
+  },
+  createAdminBotUser(csrfToken: string, body: BotAuthorizedUserCreate) {
+    return request<BotAuthorizedUserOut>("/api/v1/admin/bot-users", {
+      method: "POST",
+      csrfToken,
+      body,
+    });
+  },
+  updateAdminBotUser(csrfToken: string, id: string, body: BotAuthorizedUserUpdate) {
+    return request<BotAuthorizedUserOut>(`/api/v1/admin/bot-users/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      csrfToken,
+      body,
+    });
+  },
+  deleteAdminBotUser(csrfToken: string, id: string) {
+    return request<void>(`/api/v1/admin/bot-users/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      csrfToken,
+    });
+  },
+  adminBotGroups(csrfToken: string) {
+    return request<BotAuthorizedGroupOut[]>("/api/v1/admin/bot-groups", { csrfToken });
+  },
+  createAdminBotGroup(csrfToken: string, body: BotAuthorizedGroupCreate) {
+    return request<BotAuthorizedGroupOut>("/api/v1/admin/bot-groups", {
+      method: "POST",
+      csrfToken,
+      body,
+    });
+  },
+  updateAdminBotGroup(csrfToken: string, id: string, body: BotAuthorizedGroupUpdate) {
+    return request<BotAuthorizedGroupOut>(`/api/v1/admin/bot-groups/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      csrfToken,
+      body,
+    });
+  },
+  deleteAdminBotGroup(csrfToken: string, id: string) {
+    return request<void>(`/api/v1/admin/bot-groups/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      csrfToken,
+    });
+  },
   adminLogs(csrfToken: string) {
     return request<AuditEventOut[]>("/api/v1/admin/logs", { csrfToken });
   },
@@ -174,6 +257,12 @@ export const api = {
   adminReadiness(csrfToken: string) {
     return request<AdminReadinessOut>("/api/v1/admin/readiness", { csrfToken });
   },
+  refreshDeliveryAuth(csrfToken: string) {
+    return request<DeliveryAuthRefreshOut>("/api/v1/admin/delivery-auth/refresh", {
+      method: "POST",
+      csrfToken,
+    });
+  },
   adminSettings(csrfToken: string) {
     return request<SettingItemOut[]>("/api/v1/admin/settings", { csrfToken });
   },
@@ -185,6 +274,21 @@ export const api = {
   },
   disconnectGraphDeliveryOAuth(csrfToken: string) {
     return request<void>("/api/v1/admin/graph-delivery/oauth", {
+      method: "DELETE",
+      csrfToken,
+    });
+  },
+  graphDeliveryOAuthPending(csrfToken: string, id: string) {
+    return request<GraphDeliveryOAuthPendingOut>(`/api/v1/admin/graph-delivery/oauth/pending/${encodeURIComponent(id)}`, { csrfToken });
+  },
+  confirmGraphDeliveryOAuthPending(csrfToken: string, id: string) {
+    return request<AdminReadinessOut>(`/api/v1/admin/graph-delivery/oauth/pending/${encodeURIComponent(id)}/confirm`, {
+      method: "POST",
+      csrfToken,
+    });
+  },
+  cancelGraphDeliveryOAuthPending(csrfToken: string, id: string) {
+    return request<void>(`/api/v1/admin/graph-delivery/oauth/pending/${encodeURIComponent(id)}`, {
       method: "DELETE",
       csrfToken,
     });
@@ -208,14 +312,29 @@ export const api = {
       csrfToken,
     });
   },
+  webhookUrlReveal(token: string) {
+    return request<WebhookUrlRevealOut>(`/api/v1/webhook-url-reveals/${encodeURIComponent(token)}`);
+  },
   webhookRoutes() {
     return request<WebhookRouteOut[]>("/api/v1/webhook-routes");
   },
-  webhookRouteDefaults() {
-    return request<WebhookRouteDefaultsOut>("/api/v1/webhook-routes/defaults");
-  },
   botConversationReferences() {
     return request<BotConversationReferenceOut[]>("/api/v1/bot/conversation-references");
+  },
+  botConversationReference(id: string) {
+    return request<BotConversationReferenceDetailOut>(`/api/v1/bot/conversation-references/${encodeURIComponent(id)}`);
+  },
+  refreshBotConversationReferenceMembers(csrfToken: string, id: string) {
+    return request<BotConversationReferenceDetailOut>(`/api/v1/bot/conversation-references/${encodeURIComponent(id)}/refresh-members`, {
+      method: "POST",
+      csrfToken,
+    });
+  },
+  deleteBotConversationReference(csrfToken: string, id: string, deleteLinkedRoutes: boolean) {
+    return request<void>(`/api/v1/bot/conversation-references/${encodeURIComponent(id)}?delete_linked_routes=${deleteLinkedRoutes ? "true" : "false"}`, {
+      method: "DELETE",
+      csrfToken,
+    });
   },
   createWebhookRoute(csrfToken: string, body: WebhookRouteCreate) {
     return request<WebhookRouteOut>("/api/v1/webhook-routes", {
@@ -251,6 +370,12 @@ export const api = {
   },
   refreshSingleWebhookRouteGraphNames(csrfToken: string, id: string) {
     return request<WebhookRouteNameRefreshOut>(`/api/v1/webhook-routes/${encodeURIComponent(id)}/refresh-graph-names`, {
+      method: "POST",
+      csrfToken,
+    });
+  },
+  refreshWebhookRouteMembers(csrfToken: string, id: string) {
+    return request<WebhookRouteOut>(`/api/v1/webhook-routes/${encodeURIComponent(id)}/refresh-members`, {
       method: "POST",
       csrfToken,
     });
@@ -292,7 +417,7 @@ export const api = {
       body,
     });
   },
-  searchTeamsTargets(kind: "user" | "team", query: string) {
+  searchTeamsTargets(kind: "user" | "team" | "group", query: string) {
     const params = new URLSearchParams({ kind, q: query });
     return request<TeamsTargetSearchResult[]>(`/api/v1/teams-targets/search?${params.toString()}`);
   },
@@ -305,5 +430,12 @@ export const api = {
   serviceUserChats(query: string) {
     const params = new URLSearchParams({ q: query });
     return request<TeamsTargetSearchResult[]>(`/api/v1/teams-targets/chats?${params.toString()}`);
+  },
+  groupMembers(groupId: string, query = "", offset = 0, limit = 100) {
+    const params = new URLSearchParams({ q: query, offset: String(offset), limit: String(limit) });
+    return request<TeamsGroupMemberPage>(`/api/v1/teams-targets/groups/${encodeURIComponent(groupId)}/members?${params.toString()}`);
+  },
+  groupMemberCount(groupId: string) {
+    return request<TeamsGroupMemberCount>(`/api/v1/teams-targets/groups/${encodeURIComponent(groupId)}/members/count`);
   },
 };

@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import {
   Activity,
   AlertTriangle,
   Bot,
   Check,
+  CheckCircle,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -12,6 +13,7 @@ import {
   EyeOff,
   FileClock,
   Info,
+  Menu,
   MessageSquareText,
   MessagesSquare,
   MoreHorizontal,
@@ -24,10 +26,12 @@ import {
   RotateCcwKey,
   Search,
   Send,
+  Settings as SettingsIcon,
   ShieldAlert,
   Trash2,
   Wrench,
   Webhook,
+  X,
   type LucideIcon,
 } from "lucide-react";
 
@@ -50,15 +54,28 @@ import { ThemeToggle } from "./theme-toggle";
 import type {
   AdminReadinessOut,
   AuditEventOut,
+  BotAccessRoleCreate,
+  BotAccessRoleOut,
+  BotAccessRoleUpdate,
+  BotAuthorizedGroupCreate,
+  BotAuthorizedGroupOut,
+  BotAuthorizedUserCreate,
+  BotAuthorizedUserOut,
+  BotUserPermissions,
+  BotUserRole,
+  BotConversationReferenceDetailOut,
   BotConversationReferenceOut,
   ClientIpAccessMode,
+  DeliveryAuthRefreshOut,
   DeliveryBackend,
   EventLogEntryOut,
   EventLogEntryPageOut,
+  GraphDeliveryOAuthPendingOut,
   GraphTargetKind,
   OAuthDiagnosticsOut,
   SettingItemOut,
   SystemLogEventOut,
+  TeamsGroupMember,
   TeamsTargetSearchResult,
   UserOut,
   WebhookAbuseBucketOut,
@@ -71,7 +88,7 @@ import type {
 } from "./types";
 import { classNames, compactJson, formatDateTime, formatRelativeTime } from "./utils";
 
-type RouteName = "dashboard" | "status" | "webhooks" | "payload-generator" | "users" | "settings" | "logs" | "system-logs";
+type RouteName = "dashboard" | "webhooks" | "payload-generator" | "delivery" | "users" | "settings" | "logs" | "system-logs";
 type DeliveryStatusFilter = "all" | WebhookDeliveryStatus;
 type PayloadGeneratorMode = "text" | "adaptive";
 type PayloadAccent = "neutral" | "success" | "warning" | "critical";
@@ -79,6 +96,7 @@ type PayloadImageSize = "Auto" | "Stretch";
 type PayloadTitleSize = "Default" | "Medium" | "Large";
 type PayloadTitleWeight = "Default" | "Bolder";
 type SystemLogTab = "timeline" | "security" | "audit" | "bot";
+type UserAdminTab = "app-users" | "bot-access";
 
 type PayloadFact = {
   id: string;
@@ -94,9 +112,9 @@ type PayloadAction = {
 
 const NAV: Array<{ route: RouteName; label: string; path: string; icon: string }> = [
   { route: "dashboard", label: "Dashboard", path: "/dashboard", icon: "D" },
-  { route: "status", label: "Status", path: "/status", icon: "S" },
   { route: "webhooks", label: "Webhooks", path: "/webhooks", icon: "W" },
   { route: "payload-generator", label: "Payload Generator", path: "/payload-generator", icon: "P" },
+  { route: "delivery", label: "Delivery", path: "/delivery", icon: "D" },
   { route: "users", label: "Users", path: "/users", icon: "U" },
   { route: "settings", label: "Settings", path: "/settings", icon: "S" },
   { route: "logs", label: "Messages", path: "/logs", icon: "M" },
@@ -108,6 +126,7 @@ const DELIVERY_STATUS_FILTERS: Array<{ value: DeliveryStatusFilter; label: strin
   { value: "delivered", label: "Delivered" },
   { value: "failed", label: "Failed" },
   { value: "rejected", label: "Rejected" },
+  { value: "pending", label: "Pending" },
 ];
 
 const PAYLOAD_ACCENTS: Array<{ value: PayloadAccent; label: string }> = [
@@ -172,6 +191,10 @@ type RowActionItem = {
   separated?: boolean;
 };
 
+type ResponsiveActionItem = RowActionItem & {
+  buttonTone?: "primary" | "secondary" | "danger";
+};
+
 function RowActionMenu({ label, items }: { label: string; items: RowActionItem[] }) {
   const [open, setOpen] = useState(false);
   const [coords, setCoords] = useState<{ top: number; right: number }>({ top: 0, right: 0 });
@@ -180,7 +203,17 @@ function RowActionMenu({ label, items }: { label: string; items: RowActionItem[]
 
   function openMenu() {
     const rect = triggerRef.current?.getBoundingClientRect();
-    if (rect) setCoords({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+    if (rect) {
+      const viewportMargin = 8;
+      const menuWidth = 220;
+      const estimatedMenuHeight = items.length * 40 + 14;
+      const maxRight = Math.max(viewportMargin, window.innerWidth - menuWidth - viewportMargin);
+      const maxTop = Math.max(viewportMargin, window.innerHeight - estimatedMenuHeight - viewportMargin);
+      setCoords({
+        top: Math.min(rect.bottom + 4, maxTop),
+        right: Math.min(Math.max(viewportMargin, window.innerWidth - rect.right), maxRight),
+      });
+    }
     setOpen(true);
   }
 
@@ -253,22 +286,131 @@ function RowActionMenu({ label, items }: { label: string; items: RowActionItem[]
   );
 }
 
-function EmptyGuidance({ title, body }: { title: string; body: string }) {
+function ResponsiveActionBar({ items, moreLabel }: { items: ResponsiveActionItem[]; moreLabel: string }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const measureRef = useRef<HTMLDivElement>(null);
+  const [visibleCount, setVisibleCount] = useState(items.length);
+  const overflowItems = items.slice(visibleCount);
+
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    const measure = measureRef.current;
+    if (!container || !measure) return;
+    const actionContainer = container;
+    const actionMeasure = measure;
+
+    function calculateVisibleCount() {
+      const containerWidth = actionContainer.clientWidth;
+      const measuredActions = Array.from(actionMeasure.querySelectorAll<HTMLElement>("[data-measure-action]"));
+      const measuredMenu = actionMeasure.querySelector<HTMLElement>("[data-measure-menu]");
+      if (!containerWidth || measuredActions.length !== items.length || !measuredMenu) return;
+
+      const styles = window.getComputedStyle(actionContainer);
+      const gap = Number.parseFloat(styles.columnGap || styles.gap || "0") || 0;
+      const actionWidths = measuredActions.map((action) => Math.ceil(action.getBoundingClientRect().width));
+      const menuWidth = Math.ceil(measuredMenu.getBoundingClientRect().width);
+      const availableWidth = Math.floor(actionContainer.getBoundingClientRect().width) - 4;
+      const fullWidth = actionWidths.reduce((total, width) => total + width, 0) + Math.max(0, items.length - 1) * gap;
+
+      let nextVisibleCount = items.length;
+      if (fullWidth <= availableWidth) {
+        setVisibleCount((current) => (current === items.length ? current : items.length));
+        return;
+      }
+
+      for (let count = items.length - 1; count >= 0; count -= 1) {
+        const visibleWidths = actionWidths.slice(0, count).reduce((total, width) => total + width, 0);
+        const shownItems = count + 1;
+        const totalGap = Math.max(0, shownItems - 1) * gap;
+        const totalWidth = visibleWidths + menuWidth + totalGap;
+        if (totalWidth <= availableWidth) {
+          nextVisibleCount = count;
+          break;
+        }
+      }
+
+      setVisibleCount((current) => (current === nextVisibleCount ? current : nextVisibleCount));
+    }
+
+    calculateVisibleCount();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", calculateVisibleCount);
+      return () => window.removeEventListener("resize", calculateVisibleCount);
+    }
+    const observer = new ResizeObserver(calculateVisibleCount);
+    observer.observe(actionContainer);
+    return () => observer.disconnect();
+  }, [items]);
+
+  useEffect(() => {
+    setVisibleCount((current) => Math.min(current, items.length));
+  }, [items.length]);
+
+  return (
+    <div className="responsive-action-bar" ref={containerRef}>
+      {items.slice(0, visibleCount).map((item) => (
+        <RouteActionButton item={item} key={item.label} />
+      ))}
+      {overflowItems.length ? <RowActionMenu label={moreLabel} items={overflowItems} /> : null}
+      <div className="responsive-action-bar-measure" ref={measureRef} aria-hidden="true">
+        {items.map((item) => (
+          <RouteActionButton item={item} key={item.label} measure />
+        ))}
+        <button className="icon-button" type="button" data-measure-menu tabIndex={-1}>
+          <MoreHorizontal aria-hidden="true" className="button-icon" focusable="false" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function RouteActionButton({ item, measure = false }: { item: ResponsiveActionItem; measure?: boolean }) {
+  const Icon = item.icon;
+  const tone = item.buttonTone || "secondary";
+  return (
+    <button
+      className={classNames(
+        tone === "primary" ? "primary-button" : tone === "danger" ? "danger-button" : "secondary-button",
+        "button-with-icon",
+        "route-action-button",
+      )}
+      type="button"
+      disabled={item.disabled}
+      onClick={item.onClick}
+      data-measure-action={measure || undefined}
+      tabIndex={measure ? -1 : undefined}
+    >
+      <Icon aria-hidden="true" className={classNames("button-icon", item.spinning && "button-icon--spin")} focusable="false" />
+      {item.label}
+    </button>
+  );
+}
+
+function EmptyGuidance({ title, body }: { title: string; body?: string }) {
   return (
     <div className="empty-guidance">
       <strong>{title}</strong>
-      <p>{body}</p>
+      {body ? <p>{body}</p> : null}
     </div>
+  );
+}
+
+function AppLogo() {
+  return (
+    <span className="app-logo" aria-hidden="true">
+      <img className="app-logo-image app-logo-image--light" src="/brand/logo-light.png" alt="" />
+      <img className="app-logo-image app-logo-image--dark" src="/brand/logo-dark.png" alt="" />
+    </span>
   );
 }
 
 function routeFromPath(pathname: string): RouteName {
   if (pathname === "/" || pathname === "/dashboard") return "dashboard";
-  if (pathname === "/status") return "status";
-  if (pathname === "/webhooks") return "webhooks";
+  if (pathname === "/webhooks" || pathname.startsWith("/webhooks/")) return "webhooks";
   if (pathname === "/payload-generator") return "payload-generator";
+  if (pathname === "/delivery") return "delivery";
   if (pathname === "/users") return "users";
-  if (pathname === "/settings") return "settings";
+  if (pathname === "/settings" || pathname.startsWith("/settings/")) return "settings";
   if (pathname === "/system-logs") return "system-logs";
   if (pathname === "/logs") return "logs";
   return "dashboard";
@@ -299,13 +441,12 @@ function LoginScreen() {
     <main className="login-screen">
       <section className="login-panel">
         <div className="login-panel-header">
-          <div className="app-mark">T</div>
+          <AppLogo />
           <ThemeToggle />
         </div>
         <div>
-          <p className="eyebrow">Teams Rehook Workspace</p>
           <h1>Teams Rehook</h1>
-          <p className="lede">Manage stable webhook routes that forward operational messages into Microsoft Teams conversations.</p>
+          <p className="lede">Sign in to continue.</p>
         </div>
         <form className="compact-form" onSubmit={submit}>
           <Field label="Email">
@@ -368,7 +509,7 @@ function FirstAdminSetupScreen() {
     <main className="login-screen">
       <section className="login-panel setup-panel">
         <div className="login-panel-header">
-          <div className="app-mark">T</div>
+          <AppLogo />
           <ThemeToggle />
         </div>
         <div>
@@ -432,10 +573,43 @@ function FirstAdminSetupScreen() {
 
 function WebhookCopyPage() {
   const inputRef = useRef<HTMLInputElement>(null);
-  const webhookUrl = useMemo(() => new URLSearchParams(window.location.search).get("url") ?? "", []);
+  const revealToken = useMemo(() => new URLSearchParams(window.location.search).get("token") ?? "", []);
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [routeName, setRouteName] = useState("");
+  const [expiresAt, setExpiresAt] = useState("");
+  const [loading, setLoading] = useState(Boolean(revealToken));
+  const [error, setError] = useState(revealToken ? "" : "This webhook URL link is missing or expired.");
   const [status, setStatus] = useState("");
   const [copied, setCopied] = useState(false);
   const copiedTimer = useRef<ReturnType<typeof setTimeout>>();
+
+  useEffect(() => {
+    if (!revealToken) return;
+    let cancelled = false;
+    async function loadReveal() {
+      setLoading(true);
+      setError("");
+      try {
+        const reveal = await api.webhookUrlReveal(revealToken);
+        if (cancelled) return;
+        setWebhookUrl(reveal.webhook_url);
+        setRouteName(reveal.route_name);
+        setExpiresAt(reveal.expires_at);
+      } catch (err) {
+        if (cancelled) return;
+        setWebhookUrl("");
+        setRouteName("");
+        setExpiresAt("");
+        setError(isApiError(err) ? err.message : "This webhook URL link is invalid or expired.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    void loadReveal();
+    return () => {
+      cancelled = true;
+    };
+  }, [revealToken]);
 
   useEffect(() => () => clearTimeout(copiedTimer.current), []);
 
@@ -458,12 +632,13 @@ function WebhookCopyPage() {
     <main className="public-copy-screen">
       <section className="public-copy-panel">
         <div className="login-panel-header">
-          <div className="app-mark">T</div>
+          <AppLogo />
           <ThemeToggle />
         </div>
         <div>
           <p className="eyebrow">Teams Rehook</p>
           <h1>Copy webhook URL</h1>
+          {routeName ? <p className="copy-route-name">{routeName}</p> : null}
         </div>
         <div className="copy-url-field">
           <label htmlFor="webhook-copy-url">Webhook URL</label>
@@ -472,18 +647,23 @@ function WebhookCopyPage() {
             ref={inputRef}
             readOnly
             value={webhookUrl}
-            placeholder="No webhook URL provided"
+            placeholder={loading ? "Loading webhook URL..." : "No webhook URL available"}
             onFocus={(event) => event.currentTarget.select()}
           />
         </div>
         <button
           className={`primary-button button-with-icon copy-url-button${copied ? " is-copied" : ""}`}
           type="button"
-          disabled={!webhookUrl}
+          disabled={loading || !webhookUrl}
           onClick={() => void copyWebhookUrl()}
         >
           <span className="copy-url-button-label" key={copied ? "copied" : "idle"}>
-            {copied ? (
+            {loading ? (
+              <>
+                <RefreshCw aria-hidden="true" className="button-icon button-icon--spin" focusable="false" />
+                Loading
+              </>
+            ) : copied ? (
               <>
                 <Check aria-hidden="true" className="button-icon" focusable="false" />
                 Copied
@@ -496,6 +676,15 @@ function WebhookCopyPage() {
             )}
           </span>
         </button>
+        {error ? (
+          <p className="copy-status copy-status--error" role="alert">
+            {error}
+          </p>
+        ) : expiresAt ? (
+          <p className="copy-status" role="status">
+            This reveal link expires {formatDateTime(expiresAt)}.
+          </p>
+        ) : null}
         {status ? (
           <p className="copy-status" role="status" aria-live="polite">
             {status}
@@ -508,30 +697,64 @@ function WebhookCopyPage() {
 
 function AppShell() {
   const { session, logout } = useAppContext();
-  const [route, setRoute] = useState<RouteName>(() => routeFromPath(window.location.pathname));
+  const [path, setPath] = useState(() => window.location.pathname);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const route = routeFromPath(path);
 
   useEffect(() => {
-    const onPop = () => setRoute(routeFromPath(window.location.pathname));
+    if (path !== "/status") return;
+    window.history.replaceState(null, "", "/dashboard");
+    setPath("/dashboard");
+  }, [path]);
+
+  useEffect(() => {
+    const onPop = () => {
+      setPath(window.location.pathname);
+      setSidebarOpen(false);
+    };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
-  function navigate(next: RouteName, path: string) {
+  useEffect(() => {
+    if (!sidebarOpen) return undefined;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSidebarOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [sidebarOpen]);
+
+  function navigate(path: string) {
     window.history.pushState(null, "", path);
-    setRoute(next);
+    setPath(path);
+    setSidebarOpen(false);
   }
 
   if (session.status !== "authenticated") return null;
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
+      <button
+        className={classNames("sidebar-backdrop", sidebarOpen && "sidebar-backdrop--open")}
+        type="button"
+        aria-label="Dismiss menu overlay"
+        onClick={() => setSidebarOpen(false)}
+      />
+      <aside className={classNames("sidebar", sidebarOpen && "sidebar--open")} id="app-sidebar">
         <div className="brand-row">
-          <div className="app-mark">T</div>
+          <AppLogo />
           <div>
             <strong>Teams Rehook</strong>
             <span>Webhook Relay</span>
           </div>
+          <button className="sidebar-close" type="button" aria-label="Close navigation" onClick={() => setSidebarOpen(false)}>
+            <X aria-hidden="true" />
+          </button>
         </div>
         <nav className="nav-list" aria-label="Primary navigation">
           {NAV.map((item) => (
@@ -539,13 +762,17 @@ function AppShell() {
               key={item.route}
               type="button"
               className={classNames("nav-link", route === item.route && "nav-link--active")}
-              onClick={() => navigate(item.route, item.path)}
+              onClick={() => navigate(item.path)}
             >
               <span aria-hidden="true">{item.icon}</span>
               {item.label}
             </button>
           ))}
         </nav>
+        <div className="sidebar-theme-control">
+          <span>Theme</span>
+          <ThemeToggle id="sidebar-theme-toggle" />
+        </div>
         <div className="sidebar-footer">
           <div>
             <strong>{session.user.display_name}</strong>
@@ -558,15 +785,24 @@ function AppShell() {
       </aside>
       <main className="main-content">
         <header className="topbar">
-          <div />
-          <ThemeToggle />
+          <div className="topbar-spacer" />
+          <button
+            className="sidebar-toggle"
+            type="button"
+            aria-controls="app-sidebar"
+            aria-expanded={sidebarOpen}
+            onClick={() => setSidebarOpen(true)}
+          >
+            <Menu aria-hidden="true" />
+            <span>Menu</span>
+          </button>
         </header>
         {route === "dashboard" ? <DashboardPage /> : null}
-        {route === "status" ? <StatusPage /> : null}
         {route === "webhooks" ? <WebhooksPage /> : null}
         {route === "payload-generator" ? <PayloadGeneratorPage /> : null}
+        {route === "delivery" ? <DeliveryMethodsPage /> : null}
         {route === "users" ? <UsersPage /> : null}
-        {route === "settings" ? <SettingsPage /> : null}
+        {route === "settings" ? path.startsWith("/settings/graph-delivery/") ? <GraphDeliveryOAuthPage /> : <SettingsPage /> : null}
         {route === "logs" ? <MessageLogsPage /> : null}
         {route === "system-logs" ? <SystemLogsPage /> : null}
       </main>
@@ -618,55 +854,47 @@ function DashboardPage() {
 
   return (
     <>
-      <PageIntro
-        eyebrow="Overview"
-        title="Teams Rehook dashboard"
-        description="Monitor relay routes, Teams conversations and recent delivery health from one operational view."
-      />
+      <PageIntro title="Dashboard" />
       <div className="metric-grid">
         <Card className="metric-card">
           <div className="metric-card__head">
             <span className="metric-icon" aria-hidden="true">
               <Webhook size={18} strokeWidth={2} />
             </span>
-            <span className="metric-label">Webhook routes</span>
+            <span className="metric-label">Routes</span>
           </div>
           <strong className="metric-value">{metricValue(counts.routes)}</strong>
-          <span className="metric-context">All configured relay routes</span>
         </Card>
         <Card className="metric-card">
           <div className="metric-card__head">
             <span className="metric-icon" aria-hidden="true">
               <Radio size={18} strokeWidth={2} />
             </span>
-            <span className="metric-label">Active routes</span>
+            <span className="metric-label">Active</span>
           </div>
           <strong className="metric-value">{metricValue(counts.active)}</strong>
-          <span className="metric-context">Currently accepting requests</span>
         </Card>
         <Card className={classNames("metric-card", !loading && !error && counts.attention > 0 ? "metric-card--alert" : null)}>
           <div className="metric-card__head">
             <span className="metric-icon" aria-hidden="true">
               <AlertTriangle size={18} strokeWidth={2} />
             </span>
-            <span className="metric-label">Needs attention</span>
+            <span className="metric-label">Delivery issues</span>
           </div>
           <strong className="metric-value">{metricValue(counts.attention)}</strong>
-          <span className="metric-context">Failed or rejected deliveries</span>
         </Card>
         <Card className="metric-card">
           <div className="metric-card__head">
             <span className="metric-icon" aria-hidden="true">
               <MessagesSquare size={18} strokeWidth={2} />
             </span>
-            <span className="metric-label">Known conversations</span>
+            <span className="metric-label">Conversations</span>
           </div>
           <strong className="metric-value">{metricValue(counts.conversations)}</strong>
-          <span className="metric-context">Captured Teams targets</span>
         </Card>
       </div>
       <div className="attention-grid">
-        <Card title="Needs attention" description="Routes with failed or rejected last delivery status.">
+        <Card title="Delivery issues">
           {attentionRoutes.length ? (
             <ul className="compact-list">
               {attentionRoutes.map((route) => (
@@ -677,57 +905,60 @@ function DashboardPage() {
               ))}
             </ul>
           ) : (
-            <EmptyGuidance
-              title="No delivery problems"
-              body="Failed or rejected route status will appear here after webhook requests or manual tests."
-            />
+            <EmptyGuidance title="No delivery issues" />
           )}
         </Card>
-        <Card title="Setup gaps" description="Routes and conversations that still need operator action.">
+        <Card title="Setup">
           <ul className="compact-list">
             {!references.length ? (
               <li>
-                <strong>No known conversations</strong>
-                <span>Add the bot to a Teams chat or channel, then send or mention the bot once.</span>
+                <strong>No conversations</strong>
+                <span>Add the bot, then send one message.</span>
               </li>
             ) : null}
             {untestedRoutes.map((route) => (
               <li key={route.id}>
                 <strong>{route.name}</strong>
-                <span>Send a test message before sharing the relay URL.</span>
+                <span>Send a test before sharing.</span>
               </li>
             ))}
             {inactiveRoutes.map((route) => (
               <li key={route.id}>
                 <strong>{route.name}</strong>
-                <span>Route is disabled and will reject incoming webhook requests.</span>
+                <span>Disabled.</span>
               </li>
             ))}
             {references.length && !untestedRoutes.length && !inactiveRoutes.length ? (
               <li>
-                <strong>No setup gaps</strong>
-                <span>Active routes have delivery history and known conversations are available.</span>
+                <strong>Setup complete</strong>
               </li>
             ) : null}
           </ul>
         </Card>
       </div>
-      <Card title="Recent webhook routes" description="Latest relay routes and their current delivery status.">
+      <Card title="Recent routes">
         <DataTable
+          className="data-table--dashboard-routes"
           columns={["Route", "Target", "Active", "Last delivery", "Updated"]}
-          rows={recentRoutes.map((route) => [
-            <strong>{route.name}</strong>,
-            <div className="stacked-cell">
-              <span>{route.target_name}</span>
-            </div>,
-            route.is_active ? <StatusBadge label="Active" tone="success" /> : <StatusBadge label="Disabled" tone="warn" />,
-            <DeliveryStatusBadge route={route} />,
-            formatDateTime(route.updated_at),
-          ])}
-          emptyTitle="No webhook routes"
-          emptyBody="Start by adding the bot to a Teams conversation, capture that conversation, create a route, then send a test message."
+          rows={recentRoutes.map((route) => {
+            const target = dashboardRouteTargetDisplay(route);
+            return [
+              <span className="dashboard-route-name" title={route.name}>
+                {route.name}
+              </span>,
+              <div className="stacked-cell dashboard-target-cell" title={target.full}>
+                <span className="dashboard-target-kind">{target.primary}</span>
+                {target.secondary ? <span className="dashboard-target-detail">{target.secondary}</span> : null}
+              </div>,
+              route.is_active ? <StatusBadge label="Active" tone="success" /> : <StatusBadge label="Disabled" tone="warn" />,
+              <DeliveryStatusBadge route={route} />,
+              formatDateTime(route.updated_at),
+            ];
+          })}
+          emptyTitle="No routes"
+          emptyBody="Create a route after the bot has captured a conversation."
           loading={loading}
-          loadingLabel="Loading recent webhook routes..."
+          loadingLabel="Loading routes..."
           error={error}
           onRetry={() => void refresh()}
           rowKey={(index) => recentRoutes[index]?.id ?? index}
@@ -735,6 +966,45 @@ function DashboardPage() {
       </Card>
     </>
   );
+}
+
+function dashboardRouteTargetDisplay(route: WebhookRouteOut): { primary: string; secondary: string; full: string } {
+  const target = webhookTargetPresentation(route);
+  const fallback = webhookRouteTargetSecondaryDetail(route, target);
+  const full = [target.kindLabel, fallback || target.title || route.target_name].filter(Boolean).join(": ");
+
+  if (target.kindLabel === "Group chat") {
+    const memberNames = webhookTargetMemberNames(route).map(compactDashboardPersonName);
+    return {
+      primary: target.kindLabel,
+      secondary: memberNames.length ? compactMemberSummary(memberNames, route.member_count || memberNames.length) : compactDashboardTargetText(fallback),
+      full,
+    };
+  }
+
+  if (target.kindLabel === "1:1 chat") {
+    return {
+      primary: target.kindLabel,
+      secondary: compactDashboardPersonName(fallback || target.title),
+      full,
+    };
+  }
+
+  return {
+    primary: target.kindLabel,
+    secondary: compactDashboardTargetText(fallback || target.title || route.target_name),
+    full,
+  };
+}
+
+function compactDashboardPersonName(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  return trimmed.split(" - ")[0]?.trim() || trimmed;
+}
+
+function compactDashboardTargetText(value: string): string {
+  return value.trim().replace(/\s+\+\s+(\d+)$/, " +$1");
 }
 
 function newPayloadFact(name = "", value = ""): PayloadFact {
@@ -1427,7 +1697,7 @@ type WebhookRouteView = {
   tone: StatusTone;
   statusLabel: string;
   summary: string;
-  targetSummary: string;
+  targetPresentation: WebhookTargetPresentation;
   deliveryLabel: string;
   lastActivityLabel: string;
   topIssue: string;
@@ -1437,6 +1707,17 @@ type WebhookRouteView = {
   technicalRows: StatusTechnicalRow[];
 };
 
+type WebhookTargetPresentation = {
+  kindLabel: string;
+  title: string;
+  subtitle: string;
+};
+
+type WebhookTargetTableDisplay = {
+  primary: string;
+  secondary: string;
+};
+
 function buildWebhookRouteView(route: WebhookRouteOut, policy: DeliveryFeaturePolicy): WebhookRouteView {
   const featureEnabled = routeDeliveryFeatureEnabled(route, policy);
   const deliveryLabel = route.last_delivery_status ? capitalize(route.last_delivery_status) : "Not tested";
@@ -1444,7 +1725,7 @@ function buildWebhookRouteView(route: WebhookRouteOut, policy: DeliveryFeaturePo
   const tone = webhookRouteTone(route, featureEnabled);
   const statusLabel = webhookRouteStatusLabel(route, featureEnabled);
   const topIssue = webhookRouteTopIssue(route, featureEnabled);
-  const targetSummary = webhookTargetSummary(route);
+  const targetPresentation = webhookTargetPresentation(route);
 
   return {
     route,
@@ -1455,7 +1736,7 @@ function buildWebhookRouteView(route: WebhookRouteOut, policy: DeliveryFeaturePo
         ? `Accepts relay requests for ${route.target_name || "the selected Teams target"}.`
         : "Route is active, but its delivery feature is disabled."
       : "Route is disabled and rejects incoming webhook requests.",
-    targetSummary,
+    targetPresentation,
     deliveryLabel,
     lastActivityLabel,
     topIssue,
@@ -1525,12 +1806,142 @@ function webhookRouteIssueDetail(route: WebhookRouteOut, featureEnabled: boolean
   return "The latest delivery check completed successfully.";
 }
 
-function webhookTargetSummary(route: WebhookRouteOut): string {
-  if (route.delivery_backend === "graph") {
-    const type = route.graph_target_kind ? capitalize(route.graph_target_kind) : "Graph target";
-    return `${type} · ${route.target_name || route.graph_target_id || "No target name"}`;
+function webhookTargetPresentation(route: WebhookRouteOut): WebhookTargetPresentation {
+  const kindLabel = webhookTargetKindLabel(route);
+  const targetName = route.target_name.trim();
+  const memberSummary = route.member_summary.trim();
+  const graphUserDisplayName = route.graph_user_display_name.trim();
+  const graphUserPrincipalName = route.graph_user_principal_name.trim();
+  const graphTeamName = route.graph_team_name.trim();
+  const graphTargetId = route.graph_target_id.trim();
+
+  if (kindLabel === "Group chat") {
+    const title = memberSummary || nonGenericTargetName(targetName, ["group chat", "teams group chat", "chat"]) || "Group chat";
+    return {
+      kindLabel,
+      title,
+      subtitle: title === kindLabel ? "" : kindLabel,
+    };
   }
-  return route.target_name || "Bot conversation";
+
+  if (kindLabel === "1:1 chat") {
+    const title = nonGenericTargetName(targetName, ["1:1 chat", "one-on-one chat", "teams 1:1 chat"]) || graphUserDisplayName || memberSummary || "1:1 chat";
+    return {
+      kindLabel,
+      title,
+      subtitle: graphUserPrincipalName || (title === kindLabel ? "" : kindLabel),
+    };
+  }
+
+  if (kindLabel === "Channel") {
+    const title = targetName || graphTeamName || "Teams channel";
+    const subtitle = graphTeamName && graphTeamName !== title && !title.includes(graphTeamName) ? graphTeamName : "Channel";
+    return {
+      kindLabel,
+      title,
+      subtitle: subtitle === title ? "" : subtitle,
+    };
+  }
+
+  if (kindLabel === "Team") {
+    const title = targetName || graphTeamName || "Team";
+    return {
+      kindLabel,
+      title,
+      subtitle: title === kindLabel ? "" : kindLabel,
+    };
+  }
+
+  const title = targetName || graphTeamName || graphUserDisplayName || graphTargetId || kindLabel;
+  return {
+    kindLabel,
+    title,
+    subtitle: title === kindLabel ? "" : kindLabel,
+  };
+}
+
+function webhookRouteTargetTableDisplay(view: WebhookRouteView): WebhookTargetTableDisplay {
+  const route = view.route;
+  const target = view.targetPresentation;
+  const secondary = webhookRouteTargetSecondaryDetail(route, target);
+
+  return {
+    primary: target.kindLabel,
+    secondary: secondary || target.title || route.target_name.trim() || target.subtitle || target.kindLabel,
+  };
+}
+
+function webhookRouteTargetSecondaryDetail(route: WebhookRouteOut, target: WebhookTargetPresentation): string {
+  const targetName = route.target_name.trim();
+
+  if (target.kindLabel === "Group chat") {
+    const memberNames = webhookTargetMemberNames(route);
+    if (memberNames.length) return compactMemberSummary(memberNames, route.member_count || memberNames.length);
+    return nonGenericTargetName(target.title, ["group chat", "teams group chat", "chat"]) || targetName;
+  }
+
+  if (target.kindLabel === "1:1 chat") {
+    return (
+      nonGenericTargetName(target.title, ["1:1 chat", "one-on-one chat", "teams 1:1 chat"]) ||
+      route.graph_user_display_name.trim() ||
+      route.graph_user_principal_name.trim() ||
+      targetName
+    );
+  }
+
+  if (target.kindLabel === "Channel") {
+    return target.title || route.graph_channel_id.trim() || targetName;
+  }
+
+  if (target.kindLabel === "Team") {
+    return target.title || route.graph_team_name.trim() || targetName;
+  }
+
+  return target.title || target.subtitle || targetName;
+}
+
+function compactMemberSummary(memberNames: string[], totalCount: number): string {
+  const uniqueNames = Array.from(new Set(memberNames.map((name) => name.trim()).filter(Boolean)));
+  const visibleNames = uniqueNames.slice(0, 2);
+  const remaining = Math.max(totalCount || uniqueNames.length, uniqueNames.length) - visibleNames.length;
+  return [visibleNames.join(", "), remaining > 0 ? `+${remaining}` : ""].filter(Boolean).join(" ");
+}
+
+function nonGenericTargetName(value: string, genericLabels: string[]): string {
+  const normalized = value.trim().toLowerCase();
+  return normalized && !genericLabels.includes(normalized) ? value.trim() : "";
+}
+
+function webhookUrlPreview(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const token = parts.length ? parts[parts.length - 1] : "";
+    const tokenPreview = token.length > 18 ? `${token.slice(0, 10)}...${token.slice(-6)}` : token;
+    return `${parsed.origin}/${parts.slice(0, -1).join("/")}/${tokenPreview}`;
+  } catch {
+    return url.length > 48 ? `${url.slice(0, 30)}...${url.slice(-12)}` : url;
+  }
+}
+
+function webhookRouteBackendTableLabel(backend: DeliveryBackend): string {
+  return backend === "graph" ? "Graph Delivery" : "Bot Framework";
+}
+
+function webhookTargetKindLabel(route: WebhookRouteOut): string {
+  if (route.delivery_backend === "graph") {
+    if (route.graph_target_kind === "channel") return "Channel";
+    if (route.graph_target_kind === "chat") return route.graph_user_id || route.graph_user_display_name || route.graph_user_principal_name ? "1:1 chat" : "Group chat";
+    if (route.graph_target_kind === "user") return "1:1 chat";
+    if (route.graph_target_kind === "team") return "Team";
+    return "Graph target";
+  }
+  const targetName = route.target_name.toLowerCase();
+  const summary = route.member_summary.toLowerCase();
+  if (targetName.includes(" / ") || route.graph_channel_id) return "Channel";
+  if (route.member_count > 2 || summary.includes(",") || summary.includes(" members")) return "Group chat";
+  if (route.member_count > 0 && route.member_count <= 2) return "1:1 chat";
+  return "1:1 chat";
 }
 
 function clientIpAccessLabel(route: WebhookRouteOut): string {
@@ -1545,6 +1956,16 @@ function capitalize(value: string): string {
   return value ? value.charAt(0).toUpperCase() + value.slice(1) : value;
 }
 
+function currentWebhookRouteId(): string {
+  const match = window.location.pathname.match(/^\/webhooks\/([^/]+)$/);
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
+function currentBotConversationReferenceId(): string {
+  const match = window.location.pathname.match(/^\/webhooks\/conversations\/([^/]+)$/);
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
 function WebhooksPage() {
   const { session, notify } = useAppContext();
   const [routes, setRoutes] = useState<WebhookRouteOut[]>([]);
@@ -1554,7 +1975,6 @@ function WebhooksPage() {
   const [confirmingDelete, setConfirmingDelete] = useState<WebhookRouteOut | null>(null);
   const [regeneratedUrl, setRegeneratedUrl] = useState<{ routeName: string; url: string } | null>(null);
   const [viewingBotReferences, setViewingBotReferences] = useState(false);
-  const [botDefaultServiceUrl, setBotDefaultServiceUrl] = useState("");
   const [featurePolicy, setFeaturePolicy] = useState<DeliveryFeaturePolicy>(DEFAULT_DELIVERY_FEATURE_POLICY);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -1563,8 +1983,10 @@ function WebhooksPage() {
   const [deletingId, setDeletingId] = useState("");
   const [togglingId, setTogglingId] = useState("");
   const [refreshingRouteNameId, setRefreshingRouteNameId] = useState("");
-  const [selectedRouteId, setSelectedRouteId] = useState("");
+  const [refreshingMembersId, setRefreshingMembersId] = useState("");
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
+  const conversationReferenceId = currentBotConversationReferenceId();
+  const routeDetailId = currentWebhookRouteId();
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -1584,16 +2006,13 @@ function WebhooksPage() {
     void refresh();
   }, [csrfToken, refresh]);
 
-  useEffect(() => {
-    void api.webhookRouteDefaults().then((defaults) => setBotDefaultServiceUrl(defaults.bot_default_service_url));
-  }, []);
-
   async function deleteRoute(route: WebhookRouteOut) {
     setDeletingId(route.id);
     try {
       await api.deleteWebhookRoute(csrfToken, route.id);
       notify({ tone: "info", title: "Webhook route deleted", description: route.name });
       await refresh();
+      if (currentWebhookRouteId() === route.id) navigateInApp("/webhooks");
       setConfirmingDelete(null);
     } catch (err) {
       notify({
@@ -1673,107 +2092,146 @@ function WebhooksPage() {
     }
   }
 
-  async function refreshRouteGraphNames(route: WebhookRouteOut) {
+  async function refreshRouteGraphData(route: WebhookRouteOut) {
+    const errors: string[] = [];
+    let memberSummary = "";
+    let namesChanged = false;
+    setRefreshingMembersId(route.id);
     setRefreshingRouteNameId(route.id);
+    try {
+      const updated = await api.refreshWebhookRouteMembers(csrfToken, route.id);
+      if (updated.members_lookup_error) {
+        errors.push(updated.members_lookup_error);
+      } else {
+        memberSummary = updated.member_summary || `${updated.member_count} members`;
+      }
+    } catch (err) {
+      errors.push(isApiError(err) ? err.message : "The member list could not be refreshed.");
+    }
+
     try {
       const result = await api.refreshSingleWebhookRouteGraphNames(csrfToken, route.id);
       if (!result.ok) {
-        notify({
-          tone: "error",
-          title: "Name refresh failed",
-          description: result.error || "Microsoft Graph could not resolve the route name.",
-        });
-        return;
+        errors.push(result.error || "Microsoft Graph could not resolve the route name.");
+      } else {
+        namesChanged = result.routes_updated > 0;
       }
-      notify({
-        tone: "success",
-        title: "Names refreshed",
-        description: result.routes_updated ? route.name : "This route already has the current Graph names.",
-      });
-      await refresh();
     } catch (err) {
+      errors.push(isApiError(err) ? err.message : "Microsoft Graph could not resolve the route name.");
+    }
+
+    if (errors.length) {
       notify({
         tone: "error",
-        title: "Name refresh failed",
-        description: isApiError(err) ? err.message : "Microsoft Graph could not resolve the route name.",
+        title: "Refresh incomplete",
+        description: errors.join(" "),
       });
+    } else {
+      notify({
+        tone: "success",
+        title: "Route refreshed",
+        description: namesChanged ? "Members and Graph names were updated." : memberSummary || "Route data is already current.",
+      });
+    }
+
+    try {
+      await refresh();
     } finally {
+      setRefreshingMembersId("");
       setRefreshingRouteNameId("");
     }
   }
 
   const routeViews = routes.map((route) => buildWebhookRouteView(route, featurePolicy));
-  const defaultSelectedRouteId =
-    routeViews.find((view) => view.tone === "danger")?.route.id ??
-    routeViews.find((view) => view.tone === "warn")?.route.id ??
-    routeViews[0]?.route.id ??
-    "";
-  const selectedRouteView =
-    routeViews.find((view) => view.route.id === selectedRouteId) ??
-    routeViews.find((view) => view.route.id === defaultSelectedRouteId) ??
-    routeViews[0] ??
-    null;
-  const selectedRouteIdEffective = selectedRouteView?.route.id ?? defaultSelectedRouteId;
+  const selectedRouteView = routeDetailId ? routeViews.find((view) => view.route.id === routeDetailId) ?? null : null;
+  const pageTitle = conversationReferenceId ? "Conversation inspector" : routeDetailId && selectedRouteView ? selectedRouteView.route.name : "Webhooks";
+  const pageDescription = conversationReferenceId ? "Inspect a captured Teams bot conversation and its linked webhook routes." : routeDetailId && selectedRouteView ? selectedRouteView.summary : undefined;
+  const pageEyebrow = conversationReferenceId ? "Bot conversation" : routeDetailId ? "Route workspace" : undefined;
 
   return (
     <>
       <PageIntro
-        eyebrow="Teams Rehook"
-        title="Webhook routes"
-        description="Operate relay endpoints, validate delivery and inspect route health without digging through raw diagnostics."
+        eyebrow={pageEyebrow}
+        title={pageTitle}
+        description={pageDescription}
         actions={
           <div className="row-actions">
-            <button
-              className="secondary-button button-with-icon"
-              type="button"
-              onClick={() => setViewingBotReferences(true)}
-            >
-              <MessageSquareText aria-hidden="true" className="button-icon" focusable="false" />
-              Known conversations
-            </button>
-            <button
-              className="primary-button button-with-icon"
-              type="button"
-              onClick={() => setEditing(emptyWebhookRoute(botDefaultServiceUrl))}
-            >
-              <Plus aria-hidden="true" className="button-icon" focusable="false" />
-              New route
-            </button>
+            {routeDetailId || conversationReferenceId ? (
+              <button className="secondary-button button-with-icon" type="button" onClick={() => navigateInApp("/webhooks")}>
+                <ChevronLeft aria-hidden="true" className="button-icon" focusable="false" />
+                Back to routes
+              </button>
+            ) : (
+              <>
+                <button
+                  className="secondary-button button-with-icon"
+                  type="button"
+                  onClick={() => setViewingBotReferences(true)}
+                >
+                  <MessageSquareText aria-hidden="true" className="button-icon" focusable="false" />
+                  Conversations
+                </button>
+                <button
+                  className="primary-button button-with-icon"
+                  type="button"
+                  onClick={() => setEditing(emptyWebhookRoute())}
+                >
+                  <Plus aria-hidden="true" className="button-icon" focusable="false" />
+                  New
+                </button>
+              </>
+            )}
           </div>
         }
       />
-      <div className="webhooks-command-center">
-        <WebhookRouteSummary routeViews={routeViews} loading={loading} />
-        <WebhookRouteConsole
-          error={error}
-          loading={loading}
-          onCopyRoute={(route) => void copyText(route.webhook_url ?? "", route.name)}
-          onCreateRoute={() => setEditing(emptyWebhookRoute(botDefaultServiceUrl))}
-          onEditRoute={setEditing}
-          onRetry={() => void refresh()}
-          onSelectRoute={setSelectedRouteId}
-          onTestRoute={(route) => void testRoute(route)}
-          routeViews={routeViews}
-          selectedRouteId={selectedRouteIdEffective}
-          testingId={testingId}
+      {conversationReferenceId ? (
+        <BotConversationReferenceDetailPage
+          referenceId={conversationReferenceId}
+          csrfToken={csrfToken}
+          onCreateRoute={(reference) => setEditing(webhookRouteFromReference(reference))}
+          onDeleted={() => {
+            void refresh();
+            navigateInApp("/webhooks");
+          }}
         />
-        <WebhookRouteInspector
+      ) : routeDetailId ? (
+        <WebhookRouteDetailPage
+          error={error}
           featurePolicy={featurePolicy}
+          loading={loading}
           onCopyRoute={(route) => void copyText(route.webhook_url ?? "", route.name)}
           onDeleteRoute={setConfirmingDelete}
           onEditRoute={setEditing}
-          onRefreshNames={(route) => void refreshRouteGraphNames(route)}
+          onRefreshRouteData={(route) => void refreshRouteGraphData(route)}
           onRegenerateRoute={setConfirmingRegeneration}
+          onRetry={() => void refresh()}
           onTestRoute={(route) => void testRoute(route)}
           onToggleRoute={(route) => void toggleRouteActive(route)}
           onViewLogs={setViewingLogs}
+          refreshingMembersId={refreshingMembersId}
           refreshingRouteNameId={refreshingRouteNameId}
           regeneratingId={regeneratingId}
           routeView={selectedRouteView}
           testingId={testingId}
           togglingId={togglingId}
         />
-      </div>
+      ) : (
+        <div className="webhooks-command-center">
+          <WebhookRouteSummary routeViews={routeViews} loading={loading} />
+          <WebhookRouteOverviewTable
+            error={error}
+            loading={loading}
+            onCopyRoute={(route) => void copyText(route.webhook_url ?? "", route.name)}
+            onCreateRoute={() => setEditing(emptyWebhookRoute())}
+            onEditRoute={setEditing}
+            onOpenRoute={(routeId) => navigateInApp(`/webhooks/${encodeURIComponent(routeId)}`)}
+            onRetry={() => void refresh()}
+            onTestRoute={(route) => void testRoute(route)}
+            routeViews={routeViews}
+            testingId={testingId}
+          />
+        </div>
+      )}
       {editing ? (
         <WebhookRouteModal
           route={editing.id ? editing : null}
@@ -1828,6 +2286,10 @@ function WebhooksPage() {
             setEditing(webhookRouteFromReference(reference));
             setViewingBotReferences(false);
           }}
+          onInspect={(reference) => {
+            navigateInApp(`/webhooks/conversations/${encodeURIComponent(reference.id)}`);
+            setViewingBotReferences(false);
+          }}
         />
       ) : null}
     </>
@@ -1846,19 +2308,16 @@ function WebhookRouteSummary({ loading, routeViews }: { loading: boolean; routeV
       <StatusOverviewMetric
         label="Routes"
         value={loading ? "..." : String(routeViews.length)}
-        detail={routeViews.length === 1 ? "1 relay endpoint." : `${routeViews.length} relay endpoints.`}
         tone="neutral"
       />
       <StatusOverviewMetric
         label="Active"
         value={loading ? "..." : `${activeCount}/${routeViews.length || 0}`}
-        detail={activeCount === routeViews.length && routeViews.length ? "All routes accept traffic." : "Some routes are paused."}
         tone={routeViews.length && activeCount === routeViews.length ? "success" : activeCount ? "warn" : "neutral"}
       />
       <StatusOverviewMetric
-        label="Attention"
+        label="Issues"
         value={loading ? "..." : attentionCount ? String(attentionCount) : "None"}
-        detail={attentionCount ? "Review the selected route." : "No open route issue."}
         tone={attentionCount ? "warn" : "success"}
       />
       <StatusOverviewMetric
@@ -1871,17 +2330,16 @@ function WebhookRouteSummary({ loading, routeViews }: { loading: boolean; routeV
   );
 }
 
-function WebhookRouteConsole({
+function WebhookRouteOverviewTable({
   error,
   loading,
   onCopyRoute,
   onCreateRoute,
   onEditRoute,
+  onOpenRoute,
   onRetry,
-  onSelectRoute,
   onTestRoute,
   routeViews,
-  selectedRouteId,
   testingId,
 }: {
   error: string;
@@ -1889,11 +2347,10 @@ function WebhookRouteConsole({
   onCopyRoute: (route: WebhookRouteOut) => void;
   onCreateRoute: () => void;
   onEditRoute: (route: WebhookRouteOut) => void;
+  onOpenRoute: (routeId: string) => void;
   onRetry: () => void;
-  onSelectRoute: (routeId: string) => void;
   onTestRoute: (route: WebhookRouteOut) => void;
   routeViews: WebhookRouteView[];
-  selectedRouteId: string;
   testingId: string;
 }) {
   if (loading) {
@@ -1939,23 +2396,29 @@ function WebhookRouteConsole({
   }
 
   return (
-    <section className="webhook-route-console" aria-label="Relay route console">
+    <section className="webhook-route-console webhook-route-console--overview" aria-label="Relay route console">
       <div className="webhook-route-console-header">
         <div>
-          <p className="integration-kicker">Relay routes</p>
-          <h2>Route health</h2>
+          <h2>Routes</h2>
         </div>
         <span>{routeViews.length} routes</span>
       </div>
-      <div className="webhook-route-list" role="list">
+      <div className="webhook-route-table" role="table" aria-label="Webhook relay routes">
+        <div className="webhook-route-table-head" role="row">
+          <span>Name</span>
+          <span>Target</span>
+          <span>Status</span>
+          <span>Last activity</span>
+          <span>Delivery</span>
+          <span aria-label="Actions" />
+        </div>
         {routeViews.map((view) => (
-          <WebhookRouteRow
+          <WebhookRouteTableRow
             key={view.route.id}
             onCopyRoute={onCopyRoute}
             onEditRoute={onEditRoute}
-            onSelectRoute={onSelectRoute}
+            onOpenRoute={onOpenRoute}
             onTestRoute={onTestRoute}
-            selected={selectedRouteId === view.route.id}
             testing={testingId === view.route.id}
             view={view}
           />
@@ -1965,46 +2428,51 @@ function WebhookRouteConsole({
   );
 }
 
-function WebhookRouteRow({
+function WebhookRouteTableRow({
   onCopyRoute,
   onEditRoute,
-  onSelectRoute,
+  onOpenRoute,
   onTestRoute,
-  selected,
   testing,
   view,
 }: {
   onCopyRoute: (route: WebhookRouteOut) => void;
   onEditRoute: (route: WebhookRouteOut) => void;
-  onSelectRoute: (routeId: string) => void;
+  onOpenRoute: (routeId: string) => void;
   onTestRoute: (route: WebhookRouteOut) => void;
-  selected: boolean;
   testing: boolean;
   view: WebhookRouteView;
 }) {
   return (
-    <article className={classNames("webhook-route-row", selected && "webhook-route-row--selected")} role="listitem">
+    <article className="webhook-route-table-row" role="row" data-route-id={view.route.id}>
       <button
-        aria-pressed={selected}
-        className="webhook-route-row-main"
+        aria-label={`Open route ${view.route.name}`}
+        className="webhook-route-table-main"
         type="button"
-        onClick={() => onSelectRoute(view.route.id)}
+        onClick={() => onOpenRoute(view.route.id)}
       >
-        <span className={classNames("status-dot", `status-dot--${view.tone}`)} aria-hidden="true" />
-        <span className="webhook-route-row-title">
+        <span className="webhook-route-table-cell webhook-route-table-route">
           <strong>{view.route.name}</strong>
-          <small>{view.targetSummary}</small>
+          <small>{webhookRouteBackendTableLabel(view.route.delivery_backend)}</small>
         </span>
-        <span className="webhook-route-row-status">
+        <WebhookRouteTargetCell view={view} />
+        <span className="webhook-route-table-cell">
+          <span className="webhook-route-status-line">
+            <span className={classNames("status-dot", `status-dot--${view.tone}`)} aria-hidden="true" />
+            <strong>{view.statusLabel}</strong>
+          </span>
+          {view.topIssue === "No active issue" ? null : <small>{view.topIssue}</small>}
+        </span>
+        <span className="webhook-route-table-cell">
+          <strong>{view.lastActivityLabel}</strong>
+          <small>{view.route.last_delivery_at ? formatDateTime(view.route.last_delivery_at) : "No event recorded"}</small>
+        </span>
+        <span className="webhook-route-table-cell">
           <strong>{view.statusLabel}</strong>
-          <small>{view.lastActivityLabel}</small>
-        </span>
-        <span className="webhook-route-row-issue">
-          <span>{view.topIssue}</span>
           <small>{view.deliveryLabel}</small>
         </span>
       </button>
-      <div className="webhook-route-row-actions">
+      <div className="webhook-route-table-actions">
         {view.route.webhook_url ? (
           <IconButton label="Copy relay URL" icon={ClipboardCopy} onClick={() => onCopyRoute(view.route)} />
         ) : null}
@@ -2020,53 +2488,239 @@ function WebhookRouteRow({
   );
 }
 
-function WebhookRouteInspector({
+function WebhookRouteTargetCell({ view }: { view: WebhookRouteView }) {
+  const route = view.route;
+  const target = view.targetPresentation;
+  const display = webhookRouteTargetTableDisplay(view);
+  const members = route.members.filter((member) => memberDisplayName(member));
+  const detailRows = webhookTargetDetailRows(view);
+
+  return (
+    <span className="webhook-route-table-cell webhook-route-target-cell">
+      <strong title={display.primary}>{display.primary}</strong>
+      <small title={display.secondary}>{display.secondary}</small>
+      <span className="webhook-target-popover" aria-hidden="true">
+        <span className="webhook-target-popover-title">{target.kindLabel}</span>
+        <span className="webhook-target-popover-subtitle">{target.title}</span>
+        {members.length ? (
+          <span className="webhook-target-member-list">
+            {members.slice(0, 8).map((member) => (
+              <span className="webhook-target-member" key={member.id || member.aad_object_id || memberDisplayName(member)}>
+                <strong>{memberDisplayName(member)}</strong>
+                <small>{member.user_principal_name || member.email || member.aad_object_id || "Teams member"}</small>
+              </span>
+            ))}
+            {members.length > 8 ? <span className="webhook-target-popover-note">+{members.length - 8} more members</span> : null}
+          </span>
+        ) : (
+          <span className="webhook-target-detail-list">
+            {detailRows.map((row) => (
+              <span className="webhook-target-detail-row" key={row.label}>
+                <small>{row.label}</small>
+                <strong>{row.value}</strong>
+              </span>
+            ))}
+          </span>
+        )}
+      </span>
+    </span>
+  );
+}
+
+function memberDisplayName(member: WebhookRouteOut["members"][number]): string {
+  return member.name || member.user_principal_name || member.email || member.aad_object_id;
+}
+
+function WebhookTargetMeta({ route }: { route: WebhookRouteOut }) {
+  if (!route.members_refreshed_at && !route.members_lookup_error) return null;
+
+  return (
+    <span className="webhook-target-meta">
+      {route.members_refreshed_at ? <span>Member list updated {formatRelativeTime(route.members_refreshed_at)}</span> : null}
+      {route.members_lookup_error ? <span className="webhook-target-meta-error">{route.members_lookup_error}</span> : null}
+    </span>
+  );
+}
+
+function webhookTargetMemberNames(route: WebhookRouteOut): string[] {
+  const members = route.members.filter((member) => memberDisplayName(member));
+  if (members.length) {
+    return members.map((member) => memberDisplayName(member));
+  }
+
+  return route.member_summary
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+}
+
+function webhookTargetDetailRows(view: WebhookRouteView): Array<{ label: string; value: string }> {
+  const route = view.route;
+  const target = view.targetPresentation;
+  const rows = [
+    { label: "Type", value: target.kindLabel },
+    { label: "Target", value: target.title },
+  ];
+  if (target.subtitle) rows.push({ label: "Context", value: target.subtitle });
+  if (route.delivery_backend === "graph") {
+    if (route.graph_team_name) rows.push({ label: "Team", value: route.graph_team_name });
+    if (route.graph_user_principal_name) rows.push({ label: "User", value: route.graph_user_principal_name });
+    if (route.graph_target_id) rows.push({ label: "Graph target", value: shortId(route.graph_target_id) });
+  }
+  if (route.member_summary) rows.push({ label: "Members", value: route.member_summary });
+  if (route.members_refreshed_at) rows.push({ label: "Members refreshed", value: formatRelativeTime(route.members_refreshed_at) });
+  if (route.members_lookup_error) rows.push({ label: "Lookup", value: route.members_lookup_error });
+  return rows.slice(0, 7);
+}
+
+function WebhookRouteDetailPage({
+  error,
   featurePolicy,
+  loading,
   onCopyRoute,
   onDeleteRoute,
   onEditRoute,
-  onRefreshNames,
+  onRefreshRouteData,
   onRegenerateRoute,
+  onRetry,
   onTestRoute,
   onToggleRoute,
   onViewLogs,
+  refreshingMembersId,
   refreshingRouteNameId,
   regeneratingId,
   routeView,
   testingId,
   togglingId,
 }: {
+  error: string;
   featurePolicy: DeliveryFeaturePolicy;
+  loading: boolean;
   onCopyRoute: (route: WebhookRouteOut) => void;
   onDeleteRoute: (route: WebhookRouteOut) => void;
   onEditRoute: (route: WebhookRouteOut) => void;
-  onRefreshNames: (route: WebhookRouteOut) => void;
+  onRefreshRouteData: (route: WebhookRouteOut) => void;
   onRegenerateRoute: (route: WebhookRouteOut) => void;
+  onRetry: () => void;
   onTestRoute: (route: WebhookRouteOut) => void;
   onToggleRoute: (route: WebhookRouteOut) => void;
   onViewLogs: (route: WebhookRouteOut) => void;
+  refreshingMembersId: string;
   refreshingRouteNameId: string;
   regeneratingId: string;
   routeView: WebhookRouteView | null;
   testingId: string;
   togglingId: string;
 }) {
-  if (!routeView) return null;
+  if (loading) {
+    return (
+      <Card>
+        <div className="table-state" role="status" aria-live="polite">
+          <div className="spinner spinner--small" aria-hidden="true" />
+          <p>Loading route workspace...</p>
+        </div>
+      </Card>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card>
+        <div className="table-state table-state--error" role="alert">
+          <h3>Could not load route</h3>
+          <p>{error}</p>
+          <button className="secondary-button secondary-button--small" type="button" onClick={onRetry}>
+            Retry
+          </button>
+        </div>
+      </Card>
+    );
+  }
+
+  if (!routeView) {
+    return (
+      <Card>
+        <EmptyState title="Route not found" body="This webhook route no longer exists or is not available to the current organization." />
+        <div className="form-actions form-actions--start">
+          <button className="secondary-button button-with-icon" type="button" onClick={() => navigateInApp("/webhooks")}>
+            <ChevronLeft aria-hidden="true" className="button-icon" focusable="false" />
+            Back to routes
+          </button>
+        </div>
+      </Card>
+    );
+  }
+
   const route = routeView.route;
+  const target = routeView.targetPresentation;
+  const targetMemberNames = target.kindLabel === "Group chat" ? webhookTargetMemberNames(route) : [];
+  const heroTone = routeView.tone;
+  const refreshingRouteData = refreshingMembersId === route.id || refreshingRouteNameId === route.id;
+  const actionItems: ResponsiveActionItem[] = [
+    {
+      label: testingId === route.id ? "Testing..." : "Test",
+      icon: Send,
+      buttonTone: "primary",
+      disabled: testingId === route.id || !routeView.featureEnabled,
+      onClick: () => onTestRoute(route),
+    },
+    {
+      label: "Edit",
+      icon: Pencil,
+      onClick: () => onEditRoute(route),
+    },
+    {
+      label: "Logs",
+      icon: FileClock,
+      onClick: () => onViewLogs(route),
+    },
+    {
+      label: togglingId === route.id ? "Updating..." : route.is_active ? "Disable" : "Enable",
+      icon: route.is_active ? PowerOff : Power,
+      disabled: togglingId === route.id,
+      onClick: () => onToggleRoute(route),
+    },
+    {
+      label: refreshingRouteData ? "Refreshing..." : "Refresh",
+      icon: RefreshCw,
+      disabled: refreshingRouteData || !featurePolicy.graphLookupEnabled,
+      spinning: refreshingRouteData,
+      onClick: () => onRefreshRouteData(route),
+    },
+    {
+      label: regeneratingId === route.id ? "Creating URL..." : "New URL",
+      icon: RotateCcwKey,
+      disabled: regeneratingId === route.id,
+      onClick: () => onRegenerateRoute(route),
+    },
+    {
+      label: "Delete route",
+      icon: Trash2,
+      tone: "danger",
+      buttonTone: "danger",
+      separated: true,
+      onClick: () => onDeleteRoute(route),
+    },
+  ];
 
   return (
-    <aside className="webhook-route-inspector" aria-label={`${route.name} route details`}>
-      <div className="webhook-route-inspector-header">
-        <div>
-          <p className="integration-kicker">Selected route</p>
-          <h2>{route.name}</h2>
-          <p>{routeView.summary}</p>
+    <div className="webhook-route-workspace" aria-label={`${route.name} route workspace`}>
+      <section className={classNames("status-relay-hero", `status-relay-hero--${heroTone}`)} aria-label="Route health">
+        <div className="status-relay-hero-main">
+          <div className={classNames("status-relay-indicator", `status-relay-indicator--${heroTone}`)} aria-hidden="true" />
+          <div>
+            <p className="integration-kicker">Route health</p>
+            <h2>{routeView.statusLabel === "Ready" ? "Route is ready for relay traffic" : routeView.topIssue}</h2>
+            <p>{routeView.topIssueDetail}</p>
+          </div>
         </div>
-        <div className={classNames("status-health-pill", `status-health-pill--${routeView.tone}`)}>
-          <span aria-hidden="true" />
-          <strong>{routeView.statusLabel}</strong>
+        <div className="status-relay-metrics">
+          <StatusOverviewMetric label="Status" value={routeView.statusLabel} detail={routeView.topIssue} tone={heroTone} />
+          <StatusOverviewMetric label="Backend" value={deliveryBackendLabel(route.delivery_backend)} detail={routeView.featureEnabled ? "Delivery feature ready." : "Feature is unavailable."} tone={routeView.featureEnabled ? "success" : "warn"} />
+          <StatusOverviewMetric label="Delivery" value={routeView.deliveryLabel} detail={routeView.lastActivityLabel} tone={webhookDeliveryTone(route)} />
+          <StatusOverviewMetric label="Access" value={clientIpAccessLabel(route)} detail={route.is_active ? "Accepts incoming requests." : "Incoming requests are paused."} tone={route.is_active ? "success" : "warn"} />
         </div>
-      </div>
+      </section>
 
       {routeView.tone !== "success" ? (
         <div className={classNames("status-detail-alert", routeView.tone === "danger" && "status-detail-alert--danger")}>
@@ -2075,103 +2729,77 @@ function WebhookRouteInspector({
         </div>
       ) : null}
 
-      <section className="webhook-route-inspector-section">
-        <h3>Overview</h3>
-        <StatusFactList facts={routeView.facts} />
-      </section>
+      <div className="webhook-route-workspace-grid">
+        <section className="webhook-route-inspector webhook-route-workspace-card">
+          <div className="webhook-route-inspector-header">
+            <div>
+              <p className="integration-kicker">Overview</p>
+              <h2>Operational state</h2>
+            </div>
+            <div className={classNames("status-health-pill", `status-health-pill--${routeView.tone}`)}>
+              <span aria-hidden="true" />
+              <strong>{routeView.statusLabel}</strong>
+            </div>
+          </div>
+          <StatusFactList facts={routeView.facts} />
+        </section>
 
-      <section className="webhook-route-inspector-section">
-        <h3>Target</h3>
-        <div className="webhook-target-panel">
+        <section className="webhook-route-inspector webhook-route-workspace-card">
+          <div className="webhook-route-inspector-section">
+            <h3>Target</h3>
+            <div className="webhook-target-panel">
+              <div>
+                <strong>{target.kindLabel === "Group chat" ? target.kindLabel : target.title}</strong>
+                {target.kindLabel === "Group chat" ? (
+                  targetMemberNames.length ? (
+                    <span className="webhook-target-member-inline" aria-label="Group chat members">
+                      {targetMemberNames.map((name, index) => (
+                        <span className="webhook-target-member-token" key={`${name}-${index}`}>
+                          <span>{name}</span>
+                          {index < targetMemberNames.length - 1 ? <span aria-hidden="true">·</span> : null}
+                        </span>
+                      ))}
+                    </span>
+                  ) : target.title !== target.kindLabel ? (
+                    <small>{target.title}</small>
+                  ) : null
+                ) : target.subtitle ? (
+                  <small>{target.subtitle}</small>
+                ) : null}
+                <WebhookTargetMeta route={route} />
+              </div>
+            </div>
+          </div>
+
+          <div className="webhook-route-inspector-section">
+            <h3>Relay URL</h3>
+            <div className="webhook-route-url-action">
+              <code title={route.webhook_url || undefined}>{route.webhook_url ? webhookUrlPreview(route.webhook_url) : "Unavailable for old route"}</code>
+              <button
+                className="secondary-button secondary-button--small button-with-icon"
+                type="button"
+                disabled={!route.webhook_url}
+                onClick={() => onCopyRoute(route)}
+              >
+                <ClipboardCopy aria-hidden="true" className="button-icon" focusable="false" />
+                Copy
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section className="webhook-route-inspector webhook-route-workspace-card">
+        <div className="webhook-route-inspector-header">
           <div>
-            <strong>{route.target_name || "Unnamed target"}</strong>
-            <span>{deliveryBackendLabel(route.delivery_backend)}</span>
+            <p className="integration-kicker">Operate</p>
+            <h2>Route actions</h2>
           </div>
         </div>
+        <ResponsiveActionBar items={actionItems} moreLabel="More route actions" />
       </section>
 
-      <section className="webhook-route-inspector-section">
-        <h3>Relay URL</h3>
-        <div className="webhook-route-url-action">
-          {!route.webhook_url ? <span className="muted">Unavailable for old route</span> : null}
-          <button
-            className="secondary-button secondary-button--small button-with-icon"
-            type="button"
-            disabled={!route.webhook_url}
-            onClick={() => onCopyRoute(route)}
-          >
-            <ClipboardCopy aria-hidden="true" className="button-icon" focusable="false" />
-            Copy URL
-          </button>
-        </div>
-      </section>
-
-      <section className="webhook-route-inspector-section">
-        <h3>Operator actions</h3>
-        <div className="webhook-route-action-grid">
-          <button
-            className="primary-button button-with-icon"
-            type="button"
-            disabled={testingId === route.id || !routeView.featureEnabled}
-            onClick={() => onTestRoute(route)}
-          >
-            <Send aria-hidden="true" className="button-icon" focusable="false" />
-            {testingId === route.id ? "Sending..." : "Send test"}
-          </button>
-          <button className="secondary-button button-with-icon" type="button" onClick={() => onEditRoute(route)}>
-            <Pencil aria-hidden="true" className="button-icon" focusable="false" />
-            Edit route
-          </button>
-          <button className="secondary-button button-with-icon" type="button" onClick={() => onViewLogs(route)}>
-            <FileClock aria-hidden="true" className="button-icon" focusable="false" />
-            Delivery logs
-          </button>
-          <button
-            className="secondary-button button-with-icon"
-            type="button"
-            disabled={togglingId === route.id}
-            onClick={() => onToggleRoute(route)}
-          >
-            {route.is_active ? <PowerOff aria-hidden="true" className="button-icon" focusable="false" /> : <Power aria-hidden="true" className="button-icon" focusable="false" />}
-            {togglingId === route.id ? "Updating..." : route.is_active ? "Deactivate" : "Activate"}
-          </button>
-        </div>
-      </section>
-
-      <details className="status-detail-disclosure">
-        <summary>
-          <span>Advanced actions</span>
-          <small>Refresh metadata, rotate URL or delete the route</small>
-        </summary>
-        <div className="webhook-route-danger-zone">
-          <button
-            className="secondary-button secondary-button--small button-with-icon"
-            type="button"
-            disabled={refreshingRouteNameId === route.id || !featurePolicy.graphLookupEnabled}
-            onClick={() => onRefreshNames(route)}
-          >
-            <RefreshCw
-              aria-hidden="true"
-              className={classNames("button-icon", refreshingRouteNameId === route.id && "button-icon--spin")}
-              focusable="false"
-            />
-            {refreshingRouteNameId === route.id ? "Refreshing..." : "Refresh Graph names"}
-          </button>
-          <button
-            className="secondary-button secondary-button--small button-with-icon"
-            type="button"
-            disabled={regeneratingId === route.id}
-            onClick={() => onRegenerateRoute(route)}
-          >
-            <RotateCcwKey aria-hidden="true" className="button-icon" focusable="false" />
-            {regeneratingId === route.id ? "Regenerating..." : "Regenerate URL"}
-          </button>
-          <button className="danger-button danger-button--small button-with-icon" type="button" onClick={() => onDeleteRoute(route)}>
-            <Trash2 aria-hidden="true" className="button-icon" focusable="false" />
-            Delete route
-          </button>
-        </div>
-      </details>
+      <WebhookRouteRecentDeliveries route={route} />
 
       <details className="status-detail-disclosure">
         <summary>
@@ -2187,7 +2815,74 @@ function WebhookRouteInspector({
           </dl>
         </div>
       </details>
-    </aside>
+    </div>
+  );
+}
+
+function WebhookRouteRecentDeliveries({ route }: { route: WebhookRouteOut }) {
+  const [events, setEvents] = useState<WebhookDeliveryEventOut[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let mounted = true;
+    setLoading(true);
+    setError("");
+    api
+      .webhookRouteDeliveries(route.id)
+      .then((rows) => {
+        if (mounted) setEvents(rows.slice(0, 5));
+      })
+      .catch((err) => {
+        if (mounted) setError(isApiError(err) ? err.message : "Recent deliveries could not be loaded.");
+      })
+      .finally(() => {
+        if (mounted) setLoading(false);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [route.id]);
+
+  return (
+    <section className="webhook-route-inspector webhook-route-workspace-card">
+      <div className="webhook-route-inspector-header">
+        <div>
+          <p className="integration-kicker">Inspect</p>
+          <h2>Recent deliveries</h2>
+        </div>
+      </div>
+      {loading ? (
+        <div className="table-state" role="status" aria-live="polite">
+          <div className="spinner spinner--small" aria-hidden="true" />
+          <p>Loading delivery events...</p>
+        </div>
+      ) : null}
+      {error ? <p className="form-error">{error}</p> : null}
+      {!loading && !error && !events.length ? (
+        <EmptyGuidance title="No deliveries yet" body="Send a test message to create a first delivery event for this route." />
+      ) : null}
+      {events.length ? (
+        <div className="webhook-delivery-preview-table" role="table" aria-label="Recent route deliveries">
+          <div className="webhook-delivery-preview-head" role="row">
+            <span>Time</span>
+            <span>Status</span>
+            <span>Message</span>
+            <span>Result</span>
+          </div>
+          {events.map((event) => (
+            <div className="webhook-delivery-preview-row" role="row" key={event.id}>
+              <span>{formatRelativeTime(event.created_at)}</span>
+              <span>
+                <DeliveryEventStatusBadge status={event.status} />
+              </span>
+              <span>{eventTitle(event)}</span>
+              <span>{event.error || eventDeliveryMode(event)}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -2224,7 +2919,7 @@ function RegenerateWebhookUrlModal({
           Cancel
         </button>
         <button className="danger-button" type="button" onClick={() => void onConfirm()} disabled={busy}>
-          {busy ? "Regenerating..." : "Regenerate URL"}
+          {busy ? "Creating..." : "New URL"}
         </button>
       </div>
     </Modal>
@@ -2265,9 +2960,11 @@ function WebhookUrlRevealModal({
 function BotConversationReferencesModal({
   onClose,
   onCreateRoute,
+  onInspect,
 }: {
   onClose: () => void;
   onCreateRoute: (reference: BotConversationReferenceOut) => void;
+  onInspect: (reference: BotConversationReferenceOut) => void;
 }) {
   const [references, setReferences] = useState<BotConversationReferenceOut[]>([]);
   const [loading, setLoading] = useState(true);
@@ -2316,16 +3013,22 @@ function BotConversationReferencesModal({
               <div className="conversation-reference-main">
                 <div className="conversation-reference-heading">
                   <h3>{referenceTitle(reference)}</h3>
-                  <StatusBadge label={reference.scope || "unknown"} tone={reference.scope === "channel" ? "success" : "warn"} />
+                  <StatusBadge label={reference.scope || "unknown"} tone={reference.scope === "channel" || reference.scope === "chat" ? "success" : reference.scope === "team" ? "neutral" : "warn"} />
                 </div>
                 <p className="conversation-reference-meta">
                   {reference.user_name ? <span>{reference.user_name}</span> : null}
                   <span>{formatRelativeTime(reference.last_seen_at)}</span>
                 </p>
               </div>
-              <button className="secondary-button secondary-button--small" type="button" onClick={() => onCreateRoute(reference)}>
-                Create route
-              </button>
+              <div className="conversation-reference-actions">
+                <button className="secondary-button secondary-button--small button-with-icon" type="button" onClick={() => onInspect(reference)}>
+                  <Info aria-hidden="true" className="button-icon" focusable="false" />
+                  Inspect
+                </button>
+                <button className="secondary-button secondary-button--small" type="button" onClick={() => onCreateRoute(reference)}>
+                  Create route
+                </button>
+              </div>
             </section>
           ))}
         </div>
@@ -2339,10 +3042,329 @@ function BotConversationReferencesModal({
   );
 }
 
+function BotConversationReferenceDetailPage({
+  csrfToken,
+  onCreateRoute,
+  onDeleted,
+  referenceId,
+}: {
+  csrfToken: string;
+  onCreateRoute: (reference: BotConversationReferenceOut) => void;
+  onDeleted: () => void;
+  referenceId: string;
+}) {
+  const { notify } = useAppContext();
+  const [detail, setDetail] = useState<BotConversationReferenceDetailOut | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      setDetail(await api.botConversationReference(referenceId));
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Bot conversation could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
+  }, [referenceId]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  async function refreshMembers() {
+    setRefreshing(true);
+    try {
+      const updated = await api.refreshBotConversationReferenceMembers(csrfToken, referenceId);
+      setDetail(updated);
+      notify({
+        tone: updated.members_lookup_error ? "error" : "success",
+        title: updated.members_lookup_error ? "Member refresh failed" : "Members refreshed",
+        description: updated.members_lookup_error || (updated.member_count ? `${updated.member_count} members found.` : "Conversation metadata is current."),
+      });
+    } catch (err) {
+      notify({
+        tone: "error",
+        title: "Refresh failed",
+        description: isApiError(err) ? err.message : "The member list could not be refreshed.",
+      });
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  async function deleteConversation() {
+    setDeleting(true);
+    try {
+      await api.deleteBotConversationReference(csrfToken, referenceId, true);
+      notify({
+        tone: "info",
+        title: "Conversation deleted",
+        description: detail?.linked_route_count ? `${detail.linked_route_count} linked route${detail.linked_route_count === 1 ? "" : "s"} deleted.` : "No linked routes were deleted.",
+      });
+      setConfirmingDelete(false);
+      onDeleted();
+    } catch (err) {
+      notify({
+        tone: "error",
+        title: "Delete failed",
+        description: isApiError(err) ? err.message : "The conversation could not be deleted.",
+      });
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <Card>
+        <div className="table-state" role="status" aria-live="polite">
+          <div className="spinner spinner--small" aria-hidden="true" />
+          <p>Loading conversation inspector...</p>
+        </div>
+      </Card>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card>
+        <div className="table-state table-state--error" role="alert">
+          <h3>Could not load conversation</h3>
+          <p>{error}</p>
+          <button className="secondary-button secondary-button--small" type="button" onClick={() => void refresh()}>
+            Retry
+          </button>
+        </div>
+      </Card>
+    );
+  }
+
+  if (!detail) {
+    return (
+      <Card>
+        <EmptyState title="Conversation not found" body="This captured Teams conversation no longer exists." />
+      </Card>
+    );
+  }
+
+  const participants = botConversationParticipants(detail);
+  const title = referenceTitle(detail);
+  const actionItems: ResponsiveActionItem[] = [
+    {
+      label: "Create route",
+      icon: Plus,
+      buttonTone: "primary",
+      onClick: () => onCreateRoute(detail),
+    },
+    {
+      label: refreshing ? "Refreshing..." : "Refresh members",
+      icon: RefreshCw,
+      disabled: refreshing,
+      spinning: refreshing,
+      onClick: () => void refreshMembers(),
+    },
+    {
+      label: "Delete conversation",
+      icon: Trash2,
+      tone: "danger",
+      buttonTone: "danger",
+      separated: true,
+      onClick: () => setConfirmingDelete(true),
+    },
+  ];
+
+  return (
+    <>
+      <div className="bot-conversation-workspace" aria-label={`${title} conversation inspector`}>
+        <section className="status-relay-hero status-relay-hero--success" aria-label="Conversation overview">
+          <div className="status-relay-hero-main">
+            <div className="status-relay-indicator status-relay-indicator--success" aria-hidden="true" />
+            <div>
+              <p className="integration-kicker">Captured Teams conversation</p>
+              <h2>{title}</h2>
+              <p>{referenceSubtitle(detail)}</p>
+            </div>
+          </div>
+          <div className="status-relay-metrics">
+            <StatusOverviewMetric label="Scope" value={detail.scope || "unknown"} detail={detail.conversation_type || "Teams conversation"} tone={conversationScopeTone(detail)} />
+            <StatusOverviewMetric label="Last contact" value={formatRelativeTime(detail.last_seen_at)} detail={formatDateTime(detail.last_seen_at)} tone="success" />
+            <StatusOverviewMetric label="Routes" value={String(detail.linked_route_count)} detail={detail.linked_route_count ? "Using this conversation." : "No linked routes."} tone={detail.linked_route_count ? "success" : "neutral"} />
+            <StatusOverviewMetric label="Participants" value={detail.member_count ? String(detail.member_count) : String(participants.length || "-")} detail={detail.members_refreshed_at ? `Refreshed ${formatRelativeTime(detail.members_refreshed_at)}` : "Captured metadata."} tone={detail.members_lookup_error ? "warn" : "neutral"} />
+          </div>
+        </section>
+
+        {detail.members_lookup_error ? (
+          <div className="status-detail-alert">
+            <strong>Member lookup failed</strong>
+            <span>{detail.members_lookup_error}</span>
+          </div>
+        ) : null}
+
+        <section className="webhook-route-inspector webhook-route-workspace-card">
+          <div className="webhook-route-inspector-header">
+            <div>
+              <p className="integration-kicker">Operate</p>
+              <h2>Conversation actions</h2>
+            </div>
+          </div>
+          <ResponsiveActionBar items={actionItems} moreLabel="More conversation actions" />
+        </section>
+
+        <div className="webhook-route-workspace-grid">
+          <section className="webhook-route-inspector webhook-route-workspace-card">
+            <div className="webhook-route-inspector-header">
+              <div>
+                <p className="integration-kicker">Participants</p>
+                <h2>Known members</h2>
+              </div>
+            </div>
+            {participants.length ? (
+              <div className="bot-conversation-member-list">
+                {participants.map((member, index) => (
+                  <div className="bot-conversation-member" key={`${member.id || member.name}-${index}`}>
+                    <strong>{member.name || shortId(member.id) || "Unknown participant"}</strong>
+                    <span>{[member.email, member.user_principal_name, member.aad_object_id ? `AAD ${shortId(member.aad_object_id)}` : ""].filter(Boolean).join(" · ") || member.id || "No member identifiers"}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyGuidance title="No participants captured" body={detail.member_summary || "Teams has not provided a member list for this conversation yet."} />
+            )}
+          </section>
+
+          <section className="webhook-route-inspector webhook-route-workspace-card">
+            <div className="webhook-route-inspector-header">
+              <div>
+                <p className="integration-kicker">Usage</p>
+                <h2>Linked routes</h2>
+              </div>
+            </div>
+            {detail.linked_routes.length ? (
+              <DataTable
+                className="data-table--linked-routes"
+                columns={["Route", "Status", "Backend", "Last delivery", ""]}
+                emptyTitle="No linked routes"
+                emptyBody="Create a webhook route when this conversation should receive relay messages."
+                rows={detail.linked_routes.map((route) => [
+                  <div className="stacked-cell">
+                    <strong>{route.name}</strong>
+                    <span>{route.target_name}</span>
+                  </div>,
+                  <StatusBadge label={route.is_active ? "Active" : "Disabled"} tone={route.is_active ? "success" : "warn"} />,
+                  deliveryBackendLabel(route.delivery_backend),
+                  route.last_delivery_at ? `${route.last_delivery_status || "delivery"} ${formatRelativeTime(route.last_delivery_at)}` : "No deliveries",
+                  <button className="secondary-button secondary-button--small" type="button" onClick={() => navigateInApp(`/webhooks/${encodeURIComponent(route.id)}`)}>
+                    Open
+                  </button>,
+                ])}
+                rowKey={(index) => detail.linked_routes[index]?.id ?? index}
+              />
+            ) : (
+              <EmptyGuidance title="No linked routes" body="Create a webhook route when this conversation should receive relay messages." />
+            )}
+          </section>
+        </div>
+
+        <section className="webhook-route-inspector webhook-route-workspace-card">
+          <div className="webhook-route-inspector-header">
+            <div>
+              <p className="integration-kicker">Technical</p>
+              <h2>Conversation identifiers</h2>
+            </div>
+          </div>
+          <dl className="definition-list definition-list--compact advanced-definition-list bot-conversation-technical-list">
+            {botConversationTechnicalRows(detail).map((row) => (
+              <FragmentPair key={row.label} label={row.label} value={row.value || "-"} />
+            ))}
+          </dl>
+        </section>
+      </div>
+
+      {confirmingDelete ? (
+        <ConfirmModal
+          title="Delete bot conversation"
+          description={`Delete ${title}?`}
+          confirmLabel="Delete conversation"
+          busyLabel="Deleting..."
+          busy={deleting}
+          onClose={() => setConfirmingDelete(false)}
+          onConfirm={() => void deleteConversation()}
+        >
+          <div className="warning-box">
+            <strong>
+              {detail.linked_route_count
+                ? `${detail.linked_route_count} linked route${detail.linked_route_count === 1 ? "" : "s"} will be deleted too.`
+                : "This removes the captured conversation reference."}
+            </strong>
+            {detail.linked_routes.length ? (
+              <>
+                <p>These relay URLs will stop working immediately:</p>
+                <ul className="destructive-route-list">
+                  {detail.linked_routes.map((route) => (
+                    <li key={route.id}>{route.name}</li>
+                  ))}
+                </ul>
+              </>
+            ) : (
+              <p>No webhook routes currently use this conversation.</p>
+            )}
+          </div>
+        </ConfirmModal>
+      ) : null}
+    </>
+  );
+}
+
+function botConversationParticipants(reference: BotConversationReferenceOut) {
+  if (reference.members.length) return reference.members;
+  if (reference.user_name || reference.user_id || reference.graph_user_id) {
+    return [
+      {
+        id: reference.user_id || reference.graph_user_id,
+        name: reference.user_name,
+        aad_object_id: reference.graph_user_id,
+        email: "",
+        user_principal_name: "",
+      },
+    ];
+  }
+  return [];
+}
+
+function botConversationTechnicalRows(reference: BotConversationReferenceOut): Array<{ label: string; value: ReactNode }> {
+  return [
+    { label: "Service URL", value: <code>{reference.service_url || "-"}</code> },
+    { label: "Conversation ID", value: <code>{reference.conversation_id || "-"}</code> },
+    { label: "Tenant ID", value: <code>{reference.tenant_id || "-"}</code> },
+    { label: "Team ID", value: <code>{reference.team_id || "-"}</code> },
+    { label: "Graph team ID", value: <code>{reference.graph_team_id || "-"}</code> },
+    { label: "Channel ID", value: <code>{reference.channel_id || "-"}</code> },
+    { label: "User ID", value: <code>{reference.user_id || "-"}</code> },
+    { label: "Graph user ID", value: <code>{reference.graph_user_id || "-"}</code> },
+    { label: "Raw activity", value: reference.raw_activity_type || "-" },
+    { label: "Created", value: formatDateTime(reference.created_at) },
+    { label: "Updated", value: formatDateTime(reference.updated_at) },
+  ];
+}
+
+function conversationScopeTone(reference: BotConversationReferenceOut): StatusTone {
+  if (reference.scope === "channel" || reference.scope === "chat") return "success";
+  if (reference.scope === "team" || reference.scope === "user") return "neutral";
+  return "warn";
+}
+
 function referenceTitle(reference: BotConversationReferenceOut): string {
   if (reference.team_name && reference.channel_name) return `${reference.team_name} / ${reference.channel_name}`;
   if (reference.channel_name) return reference.channel_name;
   if (reference.team_name) return reference.team_name;
+  if (reference.member_summary) return reference.member_summary;
+  if (reference.scope === "chat" || reference.conversation_type.toLowerCase() === "groupchat") return "Group chat";
   if (reference.user_name) return reference.user_name;
   return reference.conversation_type === "personal" ? "Personal chat" : "Teams conversation";
 }
@@ -2351,13 +3373,16 @@ function referenceSubtitle(reference: BotConversationReferenceOut): string {
   const parts = [
     reference.scope || reference.conversation_type || "conversation",
     `seen ${formatRelativeTime(reference.last_seen_at)}`,
+    reference.member_count ? `${reference.member_count} members` : "",
     reference.channel_id ? `channel ${shortId(reference.channel_id)}` : "",
+    reference.scope === "chat" || reference.conversation_type.toLowerCase() === "groupchat" ? `chat ${shortId(reference.conversation_id)}` : "",
     reference.graph_user_id || reference.user_id ? `user ${shortId(reference.graph_user_id || reference.user_id)}` : "",
   ].filter(Boolean);
   return parts.join(" · ");
 }
 
 function referenceGraphKind(reference: BotConversationReferenceOut): GraphTargetKind | "" {
+  if (reference.scope === "chat" || reference.conversation_type.toLowerCase() === "groupchat") return "chat";
   if (reference.scope === "channel" || reference.channel_id) return "channel";
   if (reference.scope === "team" || reference.graph_team_id) return "team";
   if (reference.scope === "user" || reference.graph_user_id || reference.user_id) return "user";
@@ -2368,6 +3393,7 @@ function referenceGraphTargetId(reference: BotConversationReferenceOut): string 
   const kind = referenceGraphKind(reference);
   if (kind === "channel") return reference.channel_id;
   if (kind === "team") return reference.graph_team_id || reference.team_id;
+  if (kind === "chat") return reference.conversation_id;
   if (kind === "user") return reference.graph_user_id || reference.user_id;
   return "";
 }
@@ -2436,7 +3462,7 @@ function DeliveryStatusBadge({ route }: { route: WebhookRouteOut }) {
   );
 }
 
-function emptyWebhookRoute(botDefaultServiceUrl = ""): WebhookRouteOut {
+function emptyWebhookRoute(): WebhookRouteOut {
   return {
     id: "",
     organization_id: "",
@@ -2447,7 +3473,7 @@ function emptyWebhookRoute(botDefaultServiceUrl = ""): WebhookRouteOut {
     client_ip_allowlist: "",
     target_type: "bot_conversation",
     target_name: "",
-    bot_service_url: botDefaultServiceUrl,
+    bot_service_url: "",
     bot_conversation_id: "",
     graph_target_kind: "",
     graph_target_id: "",
@@ -2457,6 +3483,11 @@ function emptyWebhookRoute(botDefaultServiceUrl = ""): WebhookRouteOut {
     graph_user_id: "",
     graph_user_display_name: "",
     graph_user_principal_name: "",
+    member_summary: "",
+    member_count: 0,
+    members: [],
+    members_refreshed_at: null,
+    members_lookup_error: "",
     bot_target_source: "",
     bot_registered_by_id: "",
     bot_registered_at: null,
@@ -2472,7 +3503,7 @@ function emptyWebhookRoute(botDefaultServiceUrl = ""): WebhookRouteOut {
 function webhookRouteFromReference(reference: BotConversationReferenceOut): WebhookRouteOut {
   const kind = referenceGraphKind(reference);
   return {
-    ...emptyWebhookRoute(reference.service_url),
+    ...emptyWebhookRoute(),
     target_name: referenceTargetName(reference),
     bot_service_url: reference.service_url,
     bot_conversation_id: reference.conversation_id,
@@ -2484,6 +3515,11 @@ function webhookRouteFromReference(reference: BotConversationReferenceOut): Webh
     graph_user_id: kind === "user" ? reference.graph_user_id || reference.user_id : "",
     graph_user_display_name: kind === "user" ? reference.user_name : "",
     graph_user_principal_name: "",
+    member_summary: reference.member_summary,
+    member_count: reference.member_count,
+    members: reference.members,
+    members_refreshed_at: reference.members_refreshed_at,
+    members_lookup_error: reference.members_lookup_error,
     bot_target_source: "conversation_reference",
     bot_registered_by_id: reference.graph_user_id || reference.user_id,
   };
@@ -3246,22 +4282,27 @@ function WebhookDeliveryLogsModal({ route, onClose }: { route: WebhookRouteOut; 
   const [selectedEventId, setSelectedEventId] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const refreshSequence = useRef(0);
   const selectedEvent = useMemo(
     () => events.find((event) => event.id === selectedEventId) ?? events[0] ?? null,
     [events, selectedEventId],
   );
 
   const refresh = useCallback(async () => {
+    const requestId = refreshSequence.current + 1;
+    refreshSequence.current = requestId;
     setLoading(true);
     setError("");
     try {
       const rows = await api.webhookRouteDeliveries(route.id, statusFilter === "all" ? undefined : statusFilter);
+      if (refreshSequence.current !== requestId) return;
       setEvents(rows);
       setSelectedEventId(rows[0]?.id ?? "");
     } catch (err) {
+      if (refreshSequence.current !== requestId) return;
       setError(isApiError(err) ? err.message : "Delivery logs could not be loaded.");
     } finally {
-      setLoading(false);
+      if (refreshSequence.current === requestId) setLoading(false);
     }
   }, [route.id, statusFilter]);
 
@@ -3320,6 +4361,7 @@ function WebhookDeliveryLogsModal({ route, onClose }: { route: WebhookRouteOut; 
 function DeliveryEventStatusBadge({ status }: { status: WebhookDeliveryEventOut["status"] }) {
   if (status === "delivered") return <StatusBadge label="Delivered" tone="success" />;
   if (status === "failed") return <StatusBadge label="Failed" tone="danger" />;
+  if (status === "pending") return <StatusBadge label="Pending" tone="neutral" />;
   return <StatusBadge label="Rejected" tone="warn" />;
 }
 
@@ -3483,6 +4525,40 @@ function deliveryBackendLabel(backend: string): string {
 }
 
 function UsersPage() {
+  const [activeTab, setActiveTab] = useState<UserAdminTab>("app-users");
+  return (
+    <>
+      <PageIntro
+        eyebrow="Admin"
+        title="Users"
+        description={activeTab === "app-users" ? "Manage administrator access for Teams Rehook operations." : "Manage Entra users who can operate the relay bot from Teams."}
+        actions={
+          <div className="segmented-control" aria-label="User management section">
+            <button
+              className={classNames("segmented-control-button", activeTab === "app-users" && "is-active")}
+              type="button"
+              aria-pressed={activeTab === "app-users"}
+              onClick={() => setActiveTab("app-users")}
+            >
+              App users
+            </button>
+            <button
+              className={classNames("segmented-control-button", activeTab === "bot-access" && "is-active")}
+              type="button"
+              aria-pressed={activeTab === "bot-access"}
+              onClick={() => setActiveTab("bot-access")}
+            >
+              Bot access
+            </button>
+          </div>
+        }
+      />
+      {activeTab === "app-users" ? <AppUsersPanel /> : <BotAccessPanel />}
+    </>
+  );
+}
+
+function AppUsersPanel() {
   const { notify, refreshSession, session } = useAppContext();
   const [users, setUsers] = useState<UserOut[]>([]);
   const [loading, setLoading] = useState(true);
@@ -3511,17 +4587,15 @@ function UsersPage() {
 
   return (
     <>
-      <PageIntro
-        eyebrow="Admin"
-        title="Users"
-        description="Manage administrator access for Teams Rehook operations."
-        actions={
+      <div className="section-actions">
+        <div />
+        <div>
           <button className="primary-button button-with-icon" type="button" onClick={() => setCreateOpen(true)}>
             <Plus aria-hidden="true" className="button-icon" focusable="false" />
             <span>Create user</span>
           </button>
-        }
-      />
+        </div>
+      </div>
       <Card>
         <DataTable
           columns={["Name", "Email", "Role", "Status", "Created", "Actions"]}
@@ -3592,6 +4666,1551 @@ function UsersPage() {
       ) : null}
     </>
   );
+}
+
+const BOT_PERMISSION_FIELDS: Array<{ key: keyof BotUserPermissions; label: string }> = [
+  { key: "can_view_routes", label: "View routes" },
+  { key: "can_reveal_webhook_urls", label: "Reveal webhook URLs" },
+  { key: "can_manage_route_status", label: "Enable or disable routes" },
+  { key: "can_delete_routes", label: "Delete routes" },
+  { key: "can_manage_allowlist", label: "Manage IP allowlists" },
+  { key: "can_create_private_chat_routes", label: "Create private chat routes" },
+  { key: "can_create_channel_routes", label: "Create channel routes" },
+];
+
+type BotGroupMemberCountState = { loading: boolean; count?: number; error?: string } | null;
+type BotAccessSubview = "users" | "groups" | "roles";
+type BotAccessGrant = (BotAuthorizedUserOut | BotAuthorizedGroupOut) & { role_id?: string | null; role?: BotUserRole };
+
+const BOT_PERMISSION_SHORT_LABELS: Record<keyof BotUserPermissions, string> = {
+  can_view_routes: "View routes",
+  can_reveal_webhook_urls: "Reveal URLs",
+  can_manage_route_status: "Enable / Disable",
+  can_delete_routes: "Delete routes",
+  can_manage_allowlist: "Manage allowlists",
+  can_create_private_chat_routes: "Private chat routes",
+  can_create_channel_routes: "Channel routes",
+};
+
+const BOT_PERMISSION_GROUPS: Array<{ title: string; fields: Array<keyof BotUserPermissions> }> = [
+  { title: "Read", fields: ["can_view_routes", "can_reveal_webhook_urls"] },
+  { title: "Operate", fields: ["can_manage_route_status"] },
+  { title: "Create", fields: ["can_create_channel_routes", "can_create_private_chat_routes"] },
+  { title: "Administration", fields: ["can_delete_routes", "can_manage_allowlist"] },
+];
+
+function BotAccessPanel() {
+  const { notify, session } = useAppContext();
+  const [activeView, setActiveView] = useState<BotAccessSubview>("users");
+  const [botRoles, setBotRoles] = useState<BotAccessRoleOut[]>([]);
+  const [botUsers, setBotUsers] = useState<BotAuthorizedUserOut[]>([]);
+  const [botGroups, setBotGroups] = useState<BotAuthorizedGroupOut[]>([]);
+  const [groupMemberCounts, setGroupMemberCounts] = useState<Record<string, { loading: boolean; count?: number; error?: string }>>({});
+  const requestedGroupMemberCounts = useRef(new Set<string>());
+  const [rolesLoading, setRolesLoading] = useState(true);
+  const [usersLoading, setUsersLoading] = useState(true);
+  const [groupsLoading, setGroupsLoading] = useState(true);
+  const [rolesError, setRolesError] = useState("");
+  const [usersError, setUsersError] = useState("");
+  const [groupsError, setGroupsError] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [editingRole, setEditingRole] = useState<BotAccessRoleOut | null>(null);
+  const [editingUser, setEditingUser] = useState<BotAuthorizedUserOut | null>(null);
+  const [editingGroup, setEditingGroup] = useState<BotAuthorizedGroupOut | null>(null);
+  const [viewingGroupMembers, setViewingGroupMembers] = useState<BotAuthorizedGroupOut | null>(null);
+  const [deletingRole, setDeletingRole] = useState<BotAccessRoleOut | null>(null);
+  const [deletingUser, setDeletingUser] = useState<BotAuthorizedUserOut | null>(null);
+  const [deletingGroup, setDeletingGroup] = useState<BotAuthorizedGroupOut | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
+
+  const refreshRoles = useCallback(async () => {
+    setRolesLoading(true);
+    setRolesError("");
+    try {
+      setBotRoles(await api.adminBotRoles(csrfToken));
+    } catch (err) {
+      setRolesError(isApiError(err) ? err.message : "Bot access roles could not be loaded.");
+    } finally {
+      setRolesLoading(false);
+    }
+  }, [csrfToken]);
+
+  const refreshUsers = useCallback(async () => {
+    setUsersLoading(true);
+    setUsersError("");
+    try {
+      setBotUsers(await api.adminBotUsers(csrfToken));
+    } catch (err) {
+      setUsersError(isApiError(err) ? err.message : "Bot access users could not be loaded.");
+    } finally {
+      setUsersLoading(false);
+    }
+  }, [csrfToken]);
+
+  const refreshGroups = useCallback(async () => {
+    setGroupsLoading(true);
+    setGroupsError("");
+    try {
+      setBotGroups(await api.adminBotGroups(csrfToken));
+    } catch (err) {
+      setGroupsError(isApiError(err) ? err.message : "Bot access groups could not be loaded.");
+    } finally {
+      setGroupsLoading(false);
+    }
+  }, [csrfToken]);
+
+  useEffect(() => {
+    void refreshRoles();
+    void refreshUsers();
+    void refreshGroups();
+  }, [refreshGroups, refreshRoles, refreshUsers]);
+
+  useEffect(() => {
+    if (!csrfToken || !botGroups.length) return;
+    const missingGroups = botGroups.filter((group) => !requestedGroupMemberCounts.current.has(group.id));
+    if (!missingGroups.length) return;
+    for (const group of missingGroups) {
+      requestedGroupMemberCounts.current.add(group.id);
+    }
+    setGroupMemberCounts((current) => {
+      const next = { ...current };
+      for (const group of botGroups) {
+        if (current[group.id]) continue;
+        next[group.id] = { loading: true };
+      }
+      return next;
+    });
+    for (const group of missingGroups) {
+      void api.groupMemberCount(group.group_object_id)
+        .then((result) => {
+          setGroupMemberCounts((current) => ({ ...current, [group.id]: { loading: false, count: result.count } }));
+        })
+        .catch((err) => {
+          setGroupMemberCounts((current) => ({
+            ...current,
+            [group.id]: { loading: false, error: isApiError(err) ? err.message : "Member count unavailable." },
+          }));
+        });
+    }
+  }, [botGroups, csrfToken]);
+
+  async function deleteBotUser() {
+    if (!deletingUser) return;
+    setDeleting(true);
+    try {
+      await api.deleteAdminBotUser(csrfToken, deletingUser.id);
+      notify({ tone: "success", title: "Bot access removed" });
+      setDeletingUser(null);
+      await refreshUsers();
+    } catch (err) {
+      notify({ tone: "error", title: "Bot access could not be removed", description: isApiError(err) ? err.message : undefined });
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  async function deleteBotGroup() {
+    if (!deletingGroup) return;
+    setDeleting(true);
+    try {
+      await api.deleteAdminBotGroup(csrfToken, deletingGroup.id);
+      notify({ tone: "success", title: "Bot group access removed" });
+      setDeletingGroup(null);
+      await refreshGroups();
+    } catch (err) {
+      notify({ tone: "error", title: "Bot group access could not be removed", description: isApiError(err) ? err.message : undefined });
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  async function deleteBotRole() {
+    if (!deletingRole) return;
+    setDeleting(true);
+    try {
+      await api.deleteAdminBotRole(csrfToken, deletingRole.id);
+      notify({ tone: "success", title: "Bot role removed" });
+      setDeletingRole(null);
+      await refreshRoles();
+    } catch (err) {
+      notify({ tone: "error", title: "Bot role could not be removed", description: isApiError(err) ? err.message : undefined });
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="section-actions">
+        <div className="segmented-control" aria-label="Bot access view">
+          <button
+            className={classNames("segmented-control-button", activeView === "users" && "is-active")}
+            type="button"
+            aria-pressed={activeView === "users"}
+            onClick={() => setActiveView("users")}
+          >
+            Users
+          </button>
+          <button
+            className={classNames("segmented-control-button", activeView === "groups" && "is-active")}
+            type="button"
+            aria-pressed={activeView === "groups"}
+            onClick={() => setActiveView("groups")}
+          >
+            Groups
+          </button>
+          <button
+            className={classNames("segmented-control-button", activeView === "roles" && "is-active")}
+            type="button"
+            aria-pressed={activeView === "roles"}
+            onClick={() => setActiveView("roles")}
+          >
+            Roles
+          </button>
+        </div>
+        <div>
+          <button className="primary-button button-with-icon" type="button" onClick={() => setCreateOpen(true)}>
+            <Plus aria-hidden="true" className="button-icon" focusable="false" />
+            <span>{activeView === "users" ? "Add bot user" : activeView === "groups" ? "Add bot group" : "Add bot role"}</span>
+          </button>
+        </div>
+      </div>
+      {activeView === "users" ? (
+        <Card>
+          <DataTable
+            columns={["Name", "UPN", "Role", "Status", "Permissions", "Last seen", "Actions"]}
+            rows={botUsers.map((user) => [
+              <span className="user-name-cell" title={`AAD object ID: ${user.aad_object_id}`}>
+                <strong>{user.display_name}</strong>
+              </span>,
+              user.user_principal_name || "-",
+              <StatusBadge label={botGrantRoleLabel(user, botRoles)} tone={user.role_id ? "success" : "warn"} />,
+              user.is_active ? <StatusBadge label="Active" tone="success" /> : <StatusBadge label="Disabled" tone="danger" />,
+              botPermissionSummary(botGrantPermissions(user, botRoles)),
+              user.last_seen_at ? formatRelativeTime(user.last_seen_at) : "Never",
+              <RowActionMenu
+                label={`Actions for ${user.display_name}`}
+                items={[
+                  { label: "Edit access", icon: Pencil, onClick: () => setEditingUser(user) },
+                  { label: "Remove access", icon: Trash2, onClick: () => setDeletingUser(user) },
+                ]}
+              />,
+            ])}
+            emptyTitle="No bot access users"
+            emptyBody="Add Entra users here before they can operate Teams bot commands."
+            loading={usersLoading}
+            loadingLabel="Loading bot access users..."
+            error={usersError}
+            onRetry={() => void refreshUsers()}
+            rowKey={(index) => botUsers[index]?.id ?? index}
+          />
+        </Card>
+      ) : activeView === "groups" ? (
+        <Card>
+          <DataTable
+            className="data-table--bot-groups"
+            columns={["Group", "Mail / Type", "Role", "Status", "Permissions", "Members", "Last matched", "Actions"]}
+            rows={botGroups.map((group) => [
+              <span className="bot-group-name-cell" title={`Group object ID: ${group.group_object_id}`}>
+                <strong>{group.display_name}</strong>
+              </span>,
+              <span className="bot-group-mail-type-cell">
+                {botGroupMailLabel(group) ? <span>{botGroupMailLabel(group)}</span> : null}
+                <small>{botGroupTypeLabel(group)}</small>
+              </span>,
+              <StatusBadge label={botGrantRoleLabel(group, botRoles)} tone={group.role_id ? "success" : "warn"} />,
+              group.is_active ? <StatusBadge label="Active" tone="success" /> : <StatusBadge label="Disabled" tone="danger" />,
+              botPermissionSummary(botGrantPermissions(group, botRoles)),
+              botGroupMemberCountLabel(groupMemberCounts[group.id]),
+              group.last_matched_at ? formatRelativeTime(group.last_matched_at) : "Never",
+              <RowActionMenu
+                label={`Actions for ${group.display_name}`}
+                items={[
+                  { label: "View members", icon: Eye, onClick: () => setViewingGroupMembers(group) },
+                  { label: "Edit access", icon: Pencil, onClick: () => setEditingGroup(group) },
+                  { label: "Remove access", icon: Trash2, onClick: () => setDeletingGroup(group) },
+                ]}
+              />,
+            ])}
+            emptyTitle="No bot access groups"
+            emptyBody="Add Entra groups here to grant Teams bot permissions by membership."
+            loading={groupsLoading}
+            loadingLabel="Loading bot access groups..."
+            error={groupsError}
+            onRetry={() => void refreshGroups()}
+            rowKey={(index) => botGroups[index]?.id ?? index}
+          />
+        </Card>
+      ) : (
+        <Card>
+          <DataTable
+            columns={["Role", "Type", "Permissions", "Updated", "Actions"]}
+            rows={botRoles.map((role) => [
+              <span className="user-name-cell">
+                <strong>{role.name}</strong>
+                {role.description ? <small>{role.description}</small> : null}
+              </span>,
+              <StatusBadge label={role.is_system ? "System" : "Custom"} tone={role.is_system ? "success" : "neutral"} />,
+              botPermissionSummary(role),
+              role.updated_at ? formatRelativeTime(role.updated_at) : "-",
+              <RowActionMenu
+                label={`Actions for ${role.name}`}
+                items={[
+                  { label: "Edit role", icon: Pencil, onClick: () => setEditingRole(role) },
+                  ...(role.is_system ? [] : [{ label: "Delete role", icon: Trash2, onClick: () => setDeletingRole(role) }]),
+                ]}
+              />,
+            ])}
+            emptyTitle="No bot access roles"
+            emptyBody="Create role templates to reuse permission sets for bot users and groups."
+            loading={rolesLoading}
+            loadingLabel="Loading bot access roles..."
+            error={rolesError}
+            onRetry={() => void refreshRoles()}
+            rowKey={(index) => botRoles[index]?.id ?? index}
+          />
+        </Card>
+      )}
+      {createOpen && activeView === "users" ? (
+        <BotAccessCreateModal
+          csrfToken={csrfToken}
+          roles={botRoles}
+          onClose={() => setCreateOpen(false)}
+          onSaved={() => {
+            setCreateOpen(false);
+            notify({ tone: "success", title: "Bot access added" });
+            void refreshUsers();
+          }}
+        />
+      ) : null}
+      {createOpen && activeView === "groups" ? (
+        <BotGroupCreateModal
+          csrfToken={csrfToken}
+          roles={botRoles}
+          onClose={() => setCreateOpen(false)}
+          onSaved={() => {
+            setCreateOpen(false);
+            notify({ tone: "success", title: "Bot group access added" });
+            void refreshGroups();
+          }}
+        />
+      ) : null}
+      {createOpen && activeView === "roles" ? (
+        <BotRoleEditModal
+          csrfToken={csrfToken}
+          onClose={() => setCreateOpen(false)}
+          onSaved={() => {
+            setCreateOpen(false);
+            notify({ tone: "success", title: "Bot role added" });
+            void refreshRoles();
+          }}
+        />
+      ) : null}
+      {editingRole ? (
+        <BotRoleEditModal
+          csrfToken={csrfToken}
+          role={editingRole}
+          onClose={() => setEditingRole(null)}
+          onSaved={() => {
+            setEditingRole(null);
+            notify({ tone: "success", title: "Bot role updated" });
+            void refreshRoles();
+            void refreshUsers();
+            void refreshGroups();
+          }}
+        />
+      ) : null}
+      {editingUser ? (
+        <BotAccessEditModal
+          csrfToken={csrfToken}
+          roles={botRoles}
+          user={editingUser}
+          onClose={() => setEditingUser(null)}
+          onSaved={() => {
+            setEditingUser(null);
+            notify({ tone: "success", title: "Bot access updated" });
+            void refreshUsers();
+          }}
+        />
+      ) : null}
+      {editingGroup ? (
+        <BotGroupEditModal
+          csrfToken={csrfToken}
+          roles={botRoles}
+          group={editingGroup}
+          onClose={() => setEditingGroup(null)}
+          onSaved={() => {
+            setEditingGroup(null);
+            notify({ tone: "success", title: "Bot group access updated" });
+            void refreshGroups();
+          }}
+        />
+      ) : null}
+      {viewingGroupMembers ? (
+        <BotGroupMembersModal group={viewingGroupMembers} onClose={() => setViewingGroupMembers(null)} />
+      ) : null}
+      {deletingUser ? (
+        <ConfirmModal
+          title="Remove bot access?"
+          description={`${deletingUser.display_name} will no longer be able to use Teams bot commands.`}
+          confirmLabel="Remove access"
+          busyLabel="Removing..."
+          busy={deleting}
+          tone="danger"
+          onClose={() => setDeletingUser(null)}
+          onConfirm={() => void deleteBotUser()}
+        />
+      ) : null}
+      {deletingGroup ? (
+        <ConfirmModal
+          title="Remove bot group access?"
+          description={`${deletingGroup.display_name} will no longer grant Teams bot permissions to its members.`}
+          confirmLabel="Remove access"
+          busyLabel="Removing..."
+          busy={deleting}
+          tone="danger"
+          onClose={() => setDeletingGroup(null)}
+          onConfirm={() => void deleteBotGroup()}
+        />
+      ) : null}
+      {deletingRole ? (
+        <ConfirmModal
+          title="Delete bot role?"
+          description={`${deletingRole.name} can only be deleted while no bot users or groups use it.`}
+          confirmLabel="Delete role"
+          busyLabel="Deleting..."
+          busy={deleting}
+          tone="danger"
+          onClose={() => setDeletingRole(null)}
+          onConfirm={() => void deleteBotRole()}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function BotAccessCreateModal({
+  csrfToken,
+  roles,
+  onClose,
+  onSaved,
+}: {
+  csrfToken: string;
+  roles: BotAccessRoleOut[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<TeamsTargetSearchResult[]>([]);
+  const [selectedUser, setSelectedUser] = useState<TeamsTargetSearchResult | null>(null);
+  const initialRole = defaultBotAccessRole(roles);
+  const [selectedRoleId, setSelectedRoleId] = useState<string | null>(initialRole?.id ?? null);
+  const [role, setRole] = useState<BotUserRole>(initialRole ? botRoleValue(initialRole) : "custom");
+  const [permissions, setPermissions] = useState<BotUserPermissions>(initialRole ? botPermissionsFromGrant(initialRole) : emptyBotPermissions());
+  const [isActive, setIsActive] = useState(true);
+  const [searching, setSearching] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const selectedRole = roles.find((entry) => entry.id === selectedRoleId) ?? null;
+
+  async function searchUsers() {
+    setSearching(true);
+    setError("");
+    try {
+      setResults(await api.searchTeamsTargets("user", query));
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "User search failed.");
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  function selectUser(user: TeamsTargetSearchResult) {
+    setSelectedUser(user);
+    setResults([]);
+    setQuery(user.display_name);
+  }
+
+  function changeSelectedUser() {
+    setSelectedUser(null);
+    setResults([]);
+  }
+
+  function selectRole(nextRole: BotAccessRoleOut | "custom") {
+    if (nextRole === "custom") {
+      setSelectedRoleId(null);
+      setRole("custom");
+      return;
+    }
+    setSelectedRoleId(nextRole.id);
+    setRole(botRoleValue(nextRole));
+    setPermissions(botPermissionsFromGrant(nextRole));
+  }
+
+  function updateCustomPermission(key: keyof BotUserPermissions, checked: boolean) {
+    setPermissions({ ...permissions, [key]: checked });
+    setSelectedRoleId(null);
+    setRole("custom");
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!selectedUser) {
+      setError("Select an Entra user first.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const body: BotAuthorizedUserCreate = {
+        aad_object_id: selectedUser.id,
+        display_name: selectedUser.display_name,
+        user_principal_name: selectedUser.subtitle || "",
+        role_id: selectedRoleId,
+        role,
+        is_active: isActive,
+        ...permissions,
+      };
+      await api.createAdminBotUser(csrfToken, body);
+      onSaved();
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Bot access could not be added.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Add bot access" onClose={onClose} panelClassName="bot-access-workflow-modal">
+      <form className="bot-access-flow" onSubmit={(event) => void submit(event)}>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading">
+            <span>1</span>
+            <h3>Select Entra user</h3>
+          </div>
+          {selectedUser ? (
+            <SelectedBotPrincipalSummary target={selectedUser} onChange={changeSelectedUser} />
+          ) : (
+            <>
+              <div className="bot-access-search">
+                <Search aria-hidden="true" focusable="false" />
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void searchUsers();
+                    }
+                  }}
+                  placeholder="Search users..."
+                  autoFocus
+                />
+                <button className="secondary-button secondary-button--small" type="button" onClick={() => void searchUsers()} disabled={searching || query.trim().length < 2}>
+                  {searching ? "Searching..." : "Search"}
+                </button>
+              </div>
+              <BotPrincipalSearchResults results={results} onSelect={selectUser} />
+            </>
+          )}
+        </section>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading bot-access-step-heading--split">
+            <span>2</span>
+            <h3>Access level</h3>
+            <label className="bot-access-active-toggle">
+              <input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} />
+              <span>Active</span>
+            </label>
+          </div>
+          <BotAccessRoleList roles={roles} selectedRoleId={selectedRoleId} permissions={permissions} onRoleChange={selectRole} />
+        </section>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading bot-access-step-heading--split">
+            <span>3</span>
+            <h3>Permissions</h3>
+            <small>{selectedRole ? `Inherited from ${selectedRole.name}` : "Inline custom"}</small>
+          </div>
+          {selectedRole ? (
+            <BotAccessPermissionSummary permissions={permissions} />
+          ) : (
+            <BotAccessCustomPermissions permissions={permissions} onPermissionChange={updateCustomPermission} />
+          )}
+        </section>
+        {error ? <p className="form-error">{error}</p> : null}
+        <div className="bot-access-flow-footer">
+          <div className="bot-access-footer-summary">
+            <div>
+              <span>User</span>
+              <strong>{selectedUser?.display_name ?? "Not selected"}</strong>
+            </div>
+            <div>
+              <span>Access level</span>
+              <strong>{botAccessLevelLabel(selectedRole, role)}</strong>
+            </div>
+            <div>
+              <span>UPN</span>
+              <strong>{selectedUser?.subtitle || "-"}</strong>
+            </div>
+          </div>
+          <div className="bot-access-footer-actions">
+            <button className="secondary-button" type="button" onClick={onClose} disabled={busy}>
+              Cancel
+            </button>
+            <button className="primary-button" type="submit" disabled={busy || !selectedUser}>
+              {busy ? "Adding..." : "Add access"}
+            </button>
+          </div>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function directoryTargetMeta(target: TeamsTargetSearchResult): string {
+  if (target.kind === "group") {
+    return [target.mail, groupTypeLabelFromParts(target.group_types, target.security_enabled)].filter(Boolean).join(" · ");
+  }
+  return target.subtitle || "No mail address returned";
+}
+
+function BotAccessEditModal({
+  csrfToken,
+  roles,
+  user,
+  onClose,
+  onSaved,
+}: {
+  csrfToken: string;
+  roles: BotAccessRoleOut[];
+  user: BotAuthorizedUserOut;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [displayName, setDisplayName] = useState(user.display_name);
+  const [userPrincipalName, setUserPrincipalName] = useState(user.user_principal_name);
+  const initialRole = roleForGrant(user, roles);
+  const [selectedRoleId, setSelectedRoleId] = useState<string | null>(initialRole?.id ?? null);
+  const [role, setRole] = useState<BotUserRole>(initialRole ? botRoleValue(initialRole) : user.role);
+  const [permissions, setPermissions] = useState<BotUserPermissions>(initialRole ? botPermissionsFromGrant(initialRole) : botPermissionsFromGrant(user));
+  const [isActive, setIsActive] = useState(user.is_active);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const selectedRole = roles.find((entry) => entry.id === selectedRoleId) ?? null;
+
+  function selectRole(nextRole: BotAccessRoleOut | "custom") {
+    if (nextRole === "custom") {
+      setSelectedRoleId(null);
+      setRole("custom");
+      return;
+    }
+    setSelectedRoleId(nextRole.id);
+    setRole(botRoleValue(nextRole));
+    setPermissions(botPermissionsFromGrant(nextRole));
+  }
+
+  function updateCustomPermission(key: keyof BotUserPermissions, checked: boolean) {
+    setPermissions({ ...permissions, [key]: checked });
+    setSelectedRoleId(null);
+    setRole("custom");
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await api.updateAdminBotUser(csrfToken, user.id, {
+        display_name: displayName,
+        user_principal_name: userPrincipalName,
+        role_id: selectedRoleId,
+        role,
+        is_active: isActive,
+        ...permissions,
+      });
+      onSaved();
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Bot access could not be updated.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Edit bot access" onClose={onClose} panelClassName="bot-access-workflow-modal">
+      <form className="bot-access-flow" onSubmit={(event) => void submit(event)}>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading">
+            <span>1</span>
+            <h3>User details</h3>
+          </div>
+          <div className="bot-access-identity-editor">
+            <label>
+              <span>Display name</span>
+              <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} required maxLength={255} autoFocus />
+            </label>
+            <label>
+              <span>UPN</span>
+              <input value={userPrincipalName} onChange={(event) => setUserPrincipalName(event.target.value)} maxLength={255} />
+            </label>
+            <div className="bot-access-technical-id">
+              <span>AAD object ID</span>
+              <code>{user.aad_object_id}</code>
+            </div>
+          </div>
+        </section>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading bot-access-step-heading--split">
+            <span>2</span>
+            <h3>Access level</h3>
+            <label className="bot-access-active-toggle">
+              <input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} />
+              <span>Active</span>
+            </label>
+          </div>
+          <BotAccessRoleList roles={roles} selectedRoleId={selectedRoleId} permissions={permissions} onRoleChange={selectRole} />
+        </section>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading bot-access-step-heading--split">
+            <span>3</span>
+            <h3>Permissions</h3>
+            <small>{selectedRole ? `Inherited from ${selectedRole.name}` : "Inline custom"}</small>
+          </div>
+          {selectedRole ? (
+            <BotAccessPermissionSummary permissions={permissions} />
+          ) : (
+            <BotAccessCustomPermissions permissions={permissions} onPermissionChange={updateCustomPermission} />
+          )}
+        </section>
+        {error ? <p className="form-error">{error}</p> : null}
+        <div className="bot-access-flow-footer">
+          <div className="bot-access-footer-summary">
+            <div>
+              <span>User</span>
+              <strong>{displayName || "Not named"}</strong>
+            </div>
+            <div>
+              <span>Access level</span>
+              <strong>{botAccessLevelLabel(selectedRole, role)}</strong>
+            </div>
+            <div>
+              <span>UPN</span>
+              <strong>{userPrincipalName || "-"}</strong>
+            </div>
+          </div>
+          <div className="bot-access-footer-actions">
+            <button className="secondary-button" type="button" onClick={onClose} disabled={busy}>
+              Cancel
+            </button>
+            <button className="primary-button" type="submit" disabled={busy}>
+              {busy ? "Saving..." : "Save access"}
+            </button>
+          </div>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function BotGroupCreateModal({
+  csrfToken,
+  roles,
+  onClose,
+  onSaved,
+}: {
+  csrfToken: string;
+  roles: BotAccessRoleOut[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<TeamsTargetSearchResult[]>([]);
+  const [selectedGroup, setSelectedGroup] = useState<TeamsTargetSearchResult | null>(null);
+  const [selectedGroupMemberCount, setSelectedGroupMemberCount] = useState<BotGroupMemberCountState>(null);
+  const initialRole = defaultBotAccessRole(roles);
+  const [selectedRoleId, setSelectedRoleId] = useState<string | null>(initialRole?.id ?? null);
+  const [role, setRole] = useState<BotUserRole>(initialRole ? botRoleValue(initialRole) : "custom");
+  const [permissions, setPermissions] = useState<BotUserPermissions>(initialRole ? botPermissionsFromGrant(initialRole) : emptyBotPermissions());
+  const [isActive, setIsActive] = useState(true);
+  const [searching, setSearching] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const selectedRole = roles.find((entry) => entry.id === selectedRoleId) ?? null;
+
+  async function searchGroups() {
+    setSearching(true);
+    setError("");
+    try {
+      setResults(await api.searchTeamsTargets("group", query));
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Group search failed.");
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!selectedGroup) {
+      setSelectedGroupMemberCount(null);
+      return;
+    }
+    let cancelled = false;
+    setSelectedGroupMemberCount({ loading: true });
+    void api.groupMemberCount(selectedGroup.id)
+      .then((result) => {
+        if (!cancelled) setSelectedGroupMemberCount({ loading: false, count: result.count });
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setSelectedGroupMemberCount({ loading: false, error: isApiError(err) ? err.message : "Member count unavailable." });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedGroup]);
+
+  function selectGroup(group: TeamsTargetSearchResult) {
+    setSelectedGroup(group);
+    setResults([]);
+    setQuery(group.display_name);
+  }
+
+  function changeSelectedGroup() {
+    setSelectedGroup(null);
+    setSelectedGroupMemberCount(null);
+    setResults([]);
+  }
+
+  function selectRole(nextRole: BotAccessRoleOut | "custom") {
+    if (nextRole === "custom") {
+      setSelectedRoleId(null);
+      setRole("custom");
+      return;
+    }
+    setSelectedRoleId(nextRole.id);
+    setRole(botRoleValue(nextRole));
+    setPermissions(botPermissionsFromGrant(nextRole));
+  }
+
+  function updateCustomPermission(key: keyof BotUserPermissions, checked: boolean) {
+    setPermissions({ ...permissions, [key]: checked });
+    setSelectedRoleId(null);
+    setRole("custom");
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!selectedGroup) {
+      setError("Select an Entra group first.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const body: BotAuthorizedGroupCreate = {
+        group_object_id: selectedGroup.id,
+        display_name: selectedGroup.display_name,
+        mail: selectedGroup.mail || "",
+        security_enabled: Boolean(selectedGroup.security_enabled),
+        group_types: selectedGroup.group_types || [],
+        role_id: selectedRoleId,
+        role,
+        is_active: isActive,
+        ...permissions,
+      };
+      await api.createAdminBotGroup(csrfToken, body);
+      onSaved();
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Bot group access could not be added.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Add bot group access" onClose={onClose} panelClassName="bot-access-workflow-modal">
+      <form className="bot-access-flow" onSubmit={(event) => void submit(event)}>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading">
+            <span>1</span>
+            <h3>Select Entra group</h3>
+          </div>
+          {selectedGroup ? (
+            <SelectedBotPrincipalSummary target={selectedGroup} metaSuffix={formatMemberCount(selectedGroupMemberCount, "members")} onChange={changeSelectedGroup} />
+          ) : (
+            <>
+              <div className="bot-access-search">
+                <Search aria-hidden="true" focusable="false" />
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void searchGroups();
+                    }
+                  }}
+                  placeholder="Search groups..."
+                  autoFocus
+                />
+                <button className="secondary-button secondary-button--small" type="button" onClick={() => void searchGroups()} disabled={searching || query.trim().length < 2}>
+                  {searching ? "Searching..." : "Search"}
+                </button>
+              </div>
+              <BotPrincipalSearchResults results={results} onSelect={selectGroup} />
+            </>
+          )}
+        </section>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading bot-access-step-heading--split">
+            <span>2</span>
+            <h3>Access level</h3>
+            <label className="bot-access-active-toggle">
+              <input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} />
+              <span>Active</span>
+            </label>
+          </div>
+          <BotAccessRoleList roles={roles} selectedRoleId={selectedRoleId} permissions={permissions} onRoleChange={selectRole} />
+        </section>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading bot-access-step-heading--split">
+            <span>3</span>
+            <h3>Permissions</h3>
+            <small>{selectedRole ? `Inherited from ${selectedRole.name}` : "Inline custom"}</small>
+          </div>
+          {selectedRole ? (
+            <BotAccessPermissionSummary permissions={permissions} />
+          ) : (
+            <BotAccessCustomPermissions permissions={permissions} onPermissionChange={updateCustomPermission} />
+          )}
+        </section>
+        {error ? <p className="form-error">{error}</p> : null}
+        <div className="bot-access-flow-footer">
+          <div className="bot-access-footer-summary">
+            <div>
+              <span>Group</span>
+              <strong>{selectedGroup?.display_name ?? "Not selected"}</strong>
+            </div>
+            <div>
+              <span>Access level</span>
+              <strong>{botAccessLevelLabel(selectedRole, role)}</strong>
+            </div>
+            <div>
+              <span>Members</span>
+              <strong>{formatMemberCount(selectedGroupMemberCount)}</strong>
+            </div>
+          </div>
+          <div className="bot-access-footer-actions">
+          <button className="secondary-button" type="button" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button className="primary-button" type="submit" disabled={busy || !selectedGroup}>
+            {busy ? "Adding..." : "Add access"}
+          </button>
+          </div>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function BotPrincipalSearchResults({
+  results,
+  onSelect,
+}: {
+  results: TeamsTargetSearchResult[];
+  onSelect: (target: TeamsTargetSearchResult) => void;
+}) {
+  if (!results.length) return null;
+  return (
+    <div className="bot-principal-result-list">
+      {results.map((target) => (
+        <button type="button" key={target.id} className="bot-principal-result" onClick={() => onSelect(target)}>
+          <span>
+            <strong>{target.display_name}</strong>
+            <small>{directoryTargetMeta(target)}</small>
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function SelectedBotPrincipalSummary({
+  target,
+  metaSuffix,
+  onChange,
+}: {
+  target: TeamsTargetSearchResult;
+  metaSuffix?: string;
+  onChange: () => void;
+}) {
+  const meta = [directoryTargetMeta(target), metaSuffix].filter((value) => value && value !== "-").join(" · ");
+  return (
+    <div className="selected-bot-principal">
+      <div>
+        <strong>{target.display_name}</strong>
+        <span>{meta || "No directory metadata returned"}</span>
+      </div>
+      <button className="secondary-button secondary-button--small" type="button" onClick={onChange}>
+        Change
+      </button>
+    </div>
+  );
+}
+
+function BotAccessRoleList({
+  roles,
+  selectedRoleId,
+  permissions,
+  onRoleChange,
+}: {
+  roles: BotAccessRoleOut[];
+  selectedRoleId: string | null;
+  permissions: BotUserPermissions;
+  onRoleChange: (role: BotAccessRoleOut | "custom") => void;
+}) {
+  return (
+    <div className="bot-access-role-list" role="radiogroup" aria-label="Access level">
+      {roles.map((entry) => {
+        const selected = selectedRoleId === entry.id;
+        return (
+          <button
+            type="button"
+            key={entry.id}
+            className={classNames("bot-access-role-option", selected && "is-selected")}
+            role="radio"
+            aria-checked={selected}
+            onClick={() => onRoleChange(entry)}
+          >
+            <span className="bot-access-radio" aria-hidden="true" />
+            <span className="bot-access-role-copy">
+              <strong>{entry.name}</strong>
+              <small>{entry.description || (entry.is_system ? "Managed system role" : "Managed custom role")}</small>
+            </span>
+            <span className="bot-access-role-summary">{compactPermissionSummary(entry)}</span>
+          </button>
+        );
+      })}
+      <button
+        type="button"
+        className={classNames("bot-access-role-option", selectedRoleId === null && "is-selected")}
+        role="radio"
+        aria-checked={selectedRoleId === null}
+        onClick={() => onRoleChange("custom")}
+      >
+        <span className="bot-access-radio" aria-hidden="true" />
+        <span className="bot-access-role-copy">
+          <strong>Inline Custom</strong>
+          <small>Specific permissions for this assignment only</small>
+        </span>
+        <span className="bot-access-role-summary">{compactPermissionSummary(permissions)}</span>
+      </button>
+    </div>
+  );
+}
+
+function BotAccessPermissionSummary({ permissions }: { permissions: BotUserPermissions }) {
+  const selected = BOT_PERMISSION_FIELDS.filter((field) => permissions[field.key]);
+  return (
+    <div className="bot-access-permission-summary">
+      {selected.slice(0, 4).map((field) => (
+        <span key={field.key}>{BOT_PERMISSION_SHORT_LABELS[field.key]}</span>
+      ))}
+      {selected.length > 4 ? <span>+{selected.length - 4} more</span> : null}
+      {!selected.length ? <span>No permissions</span> : null}
+    </div>
+  );
+}
+
+function BotAccessCustomPermissions({
+  permissions,
+  onPermissionChange,
+}: {
+  permissions: BotUserPermissions;
+  onPermissionChange: (key: keyof BotUserPermissions, checked: boolean) => void;
+}) {
+  return (
+    <div className="bot-access-custom-permissions">
+      {BOT_PERMISSION_GROUPS.map((group) => (
+        <div className="bot-access-permission-group" key={group.title}>
+          <h4>{group.title}</h4>
+          <div>
+            {group.fields.map((field) => (
+              <label className="bot-access-permission-check" key={field}>
+                <input type="checkbox" checked={permissions[field]} onChange={(event) => onPermissionChange(field, event.target.checked)} />
+                <span>{BOT_PERMISSION_FIELDS.find((entry) => entry.key === field)?.label ?? BOT_PERMISSION_SHORT_LABELS[field]}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function BotRoleEditModal({
+  csrfToken,
+  role,
+  onClose,
+  onSaved,
+}: {
+  csrfToken: string;
+  role?: BotAccessRoleOut;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState(role?.name ?? "");
+  const [description, setDescription] = useState(role?.description ?? "");
+  const [permissions, setPermissions] = useState<BotUserPermissions>(role ? botPermissionsFromGrant(role) : emptyBotPermissions());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const permissionCount = permissionCountFor(permissions);
+
+  function updatePermission(key: keyof BotUserPermissions, checked: boolean) {
+    setPermissions({ ...permissions, [key]: checked });
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const body: BotAccessRoleCreate | BotAccessRoleUpdate = {
+        name,
+        description,
+        ...permissions,
+      };
+      if (role) {
+        await api.updateAdminBotRole(csrfToken, role.id, body);
+      } else {
+        await api.createAdminBotRole(csrfToken, body as BotAccessRoleCreate);
+      }
+      onSaved();
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Bot role could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title={role ? "Edit bot role" : "Add bot role"} onClose={onClose} panelClassName="bot-access-workflow-modal">
+      <form className="bot-access-flow" onSubmit={(event) => void submit(event)}>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading">
+            <span>1</span>
+            <h3>Role details</h3>
+          </div>
+          <div className="bot-access-identity-editor">
+            <label>
+              <span>Name</span>
+              <input value={name} onChange={(event) => setName(event.target.value)} required maxLength={120} autoFocus />
+            </label>
+            <label>
+              <span>Description</span>
+              <input value={description} onChange={(event) => setDescription(event.target.value)} maxLength={500} />
+            </label>
+            {role?.is_system ? (
+              <div className="bot-access-readonly-meta">
+                <span>Type</span>
+                <strong>System role</strong>
+              </div>
+            ) : null}
+          </div>
+        </section>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading bot-access-step-heading--split">
+            <span>2</span>
+            <h3>Permissions</h3>
+            <small>{permissionCount === 1 ? "1 permission" : `${permissionCount} permissions`}</small>
+          </div>
+          <BotAccessCustomPermissions permissions={permissions} onPermissionChange={updatePermission} />
+        </section>
+        {error ? <p className="form-error">{error}</p> : null}
+        <div className="bot-access-flow-footer">
+          <div className="bot-access-footer-summary">
+            <div>
+              <span>Role</span>
+              <strong>{name || "Not named"}</strong>
+            </div>
+            <div>
+              <span>Type</span>
+              <strong>{role?.is_system ? "System" : "Custom"}</strong>
+            </div>
+            <div>
+              <span>Permissions</span>
+              <strong>{permissionCount}</strong>
+            </div>
+          </div>
+          <div className="bot-access-footer-actions">
+            <button className="secondary-button" type="button" onClick={onClose} disabled={busy}>
+              Cancel
+            </button>
+            <button className="primary-button" type="submit" disabled={busy || !name.trim()}>
+              {busy ? "Saving..." : role ? "Save Role" : "Add Role"}
+            </button>
+          </div>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function BotGroupEditModal({
+  csrfToken,
+  roles,
+  group,
+  onClose,
+  onSaved,
+}: {
+  csrfToken: string;
+  roles: BotAccessRoleOut[];
+  group: BotAuthorizedGroupOut;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [displayName, setDisplayName] = useState(group.display_name);
+  const [mail, setMail] = useState(group.mail);
+  const [memberCount, setMemberCount] = useState<BotGroupMemberCountState>(null);
+  const initialRole = roleForGrant(group, roles);
+  const [selectedRoleId, setSelectedRoleId] = useState<string | null>(initialRole?.id ?? null);
+  const [role, setRole] = useState<BotUserRole>(initialRole ? botRoleValue(initialRole) : group.role);
+  const [permissions, setPermissions] = useState<BotUserPermissions>(initialRole ? botPermissionsFromGrant(initialRole) : botPermissionsFromGrant(group));
+  const [isActive, setIsActive] = useState(group.is_active);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const selectedRole = roles.find((entry) => entry.id === selectedRoleId) ?? null;
+
+  useEffect(() => {
+    let cancelled = false;
+    setMemberCount({ loading: true });
+    void api.groupMemberCount(group.group_object_id)
+      .then((result) => {
+        if (!cancelled) setMemberCount({ loading: false, count: result.count });
+      })
+      .catch((err) => {
+        if (!cancelled) setMemberCount({ loading: false, error: isApiError(err) ? err.message : "Member count unavailable." });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [group.group_object_id]);
+
+  function selectRole(nextRole: BotAccessRoleOut | "custom") {
+    if (nextRole === "custom") {
+      setSelectedRoleId(null);
+      setRole("custom");
+      return;
+    }
+    setSelectedRoleId(nextRole.id);
+    setRole(botRoleValue(nextRole));
+    setPermissions(botPermissionsFromGrant(nextRole));
+  }
+
+  function updateCustomPermission(key: keyof BotUserPermissions, checked: boolean) {
+    setPermissions({ ...permissions, [key]: checked });
+    setSelectedRoleId(null);
+    setRole("custom");
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await api.updateAdminBotGroup(csrfToken, group.id, {
+        display_name: displayName,
+        mail,
+        security_enabled: group.security_enabled,
+        group_types: group.group_types,
+        role_id: selectedRoleId,
+        role,
+        is_active: isActive,
+        ...permissions,
+      });
+      onSaved();
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Bot group access could not be updated.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Edit bot group access" onClose={onClose} panelClassName="bot-access-workflow-modal">
+      <form className="bot-access-flow" onSubmit={(event) => void submit(event)}>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading">
+            <span>1</span>
+            <h3>Group details</h3>
+          </div>
+          <div className="bot-access-identity-editor">
+            <label>
+              <span>Display name</span>
+              <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} required maxLength={255} autoFocus />
+            </label>
+            <label>
+              <span>Mail</span>
+              <input value={mail} onChange={(event) => setMail(event.target.value)} maxLength={255} />
+            </label>
+            <div className="bot-access-readonly-meta">
+              <span>Type</span>
+              <strong>{botGroupTypeLabel(group)}</strong>
+            </div>
+            <div className="bot-access-technical-id">
+              <span>Group object ID</span>
+              <code>{group.group_object_id}</code>
+            </div>
+          </div>
+        </section>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading bot-access-step-heading--split">
+            <span>2</span>
+            <h3>Access level</h3>
+            <label className="bot-access-active-toggle">
+              <input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} />
+              <span>Active</span>
+            </label>
+          </div>
+          <BotAccessRoleList roles={roles} selectedRoleId={selectedRoleId} permissions={permissions} onRoleChange={selectRole} />
+        </section>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading bot-access-step-heading--split">
+            <span>3</span>
+            <h3>Permissions</h3>
+            <small>{selectedRole ? `Inherited from ${selectedRole.name}` : "Inline custom"}</small>
+          </div>
+          {selectedRole ? (
+            <BotAccessPermissionSummary permissions={permissions} />
+          ) : (
+            <BotAccessCustomPermissions permissions={permissions} onPermissionChange={updateCustomPermission} />
+          )}
+        </section>
+        {error ? <p className="form-error">{error}</p> : null}
+        <div className="bot-access-flow-footer">
+          <div className="bot-access-footer-summary">
+            <div>
+              <span>Group</span>
+              <strong>{displayName || "Not named"}</strong>
+            </div>
+            <div>
+              <span>Access level</span>
+              <strong>{botAccessLevelLabel(selectedRole, role)}</strong>
+            </div>
+            <div>
+              <span>Members</span>
+              <strong>{formatMemberCount(memberCount)}</strong>
+            </div>
+          </div>
+          <div className="bot-access-footer-actions">
+            <button className="secondary-button" type="button" onClick={onClose} disabled={busy}>
+              Cancel
+            </button>
+            <button className="primary-button" type="submit" disabled={busy}>
+              {busy ? "Saving..." : "Save access"}
+            </button>
+          </div>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function BotGroupMembersModal({ group, onClose }: { group: BotAuthorizedGroupOut; onClose: () => void }) {
+  const [members, setMembers] = useState<TeamsGroupMember[]>([]);
+  const [query, setQuery] = useState("");
+  const [activeQuery, setActiveQuery] = useState("");
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState("");
+  const pageSize = 100;
+
+  const loadMembers = useCallback(async (nextQuery: string, nextOffset = 0, append = false) => {
+    if (append) {
+      setLoadingMore(true);
+    } else {
+      setLoading(true);
+    }
+    setError("");
+    try {
+      const page = await api.groupMembers(group.group_object_id, nextQuery, nextOffset, pageSize);
+      setMembers((current) => (append ? [...current, ...page.items] : page.items));
+      setActiveQuery(nextQuery);
+      setHasMore(page.has_more);
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Group members could not be loaded.");
+    } finally {
+      if (append) {
+        setLoadingMore(false);
+      } else {
+        setLoading(false);
+      }
+    }
+  }, [group.group_object_id]);
+
+  useEffect(() => {
+    void loadMembers("");
+  }, [loadMembers]);
+
+  function submitSearch(event: FormEvent) {
+    event.preventDefault();
+    void loadMembers(query);
+  }
+
+  return (
+    <Modal title="Group members" onClose={onClose} panelClassName="group-members-modal">
+      <div className="group-members-heading">
+        <strong>{group.display_name}</strong>
+        <span>{[botGroupMailLabel(group), botGroupTypeLabel(group)].filter((value) => value && value !== "-").join(" · ")}</span>
+      </div>
+      <form className="inline-search" onSubmit={submitSearch}>
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter members" />
+        <button className="secondary-button button-with-icon" type="submit" disabled={loading}>
+          <Search aria-hidden="true" className="button-icon" focusable="false" />
+          <span>Search</span>
+        </button>
+      </form>
+      <DataTable
+        className="group-members-table"
+        columns={["Name", "UPN", "Mail"]}
+        rows={members.map((member) => [
+          <span className="user-name-cell" title={`AAD object ID: ${member.id}`}>
+            <strong>{member.display_name}</strong>
+          </span>,
+          member.user_principal_name || "-",
+          member.mail || "-",
+        ])}
+        emptyTitle="No members found"
+        emptyBody="No transitive user members matched this query."
+        loading={loading}
+        loadingLabel="Loading group members..."
+        error={error}
+        onRetry={() => void loadMembers(query)}
+        rowKey={(index) => members[index]?.id ?? index}
+      />
+      {!loading && !error ? (
+        <div className="member-pagination-row">
+          <span>
+            Showing {members.length}
+            {hasMore ? "+" : ""} {activeQuery.trim() ? "matching" : "transitive"} user members
+          </span>
+          {hasMore ? (
+            <button className="secondary-button" type="button" onClick={() => void loadMembers(activeQuery, members.length, true)} disabled={loadingMore}>
+              {loadingMore ? "Loading..." : "Load next 100"}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      <div className="form-actions">
+        <button className="secondary-button" type="button" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function botPermissionsFromGrant(grant: BotUserPermissions): BotUserPermissions {
+  return Object.fromEntries(BOT_PERMISSION_FIELDS.map((field) => [field.key, Boolean(grant[field.key])])) as BotUserPermissions;
+}
+
+function emptyBotPermissions(): BotUserPermissions {
+  return Object.fromEntries(BOT_PERMISSION_FIELDS.map((field) => [field.key, false])) as BotUserPermissions;
+}
+
+function defaultBotAccessRole(roles: BotAccessRoleOut[]): BotAccessRoleOut | null {
+  return roles.find((role) => role.system_key === "route_viewer") ?? roles[0] ?? null;
+}
+
+function roleForGrant(grant: BotAccessGrant, roles: BotAccessRoleOut[]): BotAccessRoleOut | null {
+  if (grant.role_id) {
+    const byId = roles.find((role) => role.id === grant.role_id);
+    if (byId) return byId;
+  }
+  if (grant.role === "route_viewer" || grant.role === "viewer") {
+    return roles.find((role) => role.system_key === "route_viewer") ?? null;
+  }
+  if (grant.role === "route_operator" || grant.role === "operator" || grant.role === "route_manager") {
+    return roles.find((role) => role.system_key === "route_operator") ?? null;
+  }
+  return null;
+}
+
+function botRoleValue(role: BotAccessRoleOut): BotUserRole {
+  return role.system_key || "role";
+}
+
+function botAccessLevelLabel(role: BotAccessRoleOut | null, fallback: BotUserRole): string {
+  if (role) return role.name;
+  return fallback === "custom" ? "Custom" : titleCaseRole(fallback);
+}
+
+function botGrantRoleLabel(grant: BotAccessGrant, roles: BotAccessRoleOut[]): string {
+  return botAccessLevelLabel(roleForGrant(grant, roles), grant.role ?? "custom");
+}
+
+function botGrantPermissions(grant: BotAccessGrant, roles: BotAccessRoleOut[]): BotUserPermissions {
+  const role = roleForGrant(grant, roles);
+  return role ? botPermissionsFromGrant(role) : botPermissionsFromGrant(grant);
+}
+
+function titleCaseRole(role: string): string {
+  return role
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
+}
+
+function permissionCountFor(grant: BotUserPermissions): number {
+  return BOT_PERMISSION_FIELDS.filter((field) => grant[field.key]).length;
+}
+
+function botPermissionSummary(grant: BotUserPermissions): string {
+  const permissions = BOT_PERMISSION_FIELDS.filter((field) => grant[field.key]).map((field) => field.label);
+  if (!permissions.length) return "No command permissions";
+  if (permissions.length <= 2) return permissions.join(", ");
+  return `${permissions.length} permissions`;
+}
+
+function compactPermissionSummary(grant: BotUserPermissions): string {
+  const permissions = BOT_PERMISSION_FIELDS.filter((field) => grant[field.key]).map((field) => BOT_PERMISSION_SHORT_LABELS[field.key]);
+  if (!permissions.length) return "No permissions";
+  if (permissions.length <= 2) return permissions.join(", ");
+  return `${permissions[0]}, ${permissions[1]}, +${permissions.length - 2} more`;
+}
+
+function botGroupTypeLabel(group: BotAuthorizedGroupOut): string {
+  return groupTypeLabelFromParts(group.group_types, group.security_enabled);
+}
+
+function botGroupMailLabel(group: BotAuthorizedGroupOut): string {
+  const mail = group.mail.trim();
+  return mail && mail !== group.display_name ? mail : "";
+}
+
+function botGroupMemberCountLabel(state?: { loading: boolean; count?: number; error?: string }): ReactNode {
+  if (!state || state.loading) return <span className="muted">Loading...</span>;
+  if (state.error) return <span className="muted" title={state.error}>Unavailable</span>;
+  return String(state.count ?? 0);
+}
+
+function formatMemberCount(state: BotGroupMemberCountState | undefined, suffix = ""): string {
+  if (!state) return "-";
+  if (state.loading) return "Loading";
+  if (state.error) return "Unavailable";
+  const count = state.count ?? 0;
+  if (suffix === "members") return count === 1 ? "1 member" : `${count} members`;
+  return suffix ? `${count} ${suffix}` : String(count);
+}
+
+function groupTypeLabelFromParts(groupTypes: string[], securityEnabled: boolean | null): string {
+  const type = groupTypes.includes("Unified") ? "Microsoft 365 group" : "Security group";
+  return securityEnabled ? `${type}, security enabled` : type;
 }
 
 function UserCreateModal({
@@ -3814,12 +6433,14 @@ const SETTING_META: Record<string, SettingMeta> = {
     label: "Bot Framework",
     description: "Route messages through captured Teams conversations.",
     display: "switch",
+    sourceLabel: "App",
   },
   graph_lookup_enabled: {
     section: "delivery",
     label: "Graph lookup",
     description: "Resolve Teams users, chats and channels from Microsoft Graph.",
     display: "switch",
+    sourceLabel: "App",
   },
   graph_delivery_enabled: {
     section: "delivery",
@@ -3827,13 +6448,7 @@ const SETTING_META: Record<string, SettingMeta> = {
     description: "Send delegated Teams messages through the connected service user.",
     help: "Requires Graph lookup to stay enabled.",
     display: "switch",
-  },
-  bot_default_service_url: {
-    section: "runtime",
-    label: "Default service URL",
-    description: "Fallback Bot Framework endpoint for routes without a captured URL.",
-    display: "technical",
-    sourceLabel: "Bot Framework",
+    sourceLabel: "App",
   },
   webhook_max_payload_bytes: {
     section: "runtime",
@@ -3841,6 +6456,14 @@ const SETTING_META: Record<string, SettingMeta> = {
     description: "Maximum accepted webhook body size.",
     unit: "bytes",
     display: "number",
+  },
+  webhook_url_reveal_ttl_hours: {
+    section: "runtime",
+    label: "URL reveal lifetime",
+    description: "How long Teams-generated webhook URL reveal links stay usable.",
+    unit: "hours",
+    display: "number",
+    sourceLabel: "App",
   },
   webhook_abuse_blocking_enabled: {
     section: "runtime",
@@ -3924,18 +6547,6 @@ const SETTING_META: Record<string, SettingMeta> = {
     description: "Used for Bot Framework delivery and Graph lookup.",
     display: "secret",
   },
-  botframework_scope: {
-    section: "advancedIdentity",
-    label: "Bot Framework scope",
-    description: "OAuth scope requested for Bot Framework tokens.",
-    display: "technical",
-  },
-  graph_scope: {
-    section: "advancedIdentity",
-    label: "Graph scope",
-    description: "OAuth scope requested for Microsoft Graph tokens.",
-    display: "technical",
-  },
 };
 
 const DELIVERY_SETTING_KEYS = [
@@ -3949,8 +6560,8 @@ const RUNTIME_SETTING_KEYS = [
   "frontend_base_url",
   "cors_origins",
   "session_secure_cookie",
-  "bot_default_service_url",
   "webhook_max_payload_bytes",
+  "webhook_url_reveal_ttl_hours",
   "webhook_abuse_blocking_enabled",
   "webhook_abuse_failure_limit",
   "webhook_abuse_window_minutes",
@@ -3965,32 +6576,66 @@ const ABUSE_SETTING_KEYS = [
   "webhook_abuse_window_minutes",
 ] as const;
 
-const ADVANCED_IDENTITY_SETTING_KEYS = [
+const DELIVERY_IDENTITY_SETTING_KEYS = [
   "ms_app_tenant_id",
   "ms_app_client_id",
   "ms_app_client_secret",
-  "botframework_scope",
-  "graph_scope",
 ] as const;
 
-function StatusPage() {
+function deliveryAuthRefreshToastTone(result: DeliveryAuthRefreshOut): "success" | "info" {
+  return deliveryAuthRefreshComponents(result).some((component) => component.status === "skipped") ? "info" : "success";
+}
+
+function deliveryAuthRefreshToastDescription(result: DeliveryAuthRefreshOut): string {
+  const components = deliveryAuthRefreshComponents(result);
+  const failed = components.filter((component) => component.status === "failed");
+  if (failed.length) {
+    return failed.map((component) => `${component.label}: ${component.message}`).join(" ");
+  }
+  const refreshed = components.filter((component) => component.status === "refreshed").length;
+  const cleared = components.filter((component) => component.status === "cleared").length;
+  const skipped = components.filter((component) => component.status === "skipped").length;
+  const parts = [
+    refreshed ? `${refreshed} refreshed` : "",
+    cleared ? `${cleared} cache${cleared === 1 ? "" : "s"} cleared` : "",
+    skipped ? `${skipped} skipped` : "",
+  ].filter(Boolean);
+  return parts.join(", ") || "Delivery authentication state was checked.";
+}
+
+function deliveryAuthRefreshComponents(result: DeliveryAuthRefreshOut) {
+  return [
+    { label: "Bot delivery", ...result.bot_delivery },
+    { label: "Graph lookup", ...result.graph_lookup },
+    { label: "Graph delivery", ...result.graph_delivery },
+    { label: "Bot inbound auth", ...result.bot_inbound_auth },
+  ];
+}
+
+function DeliveryMethodsPage() {
   const { notify, session } = useAppContext();
   const [readiness, setReadiness] = useState<AdminReadinessOut | null>(null);
+  const [settings, setSettings] = useState<SettingItemOut[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [graphOAuthBusy, setGraphOAuthBusy] = useState(false);
-  const [selectedComponentId, setSelectedComponentId] = useState("");
+  const [graphOAuthConfirm, setGraphOAuthConfirm] = useState<"reconnect" | "disconnect" | null>(null);
+  const [authRefreshBusy, setAuthRefreshBusy] = useState(false);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  const refresh = useCallback(async (options?: { showLoading?: boolean }) => {
+    const showLoading = options?.showLoading !== false;
+    if (showLoading) setLoading(true);
     setError("");
     try {
-      setReadiness(await api.adminReadiness(csrfToken));
+      const [nextReadiness, nextSettings] = await Promise.all([api.adminReadiness(csrfToken), api.adminSettings(csrfToken)]);
+      setReadiness(nextReadiness);
+      setSettings(nextSettings);
     } catch (err) {
-      setError(isApiError(err) ? err.message : "Status data could not be loaded.");
+      setError(isApiError(err) ? err.message : "Delivery data could not be loaded.");
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   }, [csrfToken]);
 
@@ -4029,37 +6674,96 @@ function StatusPage() {
     }
   }
 
+  function requestGraphDeliveryConnect() {
+    if (readiness?.graph_delivery.configured) {
+      setGraphOAuthConfirm("reconnect");
+      return;
+    }
+    void connectGraphDelivery();
+  }
+
+  function requestGraphDeliveryDisconnect() {
+    setGraphOAuthConfirm("disconnect");
+  }
+
+  async function refreshDeliveryAuth() {
+    setAuthRefreshBusy(true);
+    setError("");
+    try {
+      const result = await api.refreshDeliveryAuth(csrfToken);
+      setReadiness(result.readiness);
+      notify({
+        tone: result.ok ? deliveryAuthRefreshToastTone(result) : "error",
+        title: result.ok ? "Auth tokens refreshed" : "Auth refresh needs attention",
+        description: deliveryAuthRefreshToastDescription(result),
+      });
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Delivery auth tokens could not be refreshed.");
+    } finally {
+      setAuthRefreshBusy(false);
+    }
+  }
+
+  const settingsByKey = useMemo(() => new Map(settings.map((item) => [item.key, item])), [settings]);
+  const deliverySettings = orderedSettings(DELIVERY_SETTING_KEYS, settingsByKey);
+  const identitySettings = orderedSettings(DELIVERY_IDENTITY_SETTING_KEYS, settingsByKey);
+  const enabledCount = deliverySettings.filter((item) => item.effective_value === "true").length;
+  const deliveryMethodCount = deliverySettings.length || DELIVERY_SETTING_KEYS.length;
+  const graphLookupEnabled = settingEnabled(settingsByKey, "graph_lookup_enabled");
+  const refreshSilently = useCallback(() => refresh({ showLoading: false }), [refresh]);
   const integrationViews = readiness
     ? [
         buildBotIntegrationView(readiness, copyDiagnosticValue),
         buildGraphLookupIntegrationView(readiness, copyDiagnosticValue),
-        buildGraphDeliveryIntegrationView(readiness.graph_delivery, graphOAuthBusy, () => void connectGraphDelivery(), () => void disconnectGraphDelivery(), copyDiagnosticValue),
+        buildGraphDeliveryIntegrationView(readiness.graph_delivery, graphOAuthBusy, requestGraphDeliveryConnect, requestGraphDeliveryDisconnect, copyDiagnosticValue),
       ]
     : [];
   const overallTone = integrationViews.some((view) => view.tone === "danger") ? "danger" : integrationViews.some((view) => view.tone === "warn") ? "warn" : "success";
   const overallLabel = overallTone === "danger" ? "Degraded" : overallTone === "warn" ? "Attention" : "Ready";
-  const defaultSelectedComponentId = integrationViews.find((view) => view.tone === "danger" || view.tone === "warn")?.id ?? integrationViews.find((view) => view.id === "graph-delivery")?.id ?? integrationViews[0]?.id ?? "";
-  const selectedIntegration = integrationViews.find((view) => view.id === selectedComponentId) ?? integrationViews.find((view) => view.id === defaultSelectedComponentId) ?? integrationViews[0] ?? null;
 
   return (
     <>
       <PageIntro
         eyebrow="Operations"
-        title="Status"
-        description="Production readiness, delivery paths and diagnostics for Teams Rehook."
-        actions={readiness ? <StatusBadge label={overallLabel} tone={overallTone} /> : null}
+        title="Delivery"
+        description="Operate the complete delivery pipeline from one place."
+        actions={
+          readiness ? (
+            <div className="row-actions delivery-page-actions">
+              <button
+                className="secondary-button secondary-button--small button-with-icon"
+                type="button"
+                onClick={() => void refreshDeliveryAuth()}
+                disabled={authRefreshBusy}
+                aria-busy={authRefreshBusy}
+              >
+                <RefreshCw aria-hidden="true" className={classNames("button-icon", authRefreshBusy && "button-icon--spin")} focusable="false" />
+                {authRefreshBusy ? "Refreshing..." : "Refresh auth tokens"}
+              </button>
+              <button
+                className="icon-button delivery-settings-trigger"
+                type="button"
+                onClick={() => setSettingsModalOpen(true)}
+                aria-label="Configure delivery settings"
+                title="Configure delivery settings"
+              >
+                <SettingsIcon aria-hidden="true" focusable="false" />
+              </button>
+            </div>
+          ) : null
+        }
       />
       {loading ? (
         <Card>
           <div className="table-state" role="status" aria-live="polite">
             <div className="spinner spinner--small" aria-hidden="true" />
-            <p>Loading status...</p>
+            <p>Loading delivery operations...</p>
           </div>
         </Card>
       ) : error ? (
         <Card>
           <div className="table-state table-state--error" role="alert">
-            <h3>Could not load status</h3>
+            <h3>Could not load delivery operations</h3>
             <p>{error}</p>
             <button className="secondary-button secondary-button--small" type="button" onClick={() => void refresh()}>
               Retry
@@ -4067,21 +6771,674 @@ function StatusPage() {
           </div>
         </Card>
       ) : readiness ? (
-        <div className="status-command-center">
-          <RelayHealthHero readiness={readiness} integrations={integrationViews} overallLabel={overallLabel} overallTone={overallTone} />
-          <RelayPipelineLayout
+        <div className="delivery-page delivery-operations-page">
+          <RelayHealthHero
+            deliveryMethodCount={deliveryMethodCount}
+            enabledCount={enabledCount}
             integrations={integrationViews}
-            selectedIntegration={selectedIntegration}
-            selectedComponentId={selectedIntegration?.id ?? defaultSelectedComponentId}
-            onSelectComponent={setSelectedComponentId}
+            overallLabel={overallLabel}
+            overallTone={overallTone}
+            readiness={readiness}
           />
-          <section className="status-operations-grid" aria-label="Operational context">
+          <section className="delivery-component-grid" aria-label="Delivery methods">
+            {integrationViews.map((integration) => (
+              <DeliveryComponentCard
+                key={integration.id}
+                csrfToken={csrfToken}
+                graphLookupEnabled={graphLookupEnabled}
+                integration={integration}
+                item={settingsByKey.get(deliverySettingKeyForIntegration(integration.id))}
+                notify={notify}
+                onChanged={refresh}
+              />
+            ))}
+          </section>
+          <section className="status-operations-grid" aria-label="Runtime context">
             <RuntimeSnapshotCard readiness={readiness} onCopy={copyDiagnosticValue} />
           </section>
+          {settingsModalOpen ? (
+            <DeliverySettingsModal
+              settings={identitySettings}
+              settingsByKey={settingsByKey}
+              csrfToken={csrfToken}
+              onChanged={refreshSilently}
+              notify={notify}
+              onClose={() => setSettingsModalOpen(false)}
+            />
+          ) : null}
+          {graphOAuthConfirm && readiness ? (
+            <ConfirmModal
+              title={graphOAuthConfirm === "reconnect" ? "Reconnect service user?" : "Disconnect service user?"}
+              description={
+                graphOAuthConfirm === "reconnect"
+                  ? "The current Graph Delivery service user stays active until the newly authenticated user is reviewed and confirmed."
+                  : "Graph Delivery will stop using the currently connected service user."
+              }
+              confirmLabel={graphOAuthConfirm === "reconnect" ? "Start reconnect" : "Disconnect"}
+              busyLabel={graphOAuthConfirm === "reconnect" ? "Starting..." : "Disconnecting..."}
+              tone={graphOAuthConfirm === "reconnect" ? "primary" : "danger"}
+              busy={graphOAuthBusy}
+              onClose={() => setGraphOAuthConfirm(null)}
+              onConfirm={async () => {
+                const action = graphOAuthConfirm;
+                setGraphOAuthConfirm(null);
+                if (action === "reconnect") {
+                  await connectGraphDelivery();
+                } else {
+                  await disconnectGraphDelivery();
+                }
+              }}
+            >
+              <dl className="advanced-definition-list">
+                <dt>Current service user</dt>
+                <dd>{graphDeliveryServiceUserLabel(readiness.graph_delivery)}</dd>
+                <dt>User principal name</dt>
+                <dd>{readiness.graph_delivery.service_user_principal_name || "-"}</dd>
+                <dt>User ID</dt>
+                <dd>{readiness.graph_delivery.service_user_id || "-"}</dd>
+              </dl>
+            </ConfirmModal>
+          ) : null}
         </div>
       ) : null}
     </>
   );
+}
+
+function deliverySettingKeyForIntegration(integrationId: string): (typeof DELIVERY_SETTING_KEYS)[number] {
+  if (integrationId === "graph-lookup") return "graph_lookup_enabled";
+  if (integrationId === "graph-delivery") return "graph_delivery_enabled";
+  return "bot_framework_enabled";
+}
+
+function DeliveryComponentCard({
+  csrfToken,
+  graphLookupEnabled,
+  item,
+  integration,
+  notify,
+  onChanged,
+}: {
+  csrfToken: string;
+  graphLookupEnabled: boolean;
+  item?: SettingItemOut;
+  integration: IntegrationStatusView;
+  notify: SettingsNotify;
+  onChanged: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [detailView, setDetailView] = useState<DeliveryDetailView | null>(null);
+  const inputId = useId();
+  const enabled = item?.effective_value === "true";
+  const graphDeliveryBlocked = item?.key === "graph_delivery_enabled" && !enabled && !graphLookupEnabled;
+  const readyChecks = integration.healthChecks.filter((check) => check.tone === "success").length;
+  const tokenFactValue = integration.facts.find((fact) => fact.label === "Token");
+  const actionItem = integration.attentionItems[0];
+  const checksTone = readyChecks === integration.healthChecks.length ? "success" : readyChecks > 0 ? "warn" : "danger";
+  const configuredCount = integration.credentials.filter(([, value]) => value === "Configured" || value === "Inherited").length;
+  const tokenTooltip = `Token ${tokenFactValue?.value ?? "Unknown"}`;
+  const secondaryDetailItems: RowActionItem[] = [
+    { label: "Open diagnostics", icon: Activity, onClick: () => setDetailView("diagnostics") },
+    { label: "Open technical information", icon: Info, onClick: () => setDetailView("technical") },
+  ];
+  const overflowItems: RowActionItem[] = integration.manageActionItems?.length
+    ? [
+        ...secondaryDetailItems,
+        ...integration.manageActionItems.map((item, index) => ({
+          ...item,
+          separated: index === 0 ? true : item.separated,
+        })),
+      ]
+    : secondaryDetailItems;
+
+  async function toggle(nextEnabled: boolean) {
+    if (!item) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api.updateSetting(csrfToken, item.key, nextEnabled ? "true" : "false");
+      notify({ tone: "success", title: `${item.label} ${nextEnabled ? "enabled" : "disabled"}` });
+      await onChanged();
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Delivery method could not be updated.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <Card className={classNames("delivery-component-card", `delivery-component-card--${integration.tone}`)}>
+        <div className="delivery-component-header">
+          <div className="delivery-component-title">
+            <DeliveryMethodIcon integrationId={integration.id} />
+            <span>
+              <h2>{integration.title}</h2>
+              <p>{integration.description}</p>
+            </span>
+          </div>
+          <div className="delivery-component-control">
+            <div className="delivery-component-health" aria-label={`${integration.title} health`}>
+              <DeliveryStatusGroup integration={integration} overridden={Boolean(item?.source === "environment" && item.is_overridden)} tokenLabel={tokenTooltip} />
+            </div>
+            <div className="delivery-component-state" aria-label={`${integration.title} state`}>
+              {item ? (
+                <label className="settings-switch delivery-method-switch" htmlFor={inputId}>
+                  <input
+                    id={inputId}
+                    type="checkbox"
+                    checked={enabled}
+                    disabled={busy || graphDeliveryBlocked}
+                    onChange={(event) => void toggle(event.target.checked)}
+                    aria-describedby={error ? `${inputId}-error` : undefined}
+                  />
+                  <span aria-hidden="true" />
+                  <strong>{busy ? "Saving..." : enabled ? "Enabled" : "Disabled"}</strong>
+                </label>
+              ) : null}
+            </div>
+          </div>
+          <div className="delivery-detail-hub" aria-label={`${integration.title} actions`}>
+            <button
+              type="button"
+              className={classNames("delivery-detail-button delivery-detail-button--primary", `delivery-detail-button--${checksTone}`)}
+              aria-label={`Open ${integration.title} readiness checks, ${readyChecks} of ${integration.healthChecks.length} passing`}
+              onClick={() => setDetailView("readiness")}
+            >
+              <Check aria-hidden="true" className="button-icon" focusable="false" />
+              <span className="delivery-action-label" aria-hidden="true">
+                <span className="delivery-action-label-full">Checks</span>
+                <span className="delivery-action-label-short">Checks</span>
+              </span>
+              <strong>{readyChecks}/{integration.healthChecks.length}</strong>
+            </button>
+            <button type="button" className="delivery-detail-button delivery-detail-button--primary" aria-label={`Open ${integration.title} configuration`} onClick={() => setDetailView("configuration")}>
+              <Wrench aria-hidden="true" className="button-icon" focusable="false" />
+              <span className="delivery-action-label" aria-hidden="true">
+                <span className="delivery-action-label-full">Config</span>
+                <span className="delivery-action-label-short">Config</span>
+              </span>
+              <strong>{configuredCount}/{integration.credentials.length}</strong>
+            </button>
+            <button type="button" className="delivery-detail-button delivery-detail-button--secondary" aria-label={`Open ${integration.title} diagnostics`} onClick={() => setDetailView("diagnostics")}>
+              <Activity aria-hidden="true" className="button-icon" focusable="false" />
+              <span className="delivery-action-label" aria-hidden="true">
+                <span className="delivery-action-label-full">Diagnostics</span>
+                <span className="delivery-action-label-short">Diag</span>
+              </span>
+            </button>
+            <button type="button" className="delivery-detail-button delivery-detail-button--secondary" aria-label={`Open ${integration.title} technical information`} onClick={() => setDetailView("technical")}>
+              <Info aria-hidden="true" className="button-icon" focusable="false" />
+              <span className="delivery-action-label" aria-hidden="true">
+                <span className="delivery-action-label-full">Technical</span>
+                <span className="delivery-action-label-short">Tech</span>
+              </span>
+            </button>
+          </div>
+          {integration.manageActionItems?.length ? (
+            <div className="delivery-overflow-action delivery-overflow-action--manage">
+              <RowActionMenu label={`Manage ${integration.title}`} items={integration.manageActionItems} />
+            </div>
+          ) : null}
+          <div className="delivery-overflow-action delivery-overflow-action--details">
+            <RowActionMenu label={`More ${integration.title} actions`} items={overflowItems} />
+          </div>
+        </div>
+
+        {actionItem || graphDeliveryBlocked || error ? (
+          <div className="delivery-inline-issues">
+            {actionItem ? (
+              <div className={classNames("delivery-inline-issue", `delivery-inline-issue--${actionItem.tone}`)}>
+                <strong>{actionItem.title}</strong>
+                <span>{actionItem.description}</span>
+                {integration.primaryActionSlot ? <div className="delivery-inline-action">{integration.primaryActionSlot}</div> : null}
+              </div>
+            ) : null}
+            {graphDeliveryBlocked ? <p className="settings-warning">Enable Graph lookup first.</p> : null}
+            {error ? (
+              <p className="form-error" id={`${inputId}-error`}>
+                {error}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
+      </Card>
+      {detailView ? <DeliveryDetailModal integration={integration} view={detailView} onClose={() => setDetailView(null)} /> : null}
+    </>
+  );
+}
+
+function DeliveryMethodIcon({ integrationId }: { integrationId: string }) {
+  const Icon = integrationId === "graph-lookup" ? Search : integrationId === "graph-delivery" ? Send : Bot;
+  return (
+    <span className={classNames("delivery-method-icon", `delivery-method-icon--${integrationId}`)} aria-hidden="true">
+      <Icon focusable="false" />
+    </span>
+  );
+}
+
+type DeliveryDetailView = "readiness" | "configuration" | "diagnostics" | "technical";
+
+function DeliverySettingsModal({
+  csrfToken,
+  notify,
+  onChanged,
+  onClose,
+  settings,
+  settingsByKey,
+}: SettingsCardProps & { onClose: () => void }) {
+  const tenantConfigured = Boolean(settingValue(settingsByKey, "ms_app_tenant_id"));
+  const clientConfigured = Boolean(settingValue(settingsByKey, "ms_app_client_id"));
+  const secretConfigured = settingValue(settingsByKey, "ms_app_client_secret") === "configured";
+  const configuredCount = [tenantConfigured, clientConfigured, secretConfigured].filter(Boolean).length;
+  const identityReady = configuredCount === 3;
+  const overrideCount = settings.filter((item) => item.is_overridden).length;
+
+  return (
+    <Modal
+      title="Delivery settings"
+      description="Microsoft identity values used by Bot Framework and Graph delivery."
+      onClose={onClose}
+      panelClassName="delivery-settings-modal"
+    >
+      <div className="delivery-settings-modal-body">
+        <section className={classNames("delivery-settings-summary", identityReady ? "delivery-settings-summary--ready" : "delivery-settings-summary--warn")}>
+          <span className={classNames("delivery-status-dot", identityReady ? "delivery-status-dot--success" : "delivery-status-dot--warn")} aria-hidden="true" />
+          <div>
+            <strong>{configuredCount}/3 identity values configured</strong>
+            <p>{identityReady ? "Tenant, client and secret are ready for delivery auth." : "Complete the missing identity values before refreshing auth tokens."}</p>
+          </div>
+          <StatusBadge label={overrideCount > 0 ? `${overrideCount} overrides` : "ENV"} tone={overrideCount > 0 ? "warn" : "neutral"} />
+        </section>
+        <div className="delivery-settings-list">
+          {settings.length ? (
+            settings.map((item) => (
+              <RuntimeSettingControl
+                key={item.key}
+                item={item}
+                csrfToken={csrfToken}
+                onChanged={onChanged}
+                notify={notify}
+                settingsByKey={settingsByKey}
+              />
+            ))
+          ) : (
+            <EmptyState title="No identity settings available" body="Delivery identity settings could not be loaded." />
+          )}
+        </div>
+        <p className="delivery-settings-footnote">
+          OAuth scopes use the built-in Bot Framework and Microsoft Graph defaults. Override them only through environment variables when needed.
+        </p>
+      </div>
+      <div className="form-actions">
+        <button className="secondary-button secondary-button--small" type="button" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function DeliveryDetailModal({ integration, onClose, view }: { integration: IntegrationStatusView; onClose: () => void; view: DeliveryDetailView }) {
+  const titleByView: Record<DeliveryDetailView, string> = {
+    readiness: "Readiness Checks",
+    configuration: "Configuration",
+    diagnostics: "Diagnostics",
+    technical: "Technical Information",
+  };
+
+  return (
+    <Modal title={titleByView[view]} description={`${integration.title} · ${integration.statusLabel}`} onClose={onClose} panelClassName="delivery-inspector-modal">
+      {view === "readiness" ? <DeliveryReadinessInspector integration={integration} /> : null}
+      {view === "configuration" ? <DeliveryConfigurationInspector integration={integration} /> : null}
+      {view === "diagnostics" ? <DeliveryDiagnosticsInspector integration={integration} /> : null}
+      {view === "technical" ? <DeliveryTechnicalInspector integration={integration} /> : null}
+      <div className="form-actions">
+        <button className="secondary-button secondary-button--small" type="button" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function DeliveryReadinessInspector({ integration }: { integration: IntegrationStatusView }) {
+  return (
+    <div className="delivery-inspector-body">
+      <StatusCheckList checks={integration.healthChecks} />
+    </div>
+  );
+}
+
+function DeliveryConfigurationInspector({ integration }: { integration: IntegrationStatusView }) {
+  return (
+    <div className="delivery-inspector-body">
+      <section className="delivery-inspector-section">
+        <h3>Credentials</h3>
+        <div className="credential-check-grid">
+          {integration.credentials.map(([label, value]) => (
+            <CredentialCheck key={label} label={label} value={value} />
+          ))}
+        </div>
+      </section>
+      <section className="delivery-inspector-section">
+        <h3>Capabilities</h3>
+        <StatusFactList facts={integration.capabilities} />
+      </section>
+    </div>
+  );
+}
+
+function DeliveryDiagnosticsInspector({ integration }: { integration: IntegrationStatusView }) {
+  return (
+    <div className="delivery-inspector-body">
+      <section className="delivery-inspector-section">
+        <h3>Permissions</h3>
+        <p>{integration.permissionSummary}</p>
+        <div className="permission-badge-list">
+          {integration.permissionBadges.map((badge) => (
+            <span className={classNames("permission-badge", `permission-badge--${badge.tone}`)} key={badge.label}>
+              {badge.label}
+            </span>
+          ))}
+        </div>
+      </section>
+      <section className="delivery-inspector-section">
+        <h3>Diagnostic output</h3>
+        <dl className="definition-list definition-list--compact advanced-definition-list">
+          {integration.diagnosticRows.map((row) => (
+            <FragmentPair key={row.label} label={row.label} value={row.value} />
+          ))}
+        </dl>
+      </section>
+    </div>
+  );
+}
+
+function DeliveryTechnicalInspector({ integration }: { integration: IntegrationStatusView }) {
+  return (
+    <div className="delivery-inspector-body">
+      <dl className="definition-list definition-list--compact advanced-definition-list">
+        {integration.technicalRows.map((row) => (
+          <FragmentPair key={row.label} label={row.label} value={row.value} />
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+function DeliveryStatusGroup({ integration, overridden, tokenLabel }: { integration: IntegrationStatusView; overridden: boolean; tokenLabel: string }) {
+  return (
+    <div
+      className="delivery-status-group delivery-token-tooltip"
+      aria-label={`${integration.title}: ${integration.statusLabel}${overridden ? ", Override active" : ""}. ${tokenLabel}`}
+      data-tooltip={tokenLabel}
+      tabIndex={0}
+    >
+      <span className={classNames("delivery-status-dot", `delivery-status-dot--${integration.tone}`)} aria-hidden="true" />
+      <strong>{integration.statusLabel}</strong>
+      {overridden ? (
+        <>
+          <span aria-hidden="true">·</span>
+          <span>Override</span>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function GraphDeliveryOAuthPage() {
+  const { notify, session } = useAppContext();
+  const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
+  const [pending, setPending] = useState<GraphDeliveryOAuthPendingOut | null>(null);
+  const [confirmedUser, setConfirmedUser] = useState<GraphDeliveryOAuthPendingOut | AdminReadinessOut["graph_delivery"] | null>(null);
+  const [readiness, setReadiness] = useState<AdminReadinessOut | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const isSuccess = window.location.pathname.endsWith("/success");
+  const pendingId = useMemo(() => new URLSearchParams(window.location.search).get("pending_id") ?? "", []);
+
+  useEffect(() => {
+    let active = true;
+    async function load() {
+      setLoading(true);
+      setError("");
+      try {
+        if (isSuccess) {
+          const nextReadiness = await api.adminReadiness(csrfToken);
+          if (!active) return;
+          setReadiness(nextReadiness);
+          setConfirmedUser(nextReadiness.graph_delivery);
+          return;
+        }
+        if (!pendingId) throw new Error("Missing pending Graph Delivery connection.");
+        const [nextPending, nextReadiness] = await Promise.all([
+          api.graphDeliveryOAuthPending(csrfToken, pendingId),
+          api.adminReadiness(csrfToken),
+        ]);
+        if (!active) return;
+        setPending(nextPending);
+        setReadiness(nextReadiness);
+      } catch (err) {
+        if (!active) return;
+        setError(isApiError(err) ? err.message : err instanceof Error ? err.message : "Graph Delivery connection could not be loaded.");
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    void load();
+    return () => {
+      active = false;
+    };
+  }, [csrfToken, isSuccess, pendingId]);
+
+  async function confirmPending() {
+    if (!pending) return;
+    setBusy(true);
+    setError("");
+    try {
+      const nextReadiness = await api.confirmGraphDeliveryOAuthPending(csrfToken, pending.id);
+      setReadiness(nextReadiness);
+      setConfirmedUser(pending);
+      setPending(null);
+      window.history.replaceState(null, "", "/settings/graph-delivery/success");
+      notify({ tone: "success", title: "Graph delivery connected" });
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Graph Delivery connection could not be confirmed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelPending() {
+    if (!pending) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api.cancelGraphDeliveryOAuthPending(csrfToken, pending.id);
+      notify({ tone: "info", title: "Graph delivery connection canceled" });
+      navigateInApp("/delivery");
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Graph Delivery connection could not be canceled.");
+      setBusy(false);
+    }
+  }
+
+  const current = readiness?.graph_delivery ?? null;
+  const pendingScopes = pending?.scopes ?? [];
+  const pendingServiceUser = pending ? graphDeliveryServiceUserLabel(pending) : "-";
+  const currentServiceUser = current?.configured ? graphDeliveryServiceUserLabel(current) : "None";
+  const pendingScopeBadges = pendingScopes.map((scope) => ({ label: scope, tone: "success" as const }));
+
+  return (
+    <>
+      <PageIntro
+        eyebrow="Graph delivery"
+        title={isSuccess || confirmedUser ? "Service user connected" : "Confirm service user"}
+        description={
+          isSuccess || confirmedUser
+            ? "The delegated Graph Delivery service user is active."
+            : "Review the authenticated Microsoft account before it is used for Graph Delivery."
+        }
+        actions={current ? <StatusBadge label={current.auth_status === "ready" ? "Ready" : healthStateLabel(current.auth_status)} tone={authStatusTone(current.auth_status)} /> : null}
+      />
+      {loading ? (
+        <Card>
+          <div className="table-state" role="status" aria-live="polite">
+            <div className="spinner spinner--small" aria-hidden="true" />
+            <p>Loading Graph Delivery connection...</p>
+          </div>
+        </Card>
+      ) : error ? (
+        <Card>
+          <div className="table-state table-state--error" role="alert">
+            <h3>Could not load Graph Delivery connection</h3>
+            <p>{error}</p>
+            <button className="secondary-button secondary-button--small" type="button" onClick={() => navigateInApp("/delivery")}>
+              Back to delivery
+            </button>
+          </div>
+        </Card>
+      ) : confirmedUser || isSuccess ? (
+        <div className="delivery-page delivery-operations-page graph-oauth-page">
+          <section className="status-relay-hero status-relay-hero--success" aria-label="Graph Delivery connection success">
+            <div className="status-relay-hero-main">
+              <div className="graph-oauth-success-mark" aria-hidden="true">
+                <CheckCircle focusable="false" />
+              </div>
+              <div>
+                <p className="integration-kicker">Connection confirmed</p>
+                <h2>Graph Delivery is connected</h2>
+                <p>The confirmed service user is now active for delegated Microsoft Graph sends.</p>
+              </div>
+            </div>
+            <div className="status-relay-metrics">
+              <StatusOverviewMetric label="Service user" value={graphDeliveryServiceUserLabel(confirmedUser ?? current!)} detail="Active delegated sender." tone="success" />
+              <StatusOverviewMetric label="Token" value={current?.access_token_expires_at ? formatRelativeTime(current.access_token_expires_at) : "Valid"} detail="Latest readiness state." tone="success" />
+              <StatusOverviewMetric label="Scopes" value={`${(current?.scopes ?? []).length || "-"} granted`} detail="Delegated permissions." tone="success" />
+              <StatusOverviewMetric label="Status" value={current ? healthStateLabel(current.auth_status) : "Ready"} detail="Graph Delivery readiness." tone="success" />
+            </div>
+          </section>
+          <Card className="delivery-component-card delivery-component-card--success graph-oauth-card">
+            <div className="graph-oauth-card-body">
+              <section className="status-detail-section">
+                <h3>Active service user</h3>
+                <StatusFactList facts={graphDeliveryUserFacts(confirmedUser ?? current)} />
+              </section>
+              <div className="form-actions">
+                <button className="primary-button secondary-button--small" type="button" onClick={() => navigateInApp("/delivery")}>
+                  Back to delivery
+                </button>
+              </div>
+            </div>
+          </Card>
+        </div>
+      ) : pending ? (
+        <div className="delivery-page delivery-operations-page graph-oauth-page">
+          <section className="status-relay-hero status-relay-hero--warn" aria-label="Graph Delivery pending connection">
+            <div className="status-relay-hero-main">
+              <div className="status-relay-indicator status-relay-indicator--warn" aria-hidden="true" />
+              <div>
+                <p className="integration-kicker">Pending connection</p>
+                <h2>Review the delegated sender before activation</h2>
+                <p>The current Graph Delivery service user remains active until this connection is confirmed.</p>
+              </div>
+            </div>
+            <div className="status-relay-metrics">
+              <StatusOverviewMetric label="New user" value={pendingServiceUser} detail={pending.service_user_principal_name || pending.service_user_id || "Authenticated account."} tone="warn" />
+              <StatusOverviewMetric label="Current user" value={currentServiceUser} detail={current?.service_user_principal_name || "Unchanged until confirm."} tone={current?.configured ? "neutral" : "warn"} />
+              <StatusOverviewMetric label="Review window" value={formatRelativeTime(pending.expires_at)} detail="Pending approval expires." tone="warn" />
+              <StatusOverviewMetric label="Scopes" value={`${pendingScopes.length} granted`} detail="Delegated permissions to review." tone="success" />
+            </div>
+          </section>
+          <Card className="delivery-component-card delivery-component-card--warn graph-oauth-card">
+            <div className="delivery-component-header graph-oauth-component-header">
+              <div className="delivery-component-title">
+                <span className="delivery-method-icon delivery-method-icon--graph-delivery" aria-hidden="true">
+                  <Send focusable="false" />
+                </span>
+                <span>
+                  <h2>New authenticated user</h2>
+                  <p>This account will become active only after confirmation.</p>
+                </span>
+              </div>
+              <div className="delivery-status-group">
+                <span className="delivery-status-dot delivery-status-dot--warn" aria-hidden="true" />
+                <strong>Pending</strong>
+              </div>
+              <div className="graph-oauth-actions">
+                <button className="secondary-button secondary-button--small" type="button" onClick={() => void cancelPending()} disabled={busy}>
+                  Cancel
+                </button>
+                <button className="primary-button secondary-button--small" type="button" onClick={() => void confirmPending()} disabled={busy}>
+                  {busy ? "Confirming..." : "Use service user"}
+                </button>
+              </div>
+            </div>
+            <div className="delivery-inline-issues">
+              <div className="delivery-inline-issue">
+                <strong>Review required</strong>
+                <span>Confirm only if the display name, user principal name, tenant and granted scopes match the intended Graph Delivery service account.</span>
+              </div>
+            </div>
+            <div className="graph-oauth-detail-grid">
+              <section className="status-detail-section">
+                <h3>Pending service user</h3>
+                <StatusFactList facts={graphDeliveryUserFacts(pending)} />
+              </section>
+              <section className="status-detail-section">
+                <h3>Current active user</h3>
+                {current?.configured ? <StatusFactList facts={graphDeliveryUserFacts(current)} /> : <EmptyState title="No active service user" body="Graph Delivery has no confirmed delegated sender yet." />}
+              </section>
+              <section className="status-detail-section graph-oauth-permissions">
+                <h3>Granted scopes</h3>
+                <p>{pendingScopes.length ? `${pendingScopes.length} delegated scopes were returned by Microsoft.` : "No scopes were reported for this pending connection."}</p>
+                <div className="permission-badge-list">
+                  {pendingScopeBadges.length ? (
+                    pendingScopeBadges.map((badge) => (
+                      <span className={classNames("permission-badge", `permission-badge--${badge.tone}`)} key={badge.label}>
+                        {badge.label}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="permission-badge permission-badge--warn">No scopes reported</span>
+                  )}
+                </div>
+              </section>
+              <section className="status-detail-section">
+                <h3>Token window</h3>
+                <StatusFactList
+                  facts={[
+                    { label: "Pending expires", value: formatRelativeTime(pending.expires_at), tone: "warn" },
+                    { label: "Access token", value: pending.access_token_expires_at ? formatRelativeTime(pending.access_token_expires_at) : "-", tone: pending.access_token_expires_at ? "success" : "neutral" },
+                  ]}
+                />
+              </section>
+            </div>
+          </Card>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function graphDeliveryUserFacts(user: GraphDeliveryOAuthPendingOut | AdminReadinessOut["graph_delivery"] | null): StatusFact[] {
+  if (!user) return [];
+  return [
+    { label: "Display name", value: graphDeliveryServiceUserLabel(user), tone: user.service_user_display_name ? "success" : "neutral" },
+    { label: "UPN", value: user.service_user_principal_name || "-", tone: user.service_user_principal_name ? "success" : "neutral" },
+    { label: "User ID", value: user.service_user_id || "-", tone: user.service_user_id ? "success" : "neutral" },
+    { label: "Tenant ID", value: user.tenant_id || "-", tone: user.tenant_id ? "success" : "neutral" },
+    { label: "Client ID", value: user.client_id || "-", tone: user.client_id ? "success" : "neutral" },
+  ];
+}
+
+function navigateInApp(path: string) {
+  window.history.pushState(null, "", path);
+  window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
 function SettingsPage() {
@@ -4089,7 +7446,6 @@ function SettingsPage() {
   const [settings, setSettings] = useState<SettingItemOut[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [identityOpen, setIdentityOpen] = useState(false);
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
 
   const refresh = useCallback(async () => {
@@ -4109,19 +7465,17 @@ function SettingsPage() {
   }, [refresh]);
 
   const settingsByKey = useMemo(() => new Map(settings.map((item) => [item.key, item])), [settings]);
-  const overrideCount = settings.filter((item) => item.is_overridden).length;
-  const deliverySettings = orderedSettings(DELIVERY_SETTING_KEYS, settingsByKey);
   const runtimeSettings = orderedSettings(RUNTIME_SETTING_KEYS, settingsByKey);
-  const identitySettings = orderedSettings(ADVANCED_IDENTITY_SETTING_KEYS, settingsByKey);
-  const overrideBadge = overrideCount > 0 ? `${overrideCount} ${overrideCount === 1 ? "override" : "overrides"}` : "All defaults";
+  const runtimeOverrideCount = runtimeSettings.filter((item) => item.is_overridden).length;
+  const overrideBadge = runtimeOverrideCount > 0 ? `${runtimeOverrideCount} ${runtimeOverrideCount === 1 ? "override" : "overrides"}` : "All defaults";
 
   return (
     <>
       <PageIntro
         eyebrow="Configuration"
         title="Settings"
-        description="Control delivery behavior, runtime defaults and Microsoft identity values."
-        actions={<StatusBadge label={overrideBadge} tone={overrideCount > 0 ? "warn" : "neutral"} />}
+        description="Manage runtime defaults used by relay operations."
+        actions={<StatusBadge label={overrideBadge} tone={runtimeOverrideCount > 0 ? "warn" : "neutral"} />}
       />
       {loading ? (
         <Card>
@@ -4142,29 +7496,13 @@ function SettingsPage() {
         </Card>
       ) : (
         <div className="settings-page">
-          <SettingsOverviewStrip settingsByKey={settingsByKey} overrideCount={overrideCount} />
-          <DeliveryControlsCard
-            settings={deliverySettings}
-            settingsByKey={settingsByKey}
-            csrfToken={csrfToken}
-            onChanged={refresh}
-            notify={notify}
-          />
+          <SettingsOverviewStrip settingsByKey={settingsByKey} overrideCount={runtimeOverrideCount} />
           <RuntimeDefaultsCard
             settings={runtimeSettings}
             settingsByKey={settingsByKey}
             csrfToken={csrfToken}
             onChanged={refresh}
             notify={notify}
-          />
-          <AdvancedIdentityCard
-            settings={identitySettings}
-            settingsByKey={settingsByKey}
-            csrfToken={csrfToken}
-            onChanged={refresh}
-            notify={notify}
-            open={identityOpen}
-            onToggle={() => setIdentityOpen((value) => !value)}
           />
         </div>
       )}
@@ -4191,10 +7529,7 @@ function SettingsOverviewStrip({
   overrideCount: number;
   settingsByKey: Map<string, SettingItemOut>;
 }) {
-  const tenantConfigured = Boolean(settingValue(settingsByKey, "ms_app_tenant_id"));
-  const clientConfigured = Boolean(settingValue(settingsByKey, "ms_app_client_id"));
-  const secretConfigured = settingValue(settingsByKey, "ms_app_client_secret") === "configured";
-  const identityReady = tenantConfigured && clientConfigured && secretConfigured;
+  const runtimeOverrideCount = RUNTIME_SETTING_KEYS.filter((key) => settingsByKey.get(key)?.is_overridden).length;
 
   return (
     <section className="settings-overview" aria-label="Runtime configuration overview">
@@ -4204,15 +7539,10 @@ function SettingsOverviewStrip({
         detail={overrideCount > 0 ? "Runtime overrides are applied immediately." : "All values inherit from environment defaults."}
       />
       <OverviewMetric
-        label="Features"
-        value={`${[settingEnabled(settingsByKey, "bot_framework_enabled"), settingEnabled(settingsByKey, "graph_lookup_enabled"), settingEnabled(settingsByKey, "graph_delivery_enabled")].filter(Boolean).length}/3 enabled`}
-        detail="Bot Framework, Graph lookup and delegated Graph delivery."
-      />
-      <OverviewMetric
-        label="Identity"
-        value={identityReady ? "Configured" : "Needs attention"}
-        detail={identityReady ? "Tenant, client and secret are present." : "Check Microsoft Entra values."}
-        tone={identityReady ? "success" : "warn"}
+        label="Runtime"
+        value={runtimeOverrideCount > 0 ? `${runtimeOverrideCount} overrides` : "Defaults"}
+        detail={runtimeOverrideCount > 0 ? "URL, retention or proxy values are overridden." : "Runtime values inherit from environment config."}
+        tone={runtimeOverrideCount > 0 ? "warn" : "neutral"}
       />
     </section>
   );
@@ -4238,31 +7568,6 @@ function OverviewMetric({
   );
 }
 
-function DeliveryControlsCard({
-  csrfToken,
-  notify,
-  onChanged,
-  settings,
-  settingsByKey,
-}: SettingsCardProps) {
-  return (
-    <Card className="settings-card" title="Delivery" description="Primary delivery controls stay visible for quick operational changes.">
-      <div className="settings-feature-grid">
-        {settings.map((item) => (
-          <RuntimeSettingControl
-            key={item.key}
-            item={item}
-            csrfToken={csrfToken}
-            onChanged={onChanged}
-            notify={notify}
-            settingsByKey={settingsByKey}
-          />
-        ))}
-      </div>
-    </Card>
-  );
-}
-
 function RuntimeDefaultsCard({
   csrfToken,
   notify,
@@ -4270,11 +7575,10 @@ function RuntimeDefaultsCard({
   settings,
   settingsByKey,
 }: SettingsCardProps) {
-  const urlSettings = settings.filter((item) => item.type === "url" && item.key !== "bot_default_service_url");
+  const urlSettings = settings.filter((item) => item.type === "url");
   const browserSettings = settings.filter((item) => item.key === "cors_origins" || item.key === "session_secure_cookie");
   const limitSettings = settings.filter((item) => item.type === "int" && !item.key.startsWith("webhook_abuse_"));
   const abuseSettings = orderedSettings(ABUSE_SETTING_KEYS, settingsByKey);
-  const fallbackSettings = settings.filter((item) => item.key === "bot_default_service_url");
   const proxySettings = settings.filter((item) => item.key === "trust_x_forwarded_for");
 
   return (
@@ -4285,7 +7589,7 @@ function RuntimeDefaultsCard({
             <h3>URLs</h3>
             <p>Copied into generated links and fallback delivery paths.</p>
           </div>
-          {[...urlSettings, ...browserSettings, ...fallbackSettings].map((item) => (
+          {[...urlSettings, ...browserSettings].map((item) => (
             <RuntimeSettingControl
               key={item.key}
               item={item}
@@ -4352,62 +7656,6 @@ function RuntimeDefaultsCard({
   );
 }
 
-function AdvancedIdentityCard({
-  csrfToken,
-  notify,
-  onChanged,
-  onToggle,
-  open,
-  settings,
-  settingsByKey,
-}: SettingsCardProps & { open: boolean; onToggle: () => void }) {
-  const overriddenCount = settings.filter((item) => item.is_overridden).length;
-  const secret = settingsByKey.get("ms_app_client_secret");
-  const secretReady = secret?.effective_value === "configured";
-
-  return (
-    <Card className="settings-card settings-card--identity">
-      <div className="settings-disclosure">
-        <button
-          className="settings-disclosure-trigger"
-          type="button"
-          aria-expanded={open}
-          aria-controls="advanced-identity-settings"
-          onClick={onToggle}
-        >
-          <span>
-            <span className="settings-disclosure-kicker">Advanced</span>
-            <strong>Microsoft identity</strong>
-            <small>Tenant, client secret and OAuth scopes for Bot Framework and Graph.</small>
-          </span>
-          <span className="settings-disclosure-badges">
-            <StatusBadge label={secretReady ? "Secret configured" : "Secret missing"} tone={secretReady ? "success" : "warn"} />
-            {overriddenCount > 0 ? <StatusBadge label={`${overriddenCount} overrides`} tone="warn" /> : <StatusBadge label="ENV" />}
-            <ChevronDown aria-hidden="true" className="settings-disclosure-icon" focusable="false" />
-          </span>
-        </button>
-        {open ? (
-          <div className="settings-advanced-list" id="advanced-identity-settings">
-            <p className="settings-advanced-intro">
-              Microsoft Entra app registration used for Bot Framework and Graph. These values apply immediately after saving.
-            </p>
-            {settings.map((item) => (
-              <RuntimeSettingControl
-                key={item.key}
-                item={item}
-                csrfToken={csrfToken}
-                onChanged={onChanged}
-                notify={notify}
-                settingsByKey={settingsByKey}
-              />
-            ))}
-          </div>
-        ) : null}
-      </div>
-    </Card>
-  );
-}
-
 type SettingsNotify = ReturnType<typeof useAppContext>["notify"];
 
 type SettingsCardProps = {
@@ -4454,14 +7702,13 @@ function RuntimeSettingControl({
   const meta = SETTING_META[item.key];
   const display = meta?.display ?? (item.type === "bool" ? "switch" : item.type === "int" ? "number" : item.type === "secret" ? "secret" : "technical");
   const label = meta?.label ?? item.label;
-  const graphLookupEnabled = settingEnabled(settingsByKey, "graph_lookup_enabled");
-  const dependencyWarning = item.key === "graph_delivery_enabled" && draft === "true" && !graphLookupEnabled;
+  const autoSavePending = item.type !== "secret" && canSave;
 
-  async function save() {
+  async function save(nextValue = draft) {
     setBusy(true);
     setError("");
     try {
-      await api.updateSetting(csrfToken, item.key, draft);
+      await api.updateSetting(csrfToken, item.key, nextValue);
       notify({ tone: "success", title: `${item.label} saved` });
       await onChanged();
     } catch (err) {
@@ -4469,6 +7716,23 @@ function RuntimeSettingControl({
     } finally {
       setBusy(false);
     }
+  }
+
+  function commitChoice(nextValue: string) {
+    setDraft(nextValue);
+    if (nextValue !== item.effective_value || (nextValue === "" && item.is_overridden)) void save(nextValue);
+  }
+
+  function handleAutoSaveBlur(event: FocusEvent<HTMLInputElement>) {
+    if (!autoSavePending || busy) return;
+    const nextTarget = event.relatedTarget;
+    const control = event.currentTarget.closest(".settings-control");
+    if (nextTarget && control?.contains(nextTarget as Node)) return;
+    void save(draft);
+  }
+
+  function blurOnEnter(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Enter") event.currentTarget.blur();
   }
 
   async function copyValue() {
@@ -4524,7 +7788,7 @@ function RuntimeSettingControl({
               checked={draft === "true"}
               disabled={busy}
               aria-describedby={error ? errorId : undefined}
-              onChange={(event) => setDraft(event.target.checked ? "true" : "false")}
+              onChange={(event) => commitChoice(event.target.checked ? "true" : "false")}
             />
             <span aria-hidden="true" />
             <strong>{draft === "true" ? "Enabled" : "Disabled"}</strong>
@@ -4539,7 +7803,7 @@ function RuntimeSettingControl({
                 role="radio"
                 aria-checked={draft === value}
                 disabled={busy}
-                onClick={() => setDraft(value)}
+                onClick={() => commitChoice(value)}
               >
                 {value}
               </button>
@@ -4584,6 +7848,8 @@ function RuntimeSettingControl({
               disabled={busy}
               aria-describedby={error ? errorId : undefined}
               onChange={(event) => setDraft(event.target.value)}
+              onBlur={handleAutoSaveBlur}
+              onKeyDown={blurOnEnter}
             />
             {meta?.unit ? <span className="settings-unit">{meta.unit}</span> : null}
           </div>
@@ -4596,6 +7862,8 @@ function RuntimeSettingControl({
               disabled={busy}
               aria-describedby={error ? errorId : undefined}
               onChange={(event) => setDraft(event.target.value)}
+              onBlur={handleAutoSaveBlur}
+              onKeyDown={blurOnEnter}
             />
             <button
               className="icon-button icon-button--tiny"
@@ -4609,10 +7877,10 @@ function RuntimeSettingControl({
             </button>
           </div>
         )}
-        {dependencyWarning ? <p className="settings-warning">Graph delivery requires Graph lookup. Enable lookup first or save will fail.</p> : null}
         <div className="settings-control-footer">
           <div className="settings-source-row">
-            <SourceBadge overridden={item.is_overridden} />
+            <SourceBadge label={meta?.sourceLabel} overridden={item.is_overridden} source={item.source} />
+            {autoSavePending ? <StatusBadge label="Unsaved" tone="warn" /> : null}
             {item.is_overridden ? (
               <span>
                 Default <code>{item.env_default || "-"}</code>
@@ -4631,7 +7899,7 @@ function RuntimeSettingControl({
                 Reset
               </button>
             ) : null}
-            {canSave ? (
+            {canSave && item.type === "secret" ? (
               <button className="primary-button secondary-button--small" type="button" disabled={busy} onClick={() => void save()}>
                 Save
               </button>
@@ -4658,8 +7926,18 @@ function RuntimeSettingControl({
   );
 }
 
-function SourceBadge({ overridden }: { overridden: boolean }) {
-  return <span className={classNames("settings-source-badge", overridden && "settings-source-badge--override")}>{overridden ? "Override" : "ENV"}</span>;
+function SourceBadge({
+  label,
+  overridden,
+  source,
+}: {
+  label?: string;
+  overridden: boolean;
+  source: SettingItemOut["source"];
+}) {
+  const isOverride = source === "environment" && overridden;
+  const sourceLabel = label ?? (source === "application" ? "App" : "ENV");
+  return <span className={classNames("settings-source-badge", isOverride && "settings-source-badge--override")}>{isOverride ? "Override" : sourceLabel}</span>;
 }
 
 type StatusTone = "neutral" | "success" | "warn" | "danger";
@@ -4686,6 +7964,7 @@ type IntegrationStatusView = {
   id: string;
   title: string;
   description: string;
+  enabled: boolean;
   statusLabel: string;
   tone: StatusTone;
   summary: string;
@@ -4701,6 +7980,7 @@ type IntegrationStatusView = {
   diagnosticRows: StatusTechnicalRow[];
   technicalRows: StatusTechnicalRow[];
   primaryActionSlot?: ReactNode;
+  manageActionItems?: RowActionItem[];
 };
 
 function buildBotIntegrationView(readiness: AdminReadinessOut, onCopy: (value: string, label: string) => void): IntegrationStatusView {
@@ -4710,28 +7990,20 @@ function buildBotIntegrationView(readiness: AdminReadinessOut, onCopy: (value: s
   return {
     id: "bot-framework",
     title: "Bot Framework",
-    description: "Teams conversation delivery",
+    description: "Teams delivery",
+    enabled: readiness.bot.enabled,
     statusLabel: healthStateLabel(authStatus),
     tone: authStatusTone(authStatus),
     summary: readinessSummary(authStatus, readiness.bot.message, oauth),
-    lastCheckedLabel: oauth.token.checked ? "Checked this request" : "Not checked",
+    lastCheckedLabel: oauth.token.checked ? "Current request" : "Not checked",
     badges: [
       { label: readiness.bot.enabled ? "Enabled" : "Disabled", tone: readiness.bot.enabled ? "success" : "neutral" },
-      {
-        label: readiness.bot.default_service_url_configured ? "Service URL set" : "No service URL",
-        tone: readiness.bot.default_service_url_configured ? "success" : "warn",
-      },
     ],
     facts: oauthFacts(oauth),
     healthChecks: [
-      { label: "Feature policy", value: readiness.bot.enabled ? "Enabled" : "Disabled", tone: readiness.bot.enabled ? "success" : "neutral" },
+      { label: "Availability", value: readiness.bot.enabled ? "Enabled" : "Disabled", tone: readiness.bot.enabled ? "success" : "neutral" },
       { label: "App credentials", value: readiness.bot.credentials_configured ? "Configured" : "Missing", tone: readiness.bot.credentials_configured ? "success" : "warn" },
       { label: "Token request", value: tokenFact(oauth), tone: oauth.token.succeeded ? "success" : oauth.token.checked ? "danger" : "neutral" },
-      {
-        label: "Default service URL",
-        value: readiness.bot.default_service_url_configured ? "Configured" : "Missing",
-        tone: readiness.bot.default_service_url_configured ? "success" : "warn",
-      },
     ],
     capabilities: [
       { label: "Message path", value: "Bot conversation" },
@@ -4741,7 +8013,6 @@ function buildBotIntegrationView(readiness: AdminReadinessOut, onCopy: (value: s
       ["Tenant ID", credentialStatusLabel(readiness.bot.credential_fields.tenant_id)],
       ["Client ID", credentialStatusLabel(readiness.bot.credential_fields.client_id)],
       ["Client secret", credentialStatusLabel(readiness.bot.credential_fields.client_secret)],
-      ["Default service URL", credentialStatusLabel(readiness.bot.credential_fields.default_service_url)],
     ],
     permissionSummary: permissionSummary(oauth),
     permissionBadges: oauthPermissionBadges(oauth, permissionTone),
@@ -4755,14 +8026,23 @@ function buildGraphLookupIntegrationView(readiness: AdminReadinessOut, onCopy: (
   const oauth = readiness.graph_lookup.oauth;
   const authStatus = readiness.graph_lookup.auth_status;
   const permissionTone = oauth.token.succeeded && oauth.token.roles.length ? "success" : oauth.token.succeeded ? "neutral" : "warn";
+  const attentionItems = readinessAttentionItems(authStatus, readiness.graph_lookup.message, oauth);
+  if (readiness.graph_lookup.enabled && !readiness.graph_lookup.group_membership_lookup_ready) {
+    attentionItems.push({
+      title: "Graph group membership permission missing",
+      description: readiness.graph_lookup.group_membership_message,
+      tone: "warn",
+    });
+  }
   return {
     id: "graph-lookup",
     title: "Graph lookup",
-    description: "Target discovery and names",
+    description: "Target lookup",
+    enabled: readiness.graph_lookup.enabled,
     statusLabel: healthStateLabel(authStatus),
     tone: authStatusTone(authStatus),
     summary: readinessSummary(authStatus, readiness.graph_lookup.message, oauth),
-    lastCheckedLabel: oauth.token.checked ? "Checked this request" : "Not checked",
+    lastCheckedLabel: oauth.token.checked ? "Current request" : "Not checked",
     badges: [
       { label: readiness.graph_lookup.enabled ? "Enabled" : "Disabled", tone: readiness.graph_lookup.enabled ? "success" : "neutral" },
       {
@@ -4772,15 +8052,27 @@ function buildGraphLookupIntegrationView(readiness: AdminReadinessOut, onCopy: (
     ],
     facts: oauthFacts(oauth),
     healthChecks: [
-      { label: "Feature policy", value: readiness.graph_lookup.enabled ? "Enabled" : "Disabled", tone: readiness.graph_lookup.enabled ? "success" : "neutral" },
+      { label: "Availability", value: readiness.graph_lookup.enabled ? "Enabled" : "Disabled", tone: readiness.graph_lookup.enabled ? "success" : "neutral" },
       { label: "App credentials", value: readiness.graph_lookup.configured ? "Configured" : "Missing", tone: readiness.graph_lookup.configured ? "success" : "warn" },
       { label: "Token request", value: tokenFact(oauth), tone: oauth.token.succeeded ? "success" : oauth.token.checked ? "danger" : "neutral" },
       { label: "Directory metadata", value: oauth.app.available || oauth.tenant.available ? "Available" : "Limited", tone: oauth.app.available || oauth.tenant.available ? "success" : "warn" },
+      {
+        label: "Group membership",
+        value: readiness.graph_lookup.group_membership_lookup_ready ? "Ready" : "Permission warning",
+        tone: readiness.graph_lookup.group_membership_lookup_ready ? "success" : "warn",
+      },
     ],
     capabilities: [
       { label: "Lookup mode", value: readiness.graph_lookup.enabled ? "Enabled" : "Disabled", tone: readiness.graph_lookup.enabled ? "success" : "neutral" },
       { label: "Credentials", value: graphCredentialLabel(readiness.graph_lookup.credential_source), tone: readiness.graph_lookup.credential_source === "missing" ? "warn" : "neutral" },
       { label: "Scope", value: compactScope(oauth.scope || oauth.token.audience) },
+      {
+        label: "Group roles",
+        value: readiness.graph_lookup.group_membership_lookup_ready
+          ? "GroupMember.Read.All / Directory.Read.All"
+          : readiness.graph_lookup.group_membership_missing_roles.join(", ") || "Not verified",
+        tone: readiness.graph_lookup.group_membership_lookup_ready ? "success" : "warn",
+      },
     ],
     credentials: [
       ["Tenant ID", credentialStatusLabel(readiness.graph_lookup.credential_fields.tenant_id)],
@@ -4789,7 +8081,7 @@ function buildGraphLookupIntegrationView(readiness: AdminReadinessOut, onCopy: (
     ],
     permissionSummary: permissionSummary(oauth),
     permissionBadges: oauthPermissionBadges(oauth, permissionTone),
-    attentionItems: readinessAttentionItems(authStatus, readiness.graph_lookup.message, oauth),
+    attentionItems,
     diagnosticRows: oauthDiagnosticRows(oauth),
     technicalRows: oauthTechnicalRows(oauth, onCopy),
   };
@@ -4802,16 +8094,17 @@ function buildGraphDeliveryIntegrationView(
   onDisconnect: () => void,
   onCopy: (value: string, label: string) => void,
 ): IntegrationStatusView {
-  const serviceUser = readiness.service_user_display_name || readiness.service_user_principal_name || readiness.service_user_id || "-";
+  const serviceUser = graphDeliveryServiceUserLabel(readiness);
   const missingScopes = new Set(readiness.missing_scopes.map((scope) => scope.toLowerCase()));
   return {
     id: "graph-delivery",
     title: "Graph delivery",
-    description: "Delegated Teams sends",
+    description: "Delegated sends",
+    enabled: readiness.enabled,
     statusLabel: healthStateLabel(readiness.auth_status),
     tone: authStatusTone(readiness.auth_status),
     summary: graphDeliverySummary(readiness),
-    lastCheckedLabel: readiness.refresh_checked_at ? formatDateTime(readiness.refresh_checked_at) : readiness.token_checked ? "Checked this request" : "Not checked",
+    lastCheckedLabel: readiness.refresh_checked_at ? formatDateTime(readiness.refresh_checked_at) : readiness.token_checked ? "Current request" : "Not checked",
     badges: [
       { label: readiness.enabled ? "Enabled" : "Disabled", tone: readiness.enabled ? "success" : "neutral" },
       {
@@ -4834,7 +8127,7 @@ function buildGraphDeliveryIntegrationView(
       { label: "Last checked", value: readiness.refresh_checked_at ? formatDateTime(readiness.refresh_checked_at) : "Not checked" },
     ],
     healthChecks: [
-      { label: "Feature policy", value: readiness.enabled ? "Enabled" : "Disabled", tone: readiness.enabled ? "success" : "neutral" },
+      { label: "Availability", value: readiness.enabled ? "Enabled" : "Disabled", tone: readiness.enabled ? "success" : "neutral" },
       { label: "Service user", value: readiness.configured ? "Connected" : "Not connected", tone: readiness.configured ? "success" : readiness.enabled ? "warn" : "neutral" },
       { label: "Token refresh", value: delegatedTokenFact(readiness), tone: readiness.token_request_succeeded ? "success" : readiness.token_checked ? "danger" : "neutral" },
       {
@@ -4868,6 +8161,13 @@ function buildGraphDeliveryIntegrationView(
         onDisconnect={onDisconnect}
       />
     ),
+    manageActionItems: graphDeliveryManageItems({
+      busy,
+      configured: readiness.configured,
+      enabled: readiness.enabled,
+      onConnect,
+      onDisconnect,
+    }),
     diagnosticRows: [
       { label: "Credential source", value: readiness.credential_source || "missing" },
       { label: "Refresh checked", value: readiness.refresh_checked_at ? formatDateTime(readiness.refresh_checked_at) : "Not checked" },
@@ -4929,11 +8229,15 @@ function oauthTechnicalRows(oauth: OAuthDiagnosticsOut, onCopy: (value: string, 
 }
 
 function RelayHealthHero({
+  deliveryMethodCount,
+  enabledCount,
   integrations,
   overallLabel,
   overallTone,
   readiness,
 }: {
+  deliveryMethodCount?: number;
+  enabledCount?: number;
   integrations: IntegrationStatusView[];
   overallLabel: string;
   overallTone: StatusTone;
@@ -4941,7 +8245,10 @@ function RelayHealthHero({
 }) {
   const tokenCount = integrations.filter((integration) => integration.facts.some((fact) => fact.label === "Token" && fact.tone === "success")).length;
   const attentionItems = integrations.flatMap((integration) => integration.attentionItems);
-  const firstAction = attentionItems[0]?.title ?? (readiness.graph_delivery.configured ? "Monitor Messages" : "Connect service user");
+  const readyCount = integrations.filter((integration) => integration.tone === "success").length;
+  const nextStep = attentionItems[0]?.title ?? (readiness.graph_delivery.configured ? "Monitor message delivery" : "Connect service user");
+  const methodsEnabled = enabledCount ?? readyCount;
+  const methodsTotal = deliveryMethodCount ?? integrations.length;
 
   return (
     <section className={classNames("status-relay-hero", `status-relay-hero--${overallTone}`)} aria-label="Relay health">
@@ -4952,186 +8259,33 @@ function RelayHealthHero({
           <h2>{overallLabel === "Ready" ? "Relay is ready to deliver messages" : overallLabel === "Attention" ? "Relay needs operator attention" : "Relay delivery is degraded"}</h2>
           <p>
             {overallTone === "success"
-              ? "All configured relay paths report usable readiness."
-              : "One or more relay checks need review before production delivery can be trusted."}
+              ? "No immediate action is required. Keep an eye on message logs after new routes are added."
+              : "Start with the first item below, then refresh auth tokens to confirm the fix."}
           </p>
         </div>
       </div>
       <div className="status-relay-metrics">
-        <StatusOverviewMetric label="Overall" value={overallLabel} detail={overallTone === "success" ? "No active blockers." : "Review pipeline details."} tone={overallTone} />
+        <StatusOverviewMetric label="Status" value={overallLabel} detail={overallTone === "success" ? "No active blockers." : "Review the selected component."} tone={overallTone} />
         <StatusOverviewMetric
-          label="Tokens"
-          value={`${tokenCount}/${integrations.length} valid`}
-          detail="Bot, lookup and delegated checks."
-          tone={tokenCount === integrations.length ? "success" : tokenCount > 0 ? "warn" : "danger"}
-        />
-        <StatusOverviewMetric
-          label="Next"
-          value={attentionItems.length ? `${attentionItems.length} issue${attentionItems.length === 1 ? "" : "s"}` : "No blockers"}
-          detail={firstAction}
+          label="Action"
+          value={attentionItems.length ? `${attentionItems.length} item${attentionItems.length === 1 ? "" : "s"}` : "None"}
+          detail={nextStep}
           tone={attentionItems.length ? (attentionItems.some((item) => item.tone === "danger") ? "danger" : "warn") : "success"}
         />
+        <StatusOverviewMetric
+          label="Methods"
+          value={`${methodsEnabled}/${methodsTotal} enabled`}
+          detail={`${readyCount}/${integrations.length} components ready.`}
+          tone={methodsEnabled === methodsTotal ? "success" : methodsEnabled > 0 ? "warn" : "danger"}
+        />
+        <StatusOverviewMetric
+          label="Auth"
+          value={`${tokenCount}/${integrations.length} valid`}
+          detail="Token checks that currently pass."
+          tone={tokenCount === integrations.length ? "success" : tokenCount > 0 ? "warn" : "danger"}
+        />
       </div>
     </section>
-  );
-}
-
-function RelayPipelineLayout({
-  integrations,
-  onSelectComponent,
-  selectedComponentId,
-  selectedIntegration,
-}: {
-  integrations: IntegrationStatusView[];
-  onSelectComponent: (componentId: string) => void;
-  selectedComponentId: string;
-  selectedIntegration: IntegrationStatusView | null;
-}) {
-  return (
-    <section className="status-master-detail" aria-label="Delivery pipeline status">
-      <div className="status-master-pane">
-        <div className="status-pane-header">
-          <div>
-            <p className="integration-kicker">Delivery pipeline</p>
-            <h2>Components</h2>
-          </div>
-          <span>{integrations.length} checks</span>
-        </div>
-        <ComponentList integrations={integrations} onSelectComponent={onSelectComponent} selectedComponentId={selectedComponentId} />
-      </div>
-      <ComponentDetailPane integration={selectedIntegration} />
-    </section>
-  );
-}
-
-function ComponentList({
-  integrations,
-  onSelectComponent,
-  selectedComponentId,
-}: {
-  integrations: IntegrationStatusView[];
-  onSelectComponent: (componentId: string) => void;
-  selectedComponentId: string;
-}) {
-  return (
-    <div className="status-component-list" role="list">
-      {integrations.map((integration) => {
-        const topIssue = integration.attentionItems[0];
-        const tokenFact = integration.facts.find((fact) => fact.label === "Token");
-        return (
-          <button
-            aria-pressed={selectedComponentId === integration.id}
-            className={classNames("status-component-row", `status-component-row--${integration.tone}`, selectedComponentId === integration.id && "status-component-row--selected")}
-            key={integration.id}
-            onClick={() => onSelectComponent(integration.id)}
-            type="button"
-          >
-            <span className={classNames("status-dot", `status-dot--${integration.tone}`)} aria-hidden="true" />
-            <span className="status-component-row-main">
-              <span className="status-component-row-title">
-                <strong>{integration.title}</strong>
-                <small>{integration.statusLabel}</small>
-              </span>
-              <span>{topIssue ? topIssue.title : integration.summary}</span>
-            </span>
-            <span className="status-component-row-meta">
-              <span>{tokenFact ? tokenFact.value : "Token unknown"}</span>
-              <span>{integration.lastCheckedLabel}</span>
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function ComponentDetailPane({ integration }: { integration: IntegrationStatusView | null }) {
-  if (!integration) return null;
-  return (
-    <aside className="status-detail-pane" aria-label={`${integration.title} details`}>
-      <div className="status-detail-header">
-        <div>
-          <p className="integration-kicker">Selected component</p>
-          <h2>{integration.title}</h2>
-          <p>{integration.description}</p>
-        </div>
-        <div className={classNames("status-health-pill", `status-health-pill--${integration.tone}`)}>
-          <span aria-hidden="true" />
-          <strong>{integration.statusLabel}</strong>
-        </div>
-      </div>
-
-      {integration.attentionItems.length ? (
-        <div className={classNames("status-detail-alert", `status-detail-alert--${integration.attentionItems[0].tone}`)}>
-          <strong>{integration.attentionItems[0].title}</strong>
-          <span>{integration.attentionItems[0].description}</span>
-        </div>
-      ) : null}
-
-      <section className="status-detail-section">
-        <h3>Overview</h3>
-        <p>{integration.summary}</p>
-        <StatusFactList facts={integration.facts} />
-      </section>
-
-      <section className="status-detail-section">
-        <h3>Health checks</h3>
-        <StatusCheckList checks={integration.healthChecks} />
-      </section>
-
-      <section className="status-detail-section">
-        <h3>Capabilities</h3>
-        <StatusFactList facts={integration.capabilities} />
-      </section>
-
-      {integration.primaryActionSlot ? (
-        <section className="status-detail-section">
-          <h3>Actions</h3>
-          <div className="status-detail-actions">{integration.primaryActionSlot}</div>
-        </section>
-      ) : null}
-
-      <details className="status-detail-disclosure">
-        <summary>
-          <span>Diagnostics</span>
-          <small>Credentials, permissions and check output</small>
-        </summary>
-        <div className="status-detail-disclosure-body">
-          <div className="credential-check-grid">
-            {integration.credentials.map(([label, value]) => (
-              <CredentialCheck key={label} label={label} value={value} />
-            ))}
-          </div>
-          <p>{integration.permissionSummary}</p>
-          <div className="permission-badge-list">
-            {integration.permissionBadges.map((badge) => (
-              <span className={classNames("permission-badge", `permission-badge--${badge.tone}`)} key={badge.label}>
-                {badge.label}
-              </span>
-            ))}
-          </div>
-          <dl className="definition-list definition-list--compact advanced-definition-list">
-            {integration.diagnosticRows.map((row) => (
-              <FragmentPair key={row.label} label={row.label} value={row.value} />
-            ))}
-          </dl>
-        </div>
-      </details>
-
-      <details className="status-detail-disclosure">
-        <summary>
-          <span>Technical information</span>
-          <small>IDs, claims and copyable values</small>
-        </summary>
-        <div className="status-detail-disclosure-body">
-          <dl className="definition-list definition-list--compact advanced-definition-list">
-            {integration.technicalRows.map((row) => (
-              <FragmentPair key={row.label} label={row.label} value={row.value} />
-            ))}
-          </dl>
-        </div>
-      </details>
-    </aside>
   );
 }
 
@@ -5172,7 +8326,7 @@ function StatusOverviewMetric({
   tone = "neutral",
   value,
 }: {
-  detail: string;
+  detail?: string;
   label: string;
   tone?: StatusTone;
   value: string;
@@ -5181,7 +8335,7 @@ function StatusOverviewMetric({
     <div className={classNames("status-overview-item", tone !== "neutral" && `status-overview-item--${tone}`)}>
       <span>{label}</span>
       <strong>{value}</strong>
-      <p>{detail}</p>
+      {detail ? <p>{detail}</p> : null}
     </div>
   );
 }
@@ -5222,41 +8376,105 @@ function GraphDeliveryActionBar({
   );
 }
 
+function graphDeliveryManageItems({
+  busy,
+  configured,
+  enabled,
+  onConnect,
+  onDisconnect,
+}: {
+  busy: boolean;
+  configured: boolean;
+  enabled: boolean;
+  onConnect: () => void;
+  onDisconnect: () => void;
+}): RowActionItem[] {
+  if (configured) {
+    return [
+      {
+        label: "Reconnect service user",
+        icon: RefreshCw,
+        onClick: onConnect,
+        disabled: busy || !enabled,
+        spinning: busy,
+      },
+      {
+        label: "Disconnect service user",
+        icon: PowerOff,
+        onClick: onDisconnect,
+        disabled: busy,
+        separated: true,
+      },
+    ];
+  }
+
+  return [
+    {
+      label: "Connect service user",
+      icon: Power,
+      onClick: onConnect,
+      disabled: busy || !enabled,
+    },
+  ];
+}
+
 function RuntimeSnapshotCard({ onCopy, readiness }: { onCopy: (value: string, label: string) => void; readiness: AdminReadinessOut }) {
   return (
-    <Card className="status-context-card" title="Runtime snapshot" description="Effective values used by relay operations.">
-      <dl className="status-runtime-list">
-        <dt>Application</dt>
-        <dd>
-          {readiness.app_name} {readiness.app_version}
-        </dd>
-        <dt>Public URL</dt>
-        <dd>
-          <CopyInlineValue label="Public URL" onCopy={onCopy} value={readiness.runtime.app_public_base_url} />
-        </dd>
-        <dt>Frontend URL</dt>
-        <dd>
-          <CopyInlineValue label="Frontend URL" onCopy={onCopy} value={readiness.runtime.frontend_base_url} />
-        </dd>
-        <dt>CORS origins</dt>
-        <dd>{readiness.runtime.cors_origins.join(", ") || "-"}</dd>
-        <dt>Compose subnet</dt>
-        <dd>{readiness.runtime.compose_app_subnet || "-"}</dd>
-        <dt>Trusted upstream proxies</dt>
-        <dd>{readiness.runtime.trusted_proxy_ips || "-"}</dd>
-        <dt>Trusted proxy chain</dt>
-        <dd>{readiness.runtime.trusted_proxy_chain || "-"}</dd>
-        <dt>Payload limit</dt>
-        <dd>{formatBytes(readiness.runtime.webhook_max_payload_bytes)}</dd>
-        <dt>Log retention</dt>
-        <dd>{readiness.runtime.log_retention_days} days</dd>
-        <dt>Cleanup interval</dt>
-        <dd>{readiness.runtime.log_cleanup_interval_minutes} minutes</dd>
-        <dt>Secure session cookie</dt>
-        <dd>{yesNo(readiness.runtime.session_secure_cookie)}</dd>
-        <dt>Settings encryption</dt>
-        <dd>{settingsEncryptionLabel(readiness.runtime.settings_encryption_key_source, readiness.runtime.settings_encryption_ready)}</dd>
-      </dl>
+    <Card className="status-context-card">
+      <details className="status-runtime-disclosure">
+        <summary>
+          <span>
+            <span className="integration-kicker">Developer details</span>
+            <strong>Runtime and environment</strong>
+            <small>URLs, proxy settings, limits and retention values.</small>
+          </span>
+          <span className="status-runtime-summary-badges">
+            <StatusBadge
+              label={`Retention ${readiness.runtime.log_retention_days}d`}
+              tone="neutral"
+            />
+            <StatusBadge
+              label={settingsEncryptionLabel(readiness.runtime.settings_encryption_key_source, readiness.runtime.settings_encryption_ready)}
+              tone={readiness.runtime.settings_encryption_ready ? "success" : "warn"}
+            />
+            <ChevronDown aria-hidden="true" className="settings-disclosure-icon" focusable="false" />
+          </span>
+        </summary>
+        <dl className="status-runtime-list">
+          <dt>Application</dt>
+          <dd>
+            {readiness.app_name} {readiness.app_version}
+          </dd>
+          <dt>Public URL</dt>
+          <dd>
+            <CopyInlineValue label="Public URL" onCopy={onCopy} value={readiness.runtime.app_public_base_url} />
+          </dd>
+          <dt>Frontend URL</dt>
+          <dd>
+            <CopyInlineValue label="Frontend URL" onCopy={onCopy} value={readiness.runtime.frontend_base_url} />
+          </dd>
+          <dt>CORS origins</dt>
+          <dd>{readiness.runtime.cors_origins.join(", ") || "-"}</dd>
+          <dt>Compose subnet</dt>
+          <dd>{readiness.runtime.compose_app_subnet || "-"}</dd>
+          <dt>Trusted upstream proxies</dt>
+          <dd>{readiness.runtime.trusted_proxy_ips || "-"}</dd>
+          <dt>Trusted proxy chain</dt>
+          <dd>{readiness.runtime.trusted_proxy_chain || "-"}</dd>
+          <dt>Payload limit</dt>
+          <dd>{formatBytes(readiness.runtime.webhook_max_payload_bytes)}</dd>
+          <dt>URL reveal lifetime</dt>
+          <dd>{readiness.runtime.webhook_url_reveal_ttl_hours} hours</dd>
+          <dt>Log retention</dt>
+          <dd>{readiness.runtime.log_retention_days} days</dd>
+          <dt>Cleanup interval</dt>
+          <dd>{readiness.runtime.log_cleanup_interval_minutes} minutes</dd>
+          <dt>Secure session cookie</dt>
+          <dd>{yesNo(readiness.runtime.session_secure_cookie)}</dd>
+          <dt>Settings encryption</dt>
+          <dd>{settingsEncryptionLabel(readiness.runtime.settings_encryption_key_source, readiness.runtime.settings_encryption_ready)}</dd>
+        </dl>
+      </details>
     </Card>
   );
 }
@@ -5307,7 +8525,7 @@ function tokenFact(oauth: OAuthDiagnosticsOut): string {
   if (!oauth.token.checked) return "Not checked";
   if (!oauth.token.succeeded) return "Failed";
   if (!oauth.token.expires_at) return "Valid";
-  return `Valid ${formatRelativeTime(oauth.token.expires_at)}`;
+  return tokenValidityLabel(oauth.token.expires_at);
 }
 
 function tokenExpirationShortLabel(oauth: OAuthDiagnosticsOut): string {
@@ -5315,6 +8533,13 @@ function tokenExpirationShortLabel(oauth: OAuthDiagnosticsOut): string {
   if (!oauth.token.succeeded) return "Unavailable";
   if (!oauth.token.expires_at) return "Not provided";
   return formatRelativeTime(oauth.token.expires_at);
+}
+
+function tokenValidityLabel(expiresAt: string): string {
+  const relative = formatRelativeTime(expiresAt);
+  if (relative.startsWith("in ")) return `Valid for ${relative.slice(3)}`;
+  if (relative === "now") return "Expires now";
+  return `Expired ${relative}`;
 }
 
 function readinessSummary(authStatus: string, message: string, oauth: OAuthDiagnosticsOut): string {
@@ -5340,11 +8565,15 @@ function graphDeliverySummary(readiness: AdminReadinessOut["graph_delivery"]): s
   return readiness.message || "Graph delivery readiness could not be fully determined.";
 }
 
+function graphDeliveryServiceUserLabel(user: Pick<AdminReadinessOut["graph_delivery"], "service_user_display_name" | "service_user_principal_name" | "service_user_id">): string {
+  return user.service_user_display_name || user.service_user_principal_name || user.service_user_id || "-";
+}
+
 function delegatedTokenFact(readiness: AdminReadinessOut["graph_delivery"]): string {
   if (!readiness.token_checked) return "Not checked";
   if (!readiness.token_request_succeeded) return "Failed";
   if (!readiness.access_token_expires_at) return "Valid";
-  return `Valid ${formatRelativeTime(readiness.access_token_expires_at)}`;
+  return tokenValidityLabel(readiness.access_token_expires_at);
 }
 
 function graphDeliveryScopeSummary(readiness: AdminReadinessOut["graph_delivery"]): string {
@@ -5517,6 +8746,7 @@ function MessageLogsPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const [error, setError] = useState("");
+  const refreshSequence = useRef(0);
   const pageSize = 25;
   const deliveryEvents = deliveryPage?.items ?? [];
   const total = deliveryPage?.total ?? 0;
@@ -5533,6 +8763,8 @@ function MessageLogsPage() {
   }, [searchText]);
 
   const refresh = useCallback(async () => {
+    const requestId = refreshSequence.current + 1;
+    refreshSequence.current = requestId;
     setLoading(true);
     setError("");
     try {
@@ -5546,15 +8778,17 @@ function MessageLogsPage() {
         }),
         api.webhookRoutes(),
       ]);
+      if (refreshSequence.current !== requestId) return;
       setDeliveryPage(nextDeliveryPage);
       setRoutes(nextRoutes);
       setSelectedEventId((current) =>
         nextDeliveryPage.items.some((event) => event.id === current) ? current : "",
       );
     } catch (err) {
+      if (refreshSequence.current !== requestId) return;
       setError(isApiError(err) ? err.message : "Logs could not be loaded.");
     } finally {
-      setLoading(false);
+      if (refreshSequence.current === requestId) setLoading(false);
     }
   }, [page, routeFilter, searchQuery, statusFilter]);
 

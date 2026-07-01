@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text as sql_text
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
@@ -41,6 +41,137 @@ class User(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
     __table_args__ = (UniqueConstraint("organization_id", "email", name="uq_users_org_email"),)
+
+
+class BotAccessRole(Base):
+    __tablename__ = "bot_access_roles"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(String(500), default="")
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    system_key: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    can_view_routes: Mapped[bool] = mapped_column(Boolean, default=True)
+    can_reveal_webhook_urls: Mapped[bool] = mapped_column(Boolean, default=True)
+    can_manage_route_status: Mapped[bool] = mapped_column(Boolean, default=False)
+    can_delete_routes: Mapped[bool] = mapped_column(Boolean, default=False)
+    can_manage_allowlist: Mapped[bool] = mapped_column(Boolean, default=False)
+    can_create_private_chat_routes: Mapped[bool] = mapped_column(Boolean, default=False)
+    can_create_channel_routes: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    updated_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+    __table_args__ = (
+        UniqueConstraint("organization_id", "name", name="uq_bot_access_roles_org_name"),
+        UniqueConstraint("organization_id", "system_key", name="uq_bot_access_roles_org_system_key"),
+    )
+
+
+class BotAuthorizedUser(Base):
+    __tablename__ = "bot_authorized_users"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    aad_object_id: Mapped[str] = mapped_column(Text, index=True)
+    display_name: Mapped[str] = mapped_column(String(255))
+    user_principal_name: Mapped[str] = mapped_column(String(255), default="")
+    role_id: Mapped[str | None] = mapped_column(ForeignKey("bot_access_roles.id"), nullable=True, index=True)
+    role: Mapped[str] = mapped_column(String(40), default="viewer")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    can_view_routes: Mapped[bool] = mapped_column(Boolean, default=True)
+    can_reveal_webhook_urls: Mapped[bool] = mapped_column(Boolean, default=True)
+    can_manage_route_status: Mapped[bool] = mapped_column(Boolean, default=False)
+    can_delete_routes: Mapped[bool] = mapped_column(Boolean, default=False)
+    can_manage_allowlist: Mapped[bool] = mapped_column(Boolean, default=False)
+    can_create_private_chat_routes: Mapped[bool] = mapped_column(Boolean, default=False)
+    can_create_channel_routes: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    updated_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+    access_role: Mapped[BotAccessRole | None] = relationship()
+
+    __table_args__ = (
+        UniqueConstraint("organization_id", "aad_object_id", name="uq_bot_authorized_users_org_aad_object_id"),
+    )
+
+
+class BotAuthorizedGroup(Base):
+    __tablename__ = "bot_authorized_groups"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    group_object_id: Mapped[str] = mapped_column(Text, index=True)
+    display_name: Mapped[str] = mapped_column(String(255))
+    mail: Mapped[str] = mapped_column(String(255), default="")
+    security_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    group_types_json: Mapped[str] = mapped_column(Text, default="[]")
+    role_id: Mapped[str | None] = mapped_column(ForeignKey("bot_access_roles.id"), nullable=True, index=True)
+    role: Mapped[str] = mapped_column(String(40), default="viewer")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    can_view_routes: Mapped[bool] = mapped_column(Boolean, default=True)
+    can_reveal_webhook_urls: Mapped[bool] = mapped_column(Boolean, default=True)
+    can_manage_route_status: Mapped[bool] = mapped_column(Boolean, default=False)
+    can_delete_routes: Mapped[bool] = mapped_column(Boolean, default=False)
+    can_manage_allowlist: Mapped[bool] = mapped_column(Boolean, default=False)
+    can_create_private_chat_routes: Mapped[bool] = mapped_column(Boolean, default=False)
+    can_create_channel_routes: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    updated_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    last_matched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+    access_role: Mapped[BotAccessRole | None] = relationship()
+
+    __table_args__ = (
+        UniqueConstraint("organization_id", "group_object_id", name="uq_bot_authorized_groups_org_group_object_id"),
+    )
+
+    @property
+    def group_types(self) -> list[str]:
+        import json
+
+        try:
+            parsed = json.loads(self.group_types_json or "[]")
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(parsed, list):
+            return []
+        return [str(item).strip() for item in parsed if str(item).strip()]
+
+
+class BotUserGroupMembershipCache(Base):
+    __tablename__ = "bot_user_group_membership_cache"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    aad_object_id: Mapped[str] = mapped_column(Text, index=True)
+    group_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+    __table_args__ = (
+        UniqueConstraint("organization_id", "aad_object_id", name="uq_bot_user_group_membership_cache_org_aad_object_id"),
+    )
+
+    @property
+    def group_ids(self) -> list[str]:
+        import json
+
+        try:
+            parsed = json.loads(self.group_ids_json or "[]")
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(parsed, list):
+            return []
+        return [str(item).strip().lower() for item in parsed if str(item).strip()]
 
 
 class Session(Base):
@@ -80,6 +211,11 @@ class WebhookRoute(Base):
     graph_user_id: Mapped[str] = mapped_column(Text, default="")
     graph_user_display_name: Mapped[str] = mapped_column(String(255), default="")
     graph_user_principal_name: Mapped[str] = mapped_column(String(255), default="")
+    member_summary: Mapped[str] = mapped_column(String(500), default="")
+    member_count: Mapped[int] = mapped_column(Integer, default=0)
+    member_list_json: Mapped[str] = mapped_column(Text, default="[]")
+    members_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    members_lookup_error: Mapped[str] = mapped_column(Text, default="")
     bot_target_source: Mapped[str] = mapped_column(String(40), default="")
     bot_registered_by_id: Mapped[str] = mapped_column(Text, default="")
     bot_registered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -92,6 +228,16 @@ class WebhookRoute(Base):
         UniqueConstraint("organization_id", "name", "delivery_backend", name="uq_webhook_routes_org_name_backend"),
     )
 
+    @property
+    def members(self) -> list[dict]:
+        import json
+
+        try:
+            parsed = json.loads(self.member_list_json or "[]")
+        except json.JSONDecodeError:
+            return []
+        return parsed if isinstance(parsed, list) else []
+
 
 class WebhookDeliveryEvent(Base):
     __tablename__ = "webhook_delivery_events"
@@ -100,11 +246,34 @@ class WebhookDeliveryEvent(Base):
     organization_id: Mapped[str | None] = mapped_column(ForeignKey("organizations.id"), nullable=True, index=True)
     route_id: Mapped[str | None] = mapped_column(ForeignKey("webhook_routes.id"), nullable=True, index=True)
     route_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(32), index=True)
     request_metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     normalized_message_json: Mapped[str] = mapped_column(Text, default="{}")
     delivery_result_json: Mapped[str] = mapped_column(Text, default="{}")
     error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
+
+    __table_args__ = (
+        Index(
+            "ix_webhook_delivery_events_route_id_idempotency_key_unique",
+            "route_id",
+            "idempotency_key",
+            unique=True,
+            sqlite_where=sql_text("idempotency_key IS NOT NULL"),
+            postgresql_where=sql_text("idempotency_key IS NOT NULL"),
+        ),
+    )
+
+
+class WebhookUrlRevealToken(Base):
+    __tablename__ = "webhook_url_reveal_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    route_id: Mapped[str] = mapped_column(ForeignKey("webhook_routes.id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
 
 
@@ -151,6 +320,9 @@ class BotActivityEvent(Base):
     auth_service_url: Mapped[str] = mapped_column(Text, default="")
     auth_service_url_matched: Mapped[bool] = mapped_column(Boolean, default=False)
     auth_validated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    bot_authorization_status: Mapped[str] = mapped_column(String(40), default="not_applicable", index=True)
+    bot_authorized_user_id: Mapped[str] = mapped_column(Text, default="")
+    bot_authorization_reason: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
 
 
@@ -171,6 +343,11 @@ class BotConversationReference(Base):
     user_id: Mapped[str] = mapped_column(Text, default="", index=True)
     user_name: Mapped[str] = mapped_column(String(200), default="")
     graph_user_id: Mapped[str] = mapped_column(Text, default="", index=True)
+    member_summary: Mapped[str] = mapped_column(String(500), default="")
+    member_count: Mapped[int] = mapped_column(Integer, default=0)
+    member_list_json: Mapped[str] = mapped_column(Text, default="[]")
+    members_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    members_lookup_error: Mapped[str] = mapped_column(Text, default="")
     raw_activity_type: Mapped[str] = mapped_column(String(80), default="")
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
@@ -179,6 +356,16 @@ class BotConversationReference(Base):
     __table_args__ = (
         UniqueConstraint("conversation_id", name="uq_bot_conversation_references_conversation_id"),
     )
+
+    @property
+    def members(self) -> list[dict]:
+        import json
+
+        try:
+            parsed = json.loads(self.member_list_json or "[]")
+        except json.JSONDecodeError:
+            return []
+        return parsed if isinstance(parsed, list) else []
 
 
 class GraphDelegatedCredential(Base):
@@ -201,6 +388,28 @@ class GraphDelegatedCredential(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
     __table_args__ = (UniqueConstraint("organization_id", name="uq_graph_delegated_credentials_org"),)
+
+
+class GraphDelegatedOAuthPendingCredential(Base):
+    __tablename__ = "graph_delegated_oauth_pending_credentials"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    created_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    tenant_id: Mapped[str] = mapped_column(Text, default="")
+    client_id: Mapped[str] = mapped_column(Text, default="")
+    scopes: Mapped[str] = mapped_column(Text, default="")
+    encrypted_refresh_token: Mapped[str] = mapped_column(Text, default="")
+    service_user_id: Mapped[str] = mapped_column(Text, default="")
+    service_user_display_name: Mapped[str] = mapped_column(String(255), default="")
+    service_user_principal_name: Mapped[str] = mapped_column(String(255), default="")
+    access_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    refresh_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+    __table_args__ = (UniqueConstraint("organization_id", name="uq_graph_delegated_oauth_pending_org"),)
 
 
 class AuditEvent(Base):

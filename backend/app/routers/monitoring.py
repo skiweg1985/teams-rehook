@@ -34,6 +34,8 @@ WINDOWS: dict[str, timedelta] = {
     "1h": timedelta(hours=1),
 }
 PROBLEM_ROUTE_LIMIT = 25
+PRTG_SERVICE_STATE_LOOKUP = "prtg.standardlookups.wmi.diskhealth.health"
+PRTG_BOOLEAN_TRUE_OK_LOOKUP = "prtg.standardlookups.boolean.statetrueok"
 
 
 def require_monitoring_api_key(authorization: str | None = Header(default=None, alias="Authorization")) -> None:
@@ -50,6 +52,16 @@ def require_monitoring_api_key(authorization: str | None = Header(default=None, 
 
 @router.get("/status", response_model=MonitoringStatusOut, dependencies=[Depends(require_monitoring_api_key)])
 def monitoring_status(db: Session = Depends(get_db)):
+    return _build_monitoring_status(db)
+
+
+@router.get("/prtg", dependencies=[Depends(require_monitoring_api_key)])
+def monitoring_prtg(db: Session = Depends(get_db)):
+    status_out = _build_monitoring_status(db)
+    return {"prtg": {"result": _prtg_channels(status_out), "text": _prtg_text(status_out)}}
+
+
+def _build_monitoring_status(db: Session) -> MonitoringStatusOut:
     settings = get_effective_settings()
     generated_at = utcnow()
     delivery_mode = settings.bot_delivery_mode_normalized
@@ -142,6 +154,167 @@ def monitoring_status(db: Session = Depends(get_db)):
         rolling_windows=rolling_windows,
         problem_routes=problem_routes,
     )
+
+
+def _prtg_channels(status_out: MonitoringStatusOut) -> list[dict[str, object]]:
+    channels: list[dict[str, object]] = [
+        {
+            "channel": "Service State",
+            "value": _prtg_service_state(status_out.status),
+            "unit": "Custom",
+            "customunit": "state",
+            "valuelookup": PRTG_SERVICE_STATE_LOOKUP,
+        },
+        _prtg_boolean_channel("Database OK", status_out.database.ok),
+        _prtg_boolean_channel("Bot Ready", status_out.readiness.bot.ready),
+        _prtg_boolean_channel("Graph Lookup Ready", status_out.readiness.graph_lookup.ready),
+        _prtg_boolean_channel("Graph Delivery Ready", status_out.readiness.graph_delivery.ready),
+        _prtg_count_channel("Routes Total", status_out.routes.total),
+        _prtg_count_channel("Routes Active", status_out.routes.active),
+        _prtg_count_channel("Routes Inactive", status_out.routes.inactive),
+        _prtg_count_channel("Routes Last Failed", status_out.routes.with_last_failure),
+        _prtg_count_channel("Routes Last Rejected", status_out.routes.with_last_rejection),
+        _prtg_count_channel("Routes Untested Active", status_out.routes.untested_active),
+    ]
+    for label in WINDOWS:
+        window = status_out.rolling_windows.get(label, MonitoringRollingWindowOut())
+        channels.extend(
+            [
+                _prtg_count_channel(f"Deliveries {label} Success", window.delivery_success_count),
+                _prtg_count_channel(f"Deliveries {label} Failed", window.delivery_failure_count),
+                _prtg_count_channel(f"Deliveries {label} Rejected", window.delivery_rejection_count),
+                _prtg_percent_channel(f"Success Rate {label}", window.success_rate),
+            ]
+        )
+    return channels
+
+
+def _prtg_count_channel(channel: str, value: int) -> dict[str, object]:
+    return {"channel": channel, "value": value, "unit": "Count"}
+
+
+def _prtg_boolean_channel(channel: str, value: bool) -> dict[str, object]:
+    return {
+        "channel": channel,
+        "value": int(value),
+        "unit": "Custom",
+        "customunit": "state",
+        "valuelookup": PRTG_BOOLEAN_TRUE_OK_LOOKUP,
+    }
+
+
+def _prtg_percent_channel(channel: str, success_rate: float | None) -> dict[str, object]:
+    value = 100.0 if success_rate is None else round(success_rate * 100, 1)
+    return {"channel": channel, "value": value, "unit": "Percent", "float": 1, "decimalmode": "All"}
+
+
+def _prtg_service_state(status_value: str) -> int:
+    return {"ok": 0, "warn": 1, "crit": 2}.get(status_value, 2)
+
+
+def _prtg_text(status_out: MonitoringStatusOut) -> str:
+    status_label = {"ok": "OK", "warn": "warning", "crit": "critical"}.get(status_out.status, status_out.status)
+    return f"{status_out.service} {status_label}: {_prtg_status_message(status_out)}"
+
+
+def _prtg_status_message(status_out: MonitoringStatusOut) -> str:
+    if status_out.status == "ok":
+        return "All monitored components are ready and recent deliveries look healthy."
+
+    details = _prtg_status_details(status_out)
+    if details:
+        return "; ".join(details) + "."
+    return "Check the sensor channels for details."
+
+
+def _prtg_status_details(status_out: MonitoringStatusOut) -> list[str]:
+    routes = status_out.routes
+    short_window = status_out.rolling_windows.get("5m", MonitoringRollingWindowOut())
+    critical_details: list[str] = []
+    if not status_out.database.ok:
+        critical_details.append("the database check failed")
+    if status_out.readiness.bot.enabled and not status_out.readiness.bot.ready:
+        critical_details.append(f"bot delivery is not ready ({status_out.readiness.bot.auth_status})")
+    if status_out.status == "crit" and critical_details:
+        return critical_details
+
+    details = critical_details
+    if status_out.readiness.graph_lookup.enabled and not status_out.readiness.graph_lookup.ready:
+        details.append(f"Graph lookup is not ready ({status_out.readiness.graph_lookup.auth_status})")
+    if status_out.readiness.graph_delivery.enabled and not status_out.readiness.graph_delivery.ready:
+        details.append(f"Graph delivery is not ready ({status_out.readiness.graph_delivery.auth_status})")
+    details.extend(_prtg_route_problem_details(routes, status_out.problem_routes))
+    if short_window.delivery_failure_count or short_window.delivery_rejection_count:
+        details.append("recent webhook deliveries failed or were rejected in the last 5 minutes")
+    return details
+
+
+def _prtg_route_problem_details(
+    routes: MonitoringRoutesOut, problem_routes: list[MonitoringProblemRouteOut]
+) -> list[str]:
+    details: list[str] = []
+    inactive_names = _problem_route_names(
+        route for route in problem_routes if not route.is_active
+    )
+    failed_names = _problem_route_names(
+        route for route in problem_routes if route.last_delivery_status == "failed"
+    )
+    rejected_names = _problem_route_names(
+        route for route in problem_routes if route.last_delivery_status == "rejected"
+    )
+    untested_names = _problem_route_names(
+        route for route in problem_routes if route.is_active and route.last_delivery_status is None
+    )
+    if routes.inactive:
+        details.append(_route_detail("route is inactive", "routes are inactive", routes.inactive, inactive_names))
+    if routes.with_last_failure:
+        details.append(
+            _route_detail(
+                "route last failed",
+                "routes last failed",
+                routes.with_last_failure,
+                failed_names,
+            )
+        )
+    if routes.with_last_rejection:
+        details.append(
+            _route_detail(
+                "route was last rejected",
+                "routes were last rejected",
+                routes.with_last_rejection,
+                rejected_names,
+            )
+        )
+    if routes.untested_active:
+        details.append(
+            _route_detail(
+                "active route has not been tested yet",
+                "active routes have not been tested yet",
+                routes.untested_active,
+                untested_names,
+            )
+        )
+    return details
+
+
+def _problem_route_names(routes) -> list[str]:
+    return [route.name for route in routes]
+
+
+def _route_detail(singular: str, plural: str, count: int, names: list[str]) -> str:
+    label = singular if count == 1 else plural
+    if not names:
+        return f"{count} {label}"
+    return f"{count} {label}: {_format_problem_route_names(names, count)}"
+
+
+def _format_problem_route_names(names: list[str], count: int) -> str:
+    visible_names = names[:3]
+    remaining = max(count - len(visible_names), 0)
+    formatted = ", ".join(visible_names)
+    if remaining:
+        return f"{formatted}, and {remaining} more"
+    return formatted
 
 
 def _route_counts(db: Session, *, delivery_backends: set[str] | None = None) -> MonitoringRoutesOut:

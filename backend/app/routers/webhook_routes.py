@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import ipaddress
+import re
+from datetime import timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -12,7 +14,7 @@ from app.core.proxy_trust import combined_trusted_proxy_ips
 from app.core.settings_overrides import get_effective_settings
 from app.database import get_db
 from app.deps import record_audit, require_admin, require_csrf
-from app.models import User, WebhookDeliveryEvent, WebhookRoute
+from app.models import User, WebhookDeliveryEvent, WebhookRoute, WebhookUrlRevealToken
 from app.schemas import (
     WebhookDeliveryOut,
     WebhookDeliveryEventOut,
@@ -20,16 +22,25 @@ from app.schemas import (
     WebhookDeliveryEventPageOut,
     WebhookDeliveryEventSummaryOut,
     LogCleanupOut,
-    WebhookRouteDefaultsOut,
     WebhookRouteCreate,
     WebhookRouteCreatedOut,
     WebhookRouteNameRefreshOut,
     WebhookRouteOut,
     WebhookRouteTestRequest,
     WebhookRouteUpdate,
+    WebhookUrlRevealOut,
 )
-from app.security import dumps_json, issue_plain_secret, loads_json, lookup_secret_hash, utcnow
-from app.services.graph_delegated_lookup import GraphDelegatedLookupError, create_or_get_one_on_one_chat
+from app.security import dumps_json, ensure_utc, issue_plain_secret, loads_json, lookup_secret_hash, utcnow
+from app.services.bot_conversation_members import (
+    BotConversationMembersError,
+    fetch_bot_conversation_members,
+    serialize_members,
+)
+from app.services.graph_delegated_lookup import (
+    GraphDelegatedLookupError,
+    create_or_get_one_on_one_chat,
+    fetch_service_user_chat_members,
+)
 from app.services.graph_name_resolution import refresh_graph_names, resolve_route_graph_names, try_resolve_route_graph_names
 from app.services.graph_targets import GraphConfigError, GraphRequestError
 from app.services.log_retention import cleanup_log_events
@@ -48,7 +59,7 @@ from app.services.webhook_payloads import NormalizedMessage, WebhookPayloadError
 
 router = APIRouter(tags=["webhook-routes"])
 
-DeliveryStatusFilter = Literal["delivered", "failed", "rejected"]
+DeliveryStatusFilter = Literal["delivered", "failed", "rejected", "pending"]
 DELIVERY_BACKEND_BOT = "bot_framework"
 DELIVERY_BACKEND_GRAPH = "graph"
 ABUSE_REASON_BACKEND_DISABLED = "delivery_backend_disabled"
@@ -57,6 +68,14 @@ ABUSE_REASON_CLIENT_IP_NOT_ALLOWED = "client_ip_not_allowed"
 ABUSE_REASON_PAYLOAD_TOO_LARGE = "payload_too_large"
 ABUSE_REASON_ROUTE_DISABLED = "route_disabled"
 ABUSE_REASON_UNKNOWN_ROUTE = "unknown_route"
+IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9._:-]{8,120}$")
+IDEMPOTENCY_PENDING_STALE_AFTER = timedelta(minutes=15)
+
+
+class PayloadTooLargeError(ValueError):
+    def __init__(self, partial_body: bytes = b""):
+        super().__init__("Webhook payload is too large")
+        self.partial_body = partial_body
 
 
 @router.get("/webhook-routes", response_model=list[WebhookRouteOut])
@@ -67,13 +86,6 @@ def list_webhook_routes(admin: User = Depends(require_admin), db: Session = Depe
         .order_by(WebhookRoute.updated_at.desc())
     ).all()
     return [_route_out(route) for route in routes]
-
-
-@router.get("/webhook-routes/defaults", response_model=WebhookRouteDefaultsOut)
-def webhook_route_defaults(admin: User = Depends(require_admin)):
-    _ = admin
-    settings = get_effective_settings()
-    return WebhookRouteDefaultsOut(bot_default_service_url=settings.bot_default_service_url.strip())
 
 
 @router.post(
@@ -147,6 +159,7 @@ def update_webhook_route(
 ):
     settings = get_effective_settings()
     route = _get_org_route(db, admin.organization_id, route_id)
+    previous_member_target = _route_member_target_key(route)
     _ensure_delivery_backend_feature_enabled(payload.delivery_backend or _route_delivery_backend(route), settings)
     if payload.name is not None:
         route.name = payload.name.strip()
@@ -189,6 +202,8 @@ def update_webhook_route(
     _ensure_route_feature_enabled(route, settings)
     _validate_client_ip_access(route)
     _materialize_graph_user_target(db, admin.organization_id, route)
+    if _route_member_target_key(route) != previous_member_target:
+        _clear_route_members(route)
     if settings.graph_lookup_enabled:
         try_resolve_route_graph_names(route)
     _validate_target(route)
@@ -271,6 +286,32 @@ def refresh_single_webhook_route_graph_names(
     return WebhookRouteNameRefreshOut(routes_checked=1, routes_updated=1 if updated else 0)
 
 
+@router.post("/webhook-routes/{route_id}/refresh-members", response_model=WebhookRouteOut, dependencies=[Depends(require_csrf)])
+def refresh_webhook_route_members(
+    route_id: str,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    route = _get_org_route(db, admin.organization_id, route_id)
+    _refresh_route_members(db, route)
+    record_audit(
+        db,
+        action="webhook_route.members_refreshed",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata={
+            "webhook_route_id": route.id,
+            "name": route.name,
+            "member_count": route.member_count,
+            "lookup_error": bool(route.members_lookup_error),
+        },
+    )
+    db.commit()
+    db.refresh(route)
+    return _route_out(route)
+
+
 @router.delete("/webhook-routes/{route_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_csrf)])
 def delete_webhook_route(
     route_id: str,
@@ -279,6 +320,7 @@ def delete_webhook_route(
 ):
     route = _get_org_route(db, admin.organization_id, route_id)
     db.execute(update(WebhookDeliveryEvent).where(WebhookDeliveryEvent.route_id == route.id).values(route_id=None))
+    db.execute(delete(WebhookUrlRevealToken).where(WebhookUrlRevealToken.route_id == route.id))
     record_audit(
         db,
         action="webhook_route.deleted",
@@ -327,7 +369,7 @@ def list_webhook_route_deliveries(
     query = select(WebhookDeliveryEvent).where(WebhookDeliveryEvent.route_id == route.id)
     if status_filter:
         query = query.where(WebhookDeliveryEvent.status == status_filter)
-    events = db.scalars(query.order_by(WebhookDeliveryEvent.created_at.desc()).limit(limit)).all()
+    events = db.scalars(query.order_by(WebhookDeliveryEvent.created_at.desc(), WebhookDeliveryEvent.id.desc()).limit(limit)).all()
     return [_delivery_event_out(event) for event in events]
 
 
@@ -379,7 +421,7 @@ def list_webhook_delivery_events(
         select(WebhookDeliveryEvent, WebhookRoute)
         .outerjoin(WebhookRoute, WebhookDeliveryEvent.route_id == WebhookRoute.id)
         .where(*filters)
-        .order_by(WebhookDeliveryEvent.created_at.desc())
+        .order_by(WebhookDeliveryEvent.created_at.desc(), WebhookDeliveryEvent.id.desc())
         .offset(offset)
         .limit(page_size)
     ).all()
@@ -427,6 +469,7 @@ def cleanup_log_event_retention(
         deleted_webhook_delivery_events=cleanup_result.deleted_webhook_delivery_events,
         deleted_audit_events=cleanup_result.deleted_audit_events,
         deleted_bot_activity_events=cleanup_result.deleted_bot_activity_events,
+        deleted_event_log_entries=cleanup_result.deleted_event_log_entries,
         retention_days=cleanup_result.retention_days,
         cutoff=cleanup_result.cutoff,
     )
@@ -468,6 +511,31 @@ def test_webhook_route(
     )
 
 
+@router.get("/webhook-url-reveals/{token}", response_model=WebhookUrlRevealOut)
+def reveal_webhook_url(token: str, db: Session = Depends(get_db)):
+    token_hash = lookup_secret_hash(token)
+    reveal = db.scalar(select(WebhookUrlRevealToken).where(WebhookUrlRevealToken.token_hash == token_hash))
+    not_found = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook URL reveal link is invalid or expired")
+    if reveal is None:
+        raise not_found
+    expires_at = ensure_utc(reveal.expires_at)
+    if expires_at is None or expires_at <= utcnow():
+        raise not_found
+    route = db.scalar(
+        select(WebhookRoute).where(
+            WebhookRoute.id == reveal.route_id,
+            WebhookRoute.organization_id == reveal.organization_id,
+        )
+    )
+    if route is None or not route.route_token:
+        raise not_found
+    return WebhookUrlRevealOut(
+        webhook_url=_build_webhook_url(route.route_token),
+        route_name=route.name,
+        expires_at=expires_at,
+    )
+
+
 @router.post("/webhooks/{route_token}", response_model=WebhookDeliveryOut)
 async def receive_webhook(route_token: str, request: Request, db: Session = Depends(get_db)):
     settings = get_effective_settings()
@@ -478,15 +546,17 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
         db.commit()
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=BLOCKED_WEBHOOK_DETAIL)
 
-    body = await request.body()
-    if len(body) > settings.webhook_max_payload_bytes:
+    idempotency_key = _request_idempotency_key(request)
+    try:
+        body = await _read_limited_body(request, settings.webhook_max_payload_bytes)
+    except PayloadTooLargeError as exc:
         record_failure(db, client_host=client_host, route_token_hash=token_hash, reason=ABUSE_REASON_PAYLOAD_TOO_LARGE)
         event = _record_event(
             db,
             route=None,
             route_token_hash=token_hash,
             status_value="rejected",
-            request_metadata=_request_metadata(request, body),
+            request_metadata=_request_metadata(request, exc.partial_body, idempotency_key=idempotency_key),
             error=f"Payload exceeds {settings.webhook_max_payload_bytes} bytes",
         )
         db.commit()
@@ -500,7 +570,7 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
             route=None,
             route_token_hash=token_hash,
             status_value="rejected",
-            request_metadata=_request_metadata(request, body),
+            request_metadata=_request_metadata(request, body, idempotency_key=idempotency_key),
             error="Unknown webhook route",
         )
         db.commit()
@@ -512,7 +582,7 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
             route=route,
             route_token_hash=token_hash,
             status_value="rejected",
-            request_metadata=_request_metadata(request, body),
+            request_metadata=_request_metadata(request, body, idempotency_key=idempotency_key),
             error="Webhook route is disabled",
         )
         route.last_delivery_status = "rejected"
@@ -527,7 +597,7 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
             route=route,
             route_token_hash=token_hash,
             status_value="rejected",
-            request_metadata=_request_metadata(request, body),
+            request_metadata=_request_metadata(request, body, idempotency_key=idempotency_key),
             error=disabled_message,
         )
         route.last_delivery_status = "rejected"
@@ -541,7 +611,7 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
             route=route,
             route_token_hash=token_hash,
             status_value="rejected",
-            request_metadata=_request_metadata(request, body),
+            request_metadata=_request_metadata(request, body, idempotency_key=idempotency_key),
             error="Client IP is not allowed for this webhook route",
         )
         route.last_delivery_status = "rejected"
@@ -558,7 +628,7 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
             route=route,
             route_token_hash=token_hash,
             status_value="rejected",
-            request_metadata=_request_metadata(request, body),
+            request_metadata=_request_metadata(request, body, idempotency_key=idempotency_key),
             error=str(exc),
         )
         route.last_delivery_status = "rejected"
@@ -566,8 +636,30 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
         db.commit()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=event.error) from exc
 
+    request_metadata = _request_metadata(request, body, idempotency_key=idempotency_key)
+    if idempotency_key:
+        delivery, should_deliver = _reserve_idempotent_delivery(db, route, idempotency_key, request_metadata, message)
+        if not should_deliver:
+            return WebhookDeliveryOut(
+                ok=delivery.status == "delivered",
+                status=delivery.status,
+                route_id=route.id,
+                delivery_event_id=delivery.id,
+                message="Webhook delivery already processed",
+            )
+    else:
+        delivery = _record_event(
+            db,
+            route=route,
+            route_token_hash=route.route_token_hash,
+            status_value="pending",
+            request_metadata=request_metadata,
+            normalized_message=message.to_dict(),
+            delivery_result={"backend": _route_delivery_backend(route)},
+        )
     record_success(db, client_host=client_host, route_token_hash=token_hash)
-    delivery = _deliver_to_route(db, route, message, request_metadata=_request_metadata(request, body))
+    db.commit()
+    delivery = _deliver_to_route(db, route, message, request_metadata=request_metadata, delivery_event=delivery)
     db.commit()
     if delivery.status == "failed":
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=delivery.error)
@@ -578,6 +670,113 @@ async def receive_webhook(route_token: str, request: Request, db: Session = Depe
         delivery_event_id=delivery.id,
         message="Webhook delivered",
     )
+
+
+async def _read_limited_body(request: Request, max_bytes: int) -> bytes:
+    limit = max(0, int(max_bytes))
+    content_length = request.headers.get("content-length", "").strip()
+    if content_length:
+        try:
+            declared_length = int(content_length)
+        except ValueError:
+            declared_length = 0
+        if declared_length > limit:
+            raise PayloadTooLargeError()
+
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        if not chunk:
+            continue
+        next_total = total + len(chunk)
+        if next_total > limit:
+            allowed = max(0, limit - total)
+            if allowed:
+                chunks.append(chunk[:allowed])
+            raise PayloadTooLargeError(b"".join(chunks))
+        chunks.append(chunk)
+        total = next_total
+    return b"".join(chunks)
+
+
+def _request_idempotency_key(request: Request) -> str:
+    candidate = (request.headers.get("idempotency-key") or "").strip()
+    if not candidate or not IDEMPOTENCY_KEY_RE.match(candidate):
+        return ""
+    return candidate[:120]
+
+
+def _find_idempotent_delivery(db: Session, route: WebhookRoute, idempotency_key: str) -> WebhookDeliveryEvent | None:
+    event = db.scalar(
+        select(WebhookDeliveryEvent)
+        .where(
+            WebhookDeliveryEvent.route_id == route.id,
+            WebhookDeliveryEvent.route_token_hash == route.route_token_hash,
+            WebhookDeliveryEvent.idempotency_key == idempotency_key,
+        )
+        .with_for_update()
+        .order_by(WebhookDeliveryEvent.created_at.desc(), WebhookDeliveryEvent.id.desc())
+    )
+    if event is not None:
+        return event
+    events = db.scalars(
+        select(WebhookDeliveryEvent)
+        .where(
+            WebhookDeliveryEvent.route_id == route.id,
+            WebhookDeliveryEvent.route_token_hash == route.route_token_hash,
+            WebhookDeliveryEvent.idempotency_key.is_(None),
+            WebhookDeliveryEvent.request_metadata_json.contains(idempotency_key),
+        )
+        .order_by(WebhookDeliveryEvent.created_at.desc(), WebhookDeliveryEvent.id.desc())
+    ).all()
+    for legacy_event in events:
+        metadata = loads_json(legacy_event.request_metadata_json, {})
+        if metadata.get("idempotency_key") == idempotency_key:
+            return legacy_event
+    return None
+
+
+def _reserve_idempotent_delivery(
+    db: Session,
+    route: WebhookRoute,
+    idempotency_key: str,
+    request_metadata: dict,
+    message: NormalizedMessage,
+) -> tuple[WebhookDeliveryEvent, bool]:
+    previous_delivery = _find_idempotent_delivery(db, route, idempotency_key)
+    if previous_delivery is not None:
+        return _idempotent_delivery_outcome(previous_delivery)
+    try:
+        with db.begin_nested():
+            delivery = _record_event(
+                db,
+                route=route,
+                route_token_hash=route.route_token_hash,
+                status_value="pending",
+                request_metadata=request_metadata,
+                normalized_message=message.to_dict(),
+                delivery_result={"backend": _route_delivery_backend(route)},
+                idempotency_key=idempotency_key,
+            )
+        return delivery, True
+    except IntegrityError:
+        previous_delivery = _find_idempotent_delivery(db, route, idempotency_key)
+        if previous_delivery is None:
+            raise
+        return _idempotent_delivery_outcome(previous_delivery)
+
+
+def _idempotent_delivery_outcome(delivery: WebhookDeliveryEvent) -> tuple[WebhookDeliveryEvent, bool]:
+    if delivery.status == "failed":
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=delivery.error)
+    if delivery.status == "pending" and not _pending_delivery_is_stale(delivery):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Webhook delivery is already being processed")
+    return delivery, delivery.status == "pending"
+
+
+def _pending_delivery_is_stale(delivery: WebhookDeliveryEvent) -> bool:
+    created_at = ensure_utc(delivery.created_at)
+    return created_at is None or utcnow() - created_at > IDEMPOTENCY_PENDING_STALE_AFTER
 
 
 def _get_org_route(db: Session, organization_id: str, route_id: str) -> WebhookRoute:
@@ -615,6 +814,53 @@ def _materialize_graph_user_target(db: Session, organization_id: str, route: Web
     route.bot_conversation_id = ""
     if not route.bot_target_source.strip():
         route.bot_target_source = "graph_user_lookup"
+
+
+def _refresh_route_members(db: Session, route: WebhookRoute) -> None:
+    backend = _route_delivery_backend(route)
+    now = utcnow()
+    try:
+        if backend == DELIVERY_BACKEND_GRAPH and (route.graph_target_kind or "").strip() == "chat":
+            result = fetch_service_user_chat_members(
+                db,
+                organization_id=route.organization_id,
+                chat_id=route.graph_target_id,
+            )
+        elif backend == DELIVERY_BACKEND_BOT and route.bot_service_url.strip() and route.bot_conversation_id.strip():
+            result = fetch_bot_conversation_members(
+                service_url=route.bot_service_url,
+                conversation_id=route.bot_conversation_id,
+            )
+        else:
+            raise ValueError("Member refresh is only available for Bot Framework conversations and Graph chat routes.")
+    except (BotConversationMembersError, BotDeliveryError, GraphDelegatedLookupError, ValueError) as exc:
+        route.members_lookup_error = str(exc)[:1000]
+        route.members_refreshed_at = now
+        route.updated_at = now
+        return
+    route.member_summary = result.member_summary
+    route.member_count = result.member_count
+    route.member_list_json = serialize_members(result.members)
+    route.members_lookup_error = ""
+    route.members_refreshed_at = now
+    if result.member_summary:
+        route.target_name = result.member_summary[:200]
+    route.updated_at = now
+
+
+def _route_member_target_key(route: WebhookRoute) -> tuple[str, str, str, str]:
+    backend = _route_delivery_backend(route)
+    if backend == DELIVERY_BACKEND_GRAPH:
+        return (backend, (route.graph_target_kind or "").strip(), route.graph_target_id.strip(), "")
+    return (backend, route.bot_service_url.strip(), route.bot_conversation_id.strip(), "")
+
+
+def _clear_route_members(route: WebhookRoute) -> None:
+    route.member_summary = ""
+    route.member_count = 0
+    route.member_list_json = "[]"
+    route.members_refreshed_at = None
+    route.members_lookup_error = ""
 
 
 def _ensure_graph_lookup_enabled() -> None:
@@ -720,6 +966,7 @@ def _deliver_to_route(
     message: NormalizedMessage,
     *,
     request_metadata: dict,
+    delivery_event: WebhookDeliveryEvent | None = None,
 ) -> WebhookDeliveryEvent:
     backend = _route_delivery_backend(route)
     if backend == DELIVERY_BACKEND_GRAPH:
@@ -735,6 +982,7 @@ def _deliver_to_route(
                 request_metadata=request_metadata,
                 normalized_message=message.to_dict(),
                 delivery_result=result.to_dict(),
+                event=delivery_event,
             )
         except GraphDeliveryError as exc:
             return _record_failed_delivery(
@@ -744,6 +992,7 @@ def _deliver_to_route(
                 request_metadata,
                 str(exc),
                 delivery_result=exc.result or {"backend": DELIVERY_BACKEND_GRAPH, "error_type": exc.error_type},
+                event=delivery_event,
             )
     if backend != DELIVERY_BACKEND_BOT:
         return _record_failed_delivery(
@@ -753,6 +1002,7 @@ def _deliver_to_route(
             request_metadata,
             f"Unsupported delivery backend: {backend}",
             delivery_result={"backend": backend},
+            event=delivery_event,
         )
     try:
         result = send_bot_activity(
@@ -772,6 +1022,7 @@ def _deliver_to_route(
             request_metadata=request_metadata,
             normalized_message=message.to_dict(),
             delivery_result=delivery_result,
+            event=delivery_event,
         )
     except BotDeliveryError as exc:
         return _record_failed_delivery(
@@ -781,6 +1032,7 @@ def _deliver_to_route(
             request_metadata,
             str(exc),
             delivery_result={"backend": DELIVERY_BACKEND_BOT},
+            event=delivery_event,
         )
 
 
@@ -792,6 +1044,7 @@ def _record_failed_delivery(
     error: str,
     *,
     delivery_result: dict,
+    event: WebhookDeliveryEvent | None = None,
 ) -> WebhookDeliveryEvent:
     route.last_delivery_status = "failed"
     route.last_delivery_at = utcnow()
@@ -804,6 +1057,7 @@ def _record_failed_delivery(
         normalized_message=message.to_dict(),
         delivery_result=delivery_result,
         error=error,
+        event=event,
     )
 
 
@@ -817,18 +1071,22 @@ def _record_event(
     normalized_message: dict | None = None,
     delivery_result: dict | None = None,
     error: str = "",
+    event: WebhookDeliveryEvent | None = None,
+    idempotency_key: str | None = None,
 ) -> WebhookDeliveryEvent:
-    event = WebhookDeliveryEvent(
-        organization_id=route.organization_id if route else None,
-        route_id=route.id if route else None,
-        route_token_hash=route_token_hash,
-        status=status_value,
-        request_metadata_json=dumps_json(request_metadata),
-        normalized_message_json=dumps_json(normalized_message or {}),
-        delivery_result_json=dumps_json(delivery_result or {}),
-        error=error[:1000],
-    )
-    db.add(event)
+    if event is None:
+        event = WebhookDeliveryEvent()
+        db.add(event)
+    event.organization_id = route.organization_id if route else None
+    event.route_id = route.id if route else None
+    event.route_token_hash = route_token_hash
+    if idempotency_key is not None:
+        event.idempotency_key = idempotency_key
+    event.status = status_value
+    event.request_metadata_json = dumps_json(request_metadata)
+    event.normalized_message_json = dumps_json(normalized_message or {})
+    event.delivery_result_json = dumps_json(delivery_result or {})
+    event.error = error[:1000]
     db.flush()
     delivery_backend = _string_value(delivery_result or {}, "backend") or (_route_delivery_backend(route) if route else "")
     emit_event(
@@ -863,7 +1121,7 @@ def _record_event(
     return event
 
 
-def _request_metadata(request: Request, body: bytes) -> dict:
+def _request_metadata(request: Request, body: bytes, *, idempotency_key: str = "") -> dict:
     client_host, direct_client_host, x_forwarded_for, client_host_source = _resolve_client_host(request)
     return {
         "trigger": "external_webhook",
@@ -876,6 +1134,7 @@ def _request_metadata(request: Request, body: bytes) -> dict:
         "x_forwarded_for": x_forwarded_for,
         "client_host_source": client_host_source,
         "user_agent": request.headers.get("user-agent", ""),
+        "idempotency_key": idempotency_key,
         "payload_preview": payload_preview(body),
     }
 
@@ -993,6 +1252,11 @@ def _route_out(
         "graph_user_id": route.graph_user_id,
         "graph_user_display_name": route.graph_user_display_name,
         "graph_user_principal_name": route.graph_user_principal_name,
+        "member_summary": route.member_summary,
+        "member_count": route.member_count,
+        "members": route.members,
+        "members_refreshed_at": route.members_refreshed_at,
+        "members_lookup_error": route.members_lookup_error,
         "bot_target_source": route.bot_target_source,
         "bot_registered_by_id": route.bot_registered_by_id,
         "bot_registered_at": route.bot_registered_at,

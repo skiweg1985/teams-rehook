@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import timedelta
 
 import pytest
@@ -48,13 +49,25 @@ def db_session() -> Iterator[Session]:
 
 @pytest.fixture()
 def client(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    with app_client(db_session, monkeypatch) as test_client:
+        yield test_client
+
+
+@contextmanager
+def app_client(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    monitoring_api_key: str = "monitoring-secret",
+    bot_delivery_mode: str = "mock",
+) -> Iterator[TestClient]:
     from app.core.config import get_settings
 
-    monkeypatch.setenv("BOT_DELIVERY_MODE", "mock")
+    monkeypatch.setenv("BOT_DELIVERY_MODE", bot_delivery_mode)
     monkeypatch.setenv("MS_APP_TENANT_ID", "")
     monkeypatch.setenv("MS_APP_CLIENT_ID", "")
     monkeypatch.setenv("MS_APP_CLIENT_SECRET", "")
-    monkeypatch.setenv("MONITORING_API_KEY", "monitoring-secret")
+    monkeypatch.setenv("MONITORING_API_KEY", monitoring_api_key)
     monkeypatch.setenv("APP_PUBLIC_BASE_URL", "http://localhost:5173")
     monkeypatch.setenv("FRONTEND_BASE_URL", "http://localhost:5173")
     monkeypatch.setenv("CORS_ORIGINS", "http://localhost:5173,http://localhost")
@@ -77,6 +90,13 @@ def client(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> Iterator[Tes
 
 def auth_header(token: str = "monitoring-secret") -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+def channel_by_name(body: dict, name: str) -> dict:
+    for channel in body["prtg"]["result"]:
+        if channel["channel"] == name:
+            return channel
+    raise AssertionError(f"Missing PRTG channel {name}")
 
 
 def add_route(
@@ -127,19 +147,16 @@ def add_delivery(db: Session, route: WebhookRoute, *, status: str, created_at) -
 
 
 def test_monitoring_status_requires_configured_server_key(db_session: Session, monkeypatch: pytest.MonkeyPatch):
-    from app.core.config import get_settings
-
-    monkeypatch.setenv("MONITORING_API_KEY", "")
-    get_settings.cache_clear()
-    app = create_app()
-    app.router.on_startup.clear()
-
-    def override_get_db():
-        yield db_session
-
-    app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app) as test_client:
+    with app_client(db_session, monkeypatch, monitoring_api_key="") as test_client:
         response = test_client.get("/api/v1/monitoring/status", headers=auth_header())
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Monitoring API key is not configured"
+
+
+def test_monitoring_prtg_requires_configured_server_key(db_session: Session, monkeypatch: pytest.MonkeyPatch):
+    with app_client(db_session, monkeypatch, monitoring_api_key="") as test_client:
+        response = test_client.get("/api/v1/monitoring/prtg", headers=auth_header())
 
     assert response.status_code == 503
     assert response.json()["detail"] == "Monitoring API key is not configured"
@@ -148,6 +165,14 @@ def test_monitoring_status_requires_configured_server_key(db_session: Session, m
 def test_monitoring_status_rejects_missing_or_wrong_bearer_token(client: TestClient):
     missing = client.get("/api/v1/monitoring/status")
     wrong = client.get("/api/v1/monitoring/status", headers=auth_header("wrong"))
+
+    assert missing.status_code == 401
+    assert wrong.status_code == 401
+
+
+def test_monitoring_prtg_rejects_missing_or_wrong_bearer_token(client: TestClient):
+    missing = client.get("/api/v1/monitoring/prtg")
+    wrong = client.get("/api/v1/monitoring/prtg", headers=auth_header("wrong"))
 
     assert missing.status_code == 401
     assert wrong.status_code == 401
@@ -235,6 +260,89 @@ def test_monitoring_status_has_null_success_rate_without_delivery_events(client:
     assert body["rolling_windows"]["1h"]["success_rate"] is None
 
 
+def test_monitoring_prtg_returns_advanced_sensor_json_for_warning_status(
+    client: TestClient, db_session: Session
+):
+    admin = db_session.scalar(select(User).where(User.email == "admin@example.com"))
+    assert admin is not None
+    set_override(db_session, key="graph_delivery_enabled", value="false", updated_by_id=admin.id)
+    set_override(db_session, key="graph_lookup_enabled", value="false", updated_by_id=admin.id)
+    db_session.commit()
+    now = utcnow()
+    healthy = add_route(
+        db_session,
+        name="Healthy route",
+        token="healthy-token-secret",
+        last_status="delivered",
+        last_at=now - timedelta(minutes=1),
+    )
+    failed = add_route(
+        db_session,
+        name="Failed route",
+        token="failed-token-secret",
+        last_status="failed",
+        last_at=now - timedelta(minutes=2),
+    )
+    add_route(db_session, name="Untested route", token="untested-token-secret", active=True)
+    add_delivery(db_session, healthy, status="delivered", created_at=now - timedelta(minutes=1))
+    add_delivery(db_session, failed, status="failed", created_at=now - timedelta(minutes=2))
+
+    response = client.get("/api/v1/monitoring/prtg", headers=auth_header())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"prtg"}
+    assert isinstance(body["prtg"]["result"], list)
+    assert body["prtg"]["text"] == (
+        "Teams Rehook warning: 1 route last failed: Failed route; "
+        "1 active route has not been tested yet: Untested route; "
+        "recent webhook deliveries failed or were rejected in the last 5 minutes."
+    )
+    assert channel_by_name(body, "Service State") == {
+        "channel": "Service State",
+        "value": 1,
+        "unit": "Custom",
+        "customunit": "state",
+        "valuelookup": "prtg.standardlookups.wmi.diskhealth.health",
+    }
+    assert channel_by_name(body, "Database OK") == {
+        "channel": "Database OK",
+        "value": 1,
+        "unit": "Custom",
+        "customunit": "state",
+        "valuelookup": "prtg.standardlookups.boolean.statetrueok",
+    }
+    assert channel_by_name(body, "Routes Total") == {"channel": "Routes Total", "value": 3, "unit": "Count"}
+    assert channel_by_name(body, "Routes Last Failed") == {
+        "channel": "Routes Last Failed",
+        "value": 1,
+        "unit": "Count",
+    }
+    assert channel_by_name(body, "Deliveries 5m Success") == {
+        "channel": "Deliveries 5m Success",
+        "value": 1,
+        "unit": "Count",
+    }
+    assert channel_by_name(body, "Deliveries 5m Failed") == {
+        "channel": "Deliveries 5m Failed",
+        "value": 1,
+        "unit": "Count",
+    }
+    assert channel_by_name(body, "Success Rate 5m") == {
+        "channel": "Success Rate 5m",
+        "value": 50.0,
+        "unit": "Percent",
+        "float": 1,
+        "decimalmode": "All",
+    }
+    serialized = response.text
+    assert "healthy-token-secret" not in serialized
+    assert "failed-token-secret" not in serialized
+    assert "untested-token-secret" not in serialized
+    assert "conversation-secret" not in serialized
+    assert "smba.trafficmanager" not in serialized
+
+
 def test_monitoring_rollup_ignores_disabled_graph_features(client: TestClient, db_session: Session):
     admin = db_session.scalar(select(User).where(User.email == "admin@example.com"))
     assert admin is not None
@@ -271,3 +379,39 @@ def test_monitoring_rollup_ignores_disabled_graph_features(client: TestClient, d
     assert body["readiness"]["graph_delivery"]["enabled"] is False
     assert body["routes"]["with_last_failure"] == 1
     assert body["rolling_windows"]["5m"]["delivery_failure_count"] == 1
+
+
+def test_monitoring_prtg_maps_ok_status(client: TestClient, db_session: Session):
+    admin = db_session.scalar(select(User).where(User.email == "admin@example.com"))
+    assert admin is not None
+    set_override(db_session, key="graph_delivery_enabled", value="false", updated_by_id=admin.id)
+    set_override(db_session, key="graph_lookup_enabled", value="false", updated_by_id=admin.id)
+    db_session.commit()
+    now = utcnow()
+    route = add_route(
+        db_session,
+        name="Healthy route",
+        token="healthy-token-secret",
+        last_status="delivered",
+        last_at=now - timedelta(minutes=1),
+    )
+    add_delivery(db_session, route, status="delivered", created_at=now - timedelta(minutes=1))
+
+    response = client.get("/api/v1/monitoring/prtg", headers=auth_header())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert channel_by_name(body, "Service State")["value"] == 0
+    assert body["prtg"]["text"] == (
+        "Teams Rehook OK: All monitored components are ready and recent deliveries look healthy."
+    )
+
+
+def test_monitoring_prtg_maps_critical_status(db_session: Session, monkeypatch: pytest.MonkeyPatch):
+    with app_client(db_session, monkeypatch, bot_delivery_mode="real") as test_client:
+        response = test_client.get("/api/v1/monitoring/prtg", headers=auth_header())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert channel_by_name(body, "Service State")["value"] == 2
+    assert body["prtg"]["text"] == "Teams Rehook critical: bot delivery is not ready (incomplete)."

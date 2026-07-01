@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from app.services.webhook_payloads import WebhookPayloadError, normalize_webhook_payload
@@ -51,6 +53,15 @@ def test_normalizes_message_card_sections_and_facts():
 def test_rejects_empty_payload():
     with pytest.raises(WebhookPayloadError):
         normalize_webhook_payload(b"   ", "text/plain")
+
+
+def test_rejects_deeply_nested_json_payload():
+    value = "leaf"
+    for _ in range(90):
+        value = {"nested": value}
+
+    with pytest.raises(WebhookPayloadError, match="too deeply nested"):
+        normalize_webhook_payload(json.dumps(value).encode("utf-8"), "application/json")
 
 
 def test_preserves_adaptive_card_activity():

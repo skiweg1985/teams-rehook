@@ -14,7 +14,17 @@ from sqlalchemy.pool import StaticPool
 from app.core.settings_overrides import reset_override_state
 from app.database import Base, get_db
 from app.main import create_app
-from app.models import AuditEvent, BotActivityEvent, Organization, User, WebhookAbuseBucket, WebhookDeliveryEvent, WebhookRoute
+from app.models import (
+    AuditEvent,
+    BotActivityEvent,
+    BotConversationReference,
+    Organization,
+    User,
+    WebhookAbuseBucket,
+    WebhookDeliveryEvent,
+    WebhookRoute,
+    WebhookUrlRevealToken,
+)
 from app.security import dumps_json, hash_secret, lookup_secret_hash
 from app.security import ensure_utc, utcnow
 from app.routers.webhook_routes import _resolve_client_host
@@ -114,6 +124,288 @@ def set_admin_setting(client: TestClient, csrf_token: str, key: str, value: str)
         json={"value": value},
     )
     assert response.status_code == 200
+
+
+def test_webhook_url_reveal_returns_route_url_for_valid_token(client: TestClient, db_session: Session):
+    route = add_route(db_session, token="route-token")
+    reveal_token = "temporary-reveal-token"
+    db_session.add(
+        WebhookUrlRevealToken(
+            organization_id=route.organization_id,
+            route_id=route.id,
+            token_hash=lookup_secret_hash(reveal_token),
+            expires_at=utcnow() + timedelta(hours=24),
+        )
+    )
+    db_session.commit()
+
+    response = client.get(f"/api/v1/webhook-url-reveals/{reveal_token}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["route_name"] == route.name
+    assert body["webhook_url"].endswith("/api/v1/webhooks/route-token")
+    assert "temporary-reveal-token" not in body["webhook_url"]
+
+
+def test_webhook_url_reveal_rejects_expired_token(client: TestClient, db_session: Session):
+    route = add_route(db_session, token="expired-route-token")
+    reveal_token = "expired-reveal-token"
+    db_session.add(
+        WebhookUrlRevealToken(
+            organization_id=route.organization_id,
+            route_id=route.id,
+            token_hash=lookup_secret_hash(reveal_token),
+            expires_at=utcnow() - timedelta(minutes=1),
+        )
+    )
+    db_session.commit()
+
+    response = client.get(f"/api/v1/webhook-url-reveals/{reveal_token}")
+
+    assert response.status_code == 404
+
+
+def test_webhook_url_reveal_rejects_unknown_token(client: TestClient):
+    response = client.get("/api/v1/webhook-url-reveals/unknown-reveal-token")
+
+    assert response.status_code == 404
+
+
+def test_delete_route_removes_webhook_url_reveal_tokens(client: TestClient, db_session: Session):
+    route = add_route(db_session, token="delete-route-token")
+    csrf_token = login_admin(client)
+    db_session.add(
+        WebhookUrlRevealToken(
+            organization_id=route.organization_id,
+            route_id=route.id,
+            token_hash=lookup_secret_hash("delete-route-reveal-token"),
+            expires_at=utcnow() + timedelta(hours=24),
+        )
+    )
+    db_session.commit()
+
+    response = client.delete(f"/api/v1/webhook-routes/{route.id}", headers={"X-CSRF-Token": csrf_token})
+
+    assert response.status_code == 204
+    assert db_session.get(WebhookRoute, route.id) is None
+    reveal_tokens = db_session.scalars(select(WebhookUrlRevealToken).where(WebhookUrlRevealToken.route_id == route.id)).all()
+    assert reveal_tokens == []
+
+
+def test_bot_conversation_reference_detail_returns_linked_routes(client: TestClient, db_session: Session):
+    org = db_session.scalar(select(Organization).where(Organization.slug == "default"))
+    assert org is not None
+    reference = BotConversationReference(
+        scope="channel",
+        service_url="https://smba.trafficmanager.net/emea/",
+        conversation_id="conversation-id",
+        graph_team_id="graph-team-id",
+        channel_id="channel-id",
+        conversation_type="channel",
+        team_name="Ops",
+        channel_name="Alerts",
+        user_name="Ada Admin",
+    )
+    linked = WebhookRoute(
+        organization_id=org.id,
+        name="Ops Alerts",
+        route_token_hash=lookup_secret_hash("linked-route"),
+        route_token="linked-route",
+        target_type="bot_conversation",
+        target_name="Ops / Alerts",
+        bot_service_url=reference.service_url,
+        bot_conversation_id=reference.conversation_id,
+        graph_team_id=reference.graph_team_id,
+        graph_channel_id=reference.channel_id,
+    )
+    other = WebhookRoute(
+        organization_id=org.id,
+        name="Other",
+        route_token_hash=lookup_secret_hash("other-route"),
+        route_token="other-route",
+        target_type="bot_conversation",
+        target_name="Other",
+        bot_service_url=reference.service_url,
+        bot_conversation_id="other-conversation",
+    )
+    db_session.add_all([reference, linked, other])
+    db_session.commit()
+    login_admin(client)
+
+    response = client.get(f"/api/v1/bot/conversation-references/{reference.id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == reference.id
+    assert body["linked_route_count"] == 1
+    assert body["linked_routes"][0]["id"] == linked.id
+    assert body["linked_routes"][0]["name"] == "Ops Alerts"
+
+
+def test_bot_conversation_reference_detail_deduplicates_bot_and_graph_route_matches(client: TestClient, db_session: Session):
+    org = db_session.scalar(select(Organization).where(Organization.slug == "default"))
+    assert org is not None
+    reference = BotConversationReference(
+        scope="channel",
+        service_url="https://smba.trafficmanager.net/emea/",
+        conversation_id="conversation-id",
+        graph_team_id="graph-team-id",
+        channel_id="channel-id",
+        conversation_type="channel",
+    )
+    route = WebhookRoute(
+        organization_id=org.id,
+        name="Duplicate Match",
+        route_token_hash=lookup_secret_hash("duplicate-route"),
+        route_token="duplicate-route",
+        target_type="bot_conversation",
+        target_name="Ops / Alerts",
+        bot_service_url=reference.service_url,
+        bot_conversation_id=reference.conversation_id,
+        graph_team_id=reference.graph_team_id,
+        graph_channel_id=reference.channel_id,
+    )
+    db_session.add_all([reference, route])
+    db_session.commit()
+    login_admin(client)
+
+    response = client.get(f"/api/v1/bot/conversation-references/{reference.id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["linked_route_count"] == 1
+    assert [row["id"] for row in body["linked_routes"]] == [route.id]
+
+
+def test_bot_conversation_reference_refresh_members_updates_chat_reference(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def fake_members(**kwargs):
+        assert kwargs["conversation_id"] == "chat-id"
+        return SimpleNamespace(
+            member_summary="Ada Admin, Ben Builder",
+            member_count=2,
+            members=[
+                SimpleNamespace(to_dict=lambda: {"id": "29:ada", "name": "Ada Admin", "aad_object_id": "aad-ada", "email": "", "user_principal_name": ""}),
+                SimpleNamespace(to_dict=lambda: {"id": "29:ben", "name": "Ben Builder", "aad_object_id": "aad-ben", "email": "", "user_principal_name": ""}),
+            ],
+        )
+
+    monkeypatch.setattr("app.routers.bot_messages.fetch_bot_conversation_members", fake_members)
+    reference = BotConversationReference(
+        scope="chat",
+        service_url="https://smba.trafficmanager.net/emea/",
+        conversation_id="chat-id",
+        conversation_type="groupchat",
+    )
+    db_session.add(reference)
+    db_session.commit()
+    csrf_token = login_admin(client)
+
+    response = client.post(
+        f"/api/v1/bot/conversation-references/{reference.id}/refresh-members",
+        headers={"X-CSRF-Token": csrf_token},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["member_summary"] == "Ada Admin, Ben Builder"
+    assert body["member_count"] == 2
+    assert body["members"][0]["aad_object_id"] == "aad-ada"
+    assert body["members_lookup_error"] == ""
+
+
+def test_bot_conversation_reference_delete_requires_csrf(client: TestClient, db_session: Session):
+    reference = BotConversationReference(
+        scope="chat",
+        service_url="https://smba.trafficmanager.net/emea/",
+        conversation_id="chat-id",
+        conversation_type="groupchat",
+    )
+    db_session.add(reference)
+    db_session.commit()
+    login_admin(client)
+
+    response = client.delete(f"/api/v1/bot/conversation-references/{reference.id}?delete_linked_routes=true")
+
+    assert response.status_code == 403
+
+
+def test_bot_conversation_reference_delete_removes_linked_routes_and_preserves_other_routes(
+    client: TestClient,
+    db_session: Session,
+):
+    org = db_session.scalar(select(Organization).where(Organization.slug == "default"))
+    assert org is not None
+    reference = BotConversationReference(
+        scope="chat",
+        service_url="https://smba.trafficmanager.net/emea/",
+        conversation_id="chat-id",
+        conversation_type="groupchat",
+    )
+    linked = WebhookRoute(
+        organization_id=org.id,
+        name="Linked Chat Route",
+        route_token_hash=lookup_secret_hash("linked-chat"),
+        route_token="linked-chat",
+        target_type="bot_conversation",
+        target_name="Chat",
+        bot_service_url=reference.service_url,
+        bot_conversation_id=reference.conversation_id,
+        graph_target_kind="chat",
+        graph_target_id=reference.conversation_id,
+    )
+    other = WebhookRoute(
+        organization_id=org.id,
+        name="Other Route",
+        route_token_hash=lookup_secret_hash("unlinked-route"),
+        route_token="unlinked-route",
+        target_type="bot_conversation",
+        target_name="Other",
+        bot_service_url=reference.service_url,
+        bot_conversation_id="other-chat-id",
+    )
+    db_session.add_all([reference, linked, other])
+    db_session.flush()
+    event = WebhookDeliveryEvent(
+        organization_id=org.id,
+        route_id=linked.id,
+        route_token_hash=linked.route_token_hash,
+        status="delivered",
+    )
+    reveal = WebhookUrlRevealToken(
+        organization_id=org.id,
+        route_id=linked.id,
+        token_hash=lookup_secret_hash("linked-chat-reveal-token"),
+        expires_at=utcnow() + timedelta(hours=24),
+    )
+    db_session.add_all([event, reveal])
+    db_session.commit()
+    linked_id = linked.id
+    other_id = other.id
+    event_id = event.id
+    csrf_token = login_admin(client)
+
+    response = client.delete(
+        f"/api/v1/bot/conversation-references/{reference.id}?delete_linked_routes=true",
+        headers={"X-CSRF-Token": csrf_token},
+    )
+
+    assert response.status_code == 204
+    assert db_session.get(BotConversationReference, reference.id) is None
+    assert db_session.get(WebhookRoute, linked_id) is None
+    assert db_session.get(WebhookRoute, other_id) is not None
+    assert db_session.scalars(select(WebhookUrlRevealToken).where(WebhookUrlRevealToken.route_id == linked_id)).all() == []
+    db_session.expire_all()
+    delivery_event = db_session.get(WebhookDeliveryEvent, event_id)
+    assert delivery_event is not None
+    assert delivery_event.route_id is None
+    audit = db_session.scalar(select(AuditEvent).where(AuditEvent.action == "bot_conversation_reference.deleted"))
+    assert audit is not None
+    assert linked_id in json.loads(audit.metadata_json)["linked_route_ids"]
 
 
 def test_admin_route_api_requires_session_and_csrf(client: TestClient):
@@ -390,6 +682,185 @@ def test_public_webhook_rejects_unknown_token(client: TestClient, db_session: Se
     assert len(events) == 1
     assert events[0].route_id is None
     assert events[0].status == "rejected"
+
+
+def test_public_webhook_rejects_oversized_payload_before_delivery(client: TestClient, db_session: Session):
+    csrf_token = login_admin(client)
+    set_admin_setting(client, csrf_token, "webhook_max_payload_bytes", "1024")
+
+    response = client.post(
+        "/api/v1/webhooks/missing-token",
+        content=b"x" * 1025,
+        headers={"Content-Type": "text/plain"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Payload exceeds 1024 bytes"
+    event = db_session.scalar(select(WebhookDeliveryEvent))
+    assert event is not None
+    assert event.status == "rejected"
+    assert event.error == "Payload exceeds 1024 bytes"
+
+
+def test_public_webhook_idempotency_key_prevents_duplicate_delivery(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    route = add_route(db_session, token="idempotent-token")
+    deliveries = 0
+
+    class FakeBotResult:
+        def to_dict(self):
+            return {"mode": "mock", "activity_id": "activity-id", "status_code": 202, "activity": {"type": "message"}}
+
+    def fake_send_bot_activity(**kwargs):
+        nonlocal deliveries
+        deliveries += 1
+        return FakeBotResult()
+
+    monkeypatch.setattr("app.routers.webhook_routes.send_bot_activity", fake_send_bot_activity)
+
+    first = client.post(
+        "/api/v1/webhooks/idempotent-token",
+        json={"text": "hello"},
+        headers={"Idempotency-Key": "retry-key-123"},
+    )
+    second = client.post(
+        "/api/v1/webhooks/idempotent-token",
+        json={"text": "hello again"},
+        headers={"Idempotency-Key": "retry-key-123"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["delivery_event_id"] == first.json()["delivery_event_id"]
+    assert deliveries == 1
+    events = db_session.scalars(select(WebhookDeliveryEvent).where(WebhookDeliveryEvent.route_id == route.id)).all()
+    assert len(events) == 1
+    assert events[0].idempotency_key == "retry-key-123"
+
+
+def test_public_webhook_idempotency_key_finds_legacy_event_beyond_recent_window(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    route = add_route(db_session, token="legacy-idempotent-token")
+    deliveries = 0
+    legacy_key = "legacy-retry-key-123"
+    legacy = WebhookDeliveryEvent(
+        organization_id=route.organization_id,
+        route_id=route.id,
+        route_token_hash=route.route_token_hash,
+        status="delivered",
+        request_metadata_json=dumps_json({"idempotency_key": legacy_key}),
+        created_at=utcnow() - timedelta(hours=2),
+    )
+    db_session.add(legacy)
+    for index in range(55):
+        db_session.add(
+            WebhookDeliveryEvent(
+                organization_id=route.organization_id,
+                route_id=route.id,
+                route_token_hash=route.route_token_hash,
+                status="delivered",
+                created_at=utcnow() - timedelta(minutes=55 - index),
+            )
+        )
+    db_session.commit()
+
+    def fake_send_bot_activity(**kwargs):
+        nonlocal deliveries
+        deliveries += 1
+        raise AssertionError("Legacy idempotent retry should not send again")
+
+    monkeypatch.setattr("app.routers.webhook_routes.send_bot_activity", fake_send_bot_activity)
+
+    response = client.post(
+        "/api/v1/webhooks/legacy-idempotent-token",
+        json={"text": "hello again"},
+        headers={"Idempotency-Key": legacy_key},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["delivery_event_id"] == legacy.id
+    assert deliveries == 0
+
+
+def test_public_webhook_retries_stale_pending_idempotency_event(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    route = add_route(db_session, token="stale-pending-token")
+    stale_key = "stale-retry-key-123"
+    pending = WebhookDeliveryEvent(
+        organization_id=route.organization_id,
+        route_id=route.id,
+        route_token_hash=route.route_token_hash,
+        idempotency_key=stale_key,
+        status="pending",
+        request_metadata_json=dumps_json({"idempotency_key": stale_key}),
+        created_at=utcnow() - timedelta(minutes=30),
+    )
+    db_session.add(pending)
+    db_session.commit()
+
+    class FakeBotResult:
+        def to_dict(self):
+            return {"mode": "mock", "activity_id": "activity-id", "status_code": 202, "activity": {"type": "message"}}
+
+    deliveries = 0
+
+    def fake_send_bot_activity(**kwargs):
+        nonlocal deliveries
+        deliveries += 1
+        return FakeBotResult()
+
+    monkeypatch.setattr("app.routers.webhook_routes.send_bot_activity", fake_send_bot_activity)
+
+    response = client.post(
+        "/api/v1/webhooks/stale-pending-token",
+        json={"text": "hello"},
+        headers={"Idempotency-Key": stale_key},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["delivery_event_id"] == pending.id
+    assert deliveries == 1
+    db_session.refresh(pending)
+    assert pending.status == "delivered"
+    events = db_session.scalars(select(WebhookDeliveryEvent).where(WebhookDeliveryEvent.route_id == route.id)).all()
+    assert len(events) == 1
+
+
+def test_public_webhook_persists_pending_event_before_provider_delivery(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    route = add_route(db_session, token="pending-token")
+    observed_statuses: list[str] = []
+
+    class FakeBotResult:
+        def to_dict(self):
+            return {"mode": "mock", "activity_id": "activity-id", "status_code": 202, "activity": {"type": "message"}}
+
+    def fake_send_bot_activity(**kwargs):
+        events = db_session.scalars(select(WebhookDeliveryEvent).where(WebhookDeliveryEvent.route_id == route.id)).all()
+        observed_statuses.extend(event.status for event in events)
+        return FakeBotResult()
+
+    monkeypatch.setattr("app.routers.webhook_routes.send_bot_activity", fake_send_bot_activity)
+
+    response = client.post("/api/v1/webhooks/pending-token", json={"text": "hello"})
+
+    assert response.status_code == 200
+    assert observed_statuses == ["pending"]
+    final_event = db_session.scalar(select(WebhookDeliveryEvent).where(WebhookDeliveryEvent.route_id == route.id))
+    assert final_event is not None
+    assert final_event.status == "delivered"
 
 
 def test_unknown_webhook_route_blocks_after_failure_limit(client: TestClient, db_session: Session):
@@ -797,6 +1268,31 @@ def test_update_route_delivery_backend(client: TestClient, db_session: Session):
     assert route.delivery_backend == "graph"
 
 
+def test_update_route_target_clears_stale_member_summary(client: TestClient, db_session: Session):
+    route = add_route(db_session)
+    route.member_summary = "Ada Admin, Ben Builder"
+    route.member_count = 2
+    route.member_list_json = dumps_json([{"id": "member-1", "name": "Ada Admin"}])
+    route.members_lookup_error = "previous failure"
+    route.members_refreshed_at = utcnow()
+    db_session.commit()
+    csrf_token = login_admin(client)
+
+    response = client.patch(
+        f"/api/v1/webhook-routes/{route.id}",
+        headers={"X-CSRF-Token": csrf_token},
+        json={"bot_conversation_id": "different-conversation-id"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["member_summary"] == ""
+    assert body["member_count"] == 0
+    assert body["members"] == []
+    assert body["members_refreshed_at"] is None
+    assert body["members_lookup_error"] == ""
+
+
 def test_create_graph_chat_route_uses_graph_target_id_as_chat_id(client: TestClient):
     csrf_token = login_admin(client)
 
@@ -819,6 +1315,55 @@ def test_create_graph_chat_route_uses_graph_target_id_as_chat_id(client: TestCli
     assert body["delivery_backend"] == "graph"
     assert body["graph_target_kind"] == "chat"
     assert body["graph_target_id"] == "chat-id"
+
+
+def test_refresh_graph_chat_route_members_updates_target_summary(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from app.services.bot_conversation_members import BotConversationMember, BotConversationMembersResult
+
+    csrf_token = login_admin(client)
+    route = add_route(db_session)
+    route.delivery_backend = "graph"
+    route.bot_service_url = ""
+    route.bot_conversation_id = ""
+    route.graph_target_kind = "chat"
+    route.graph_target_id = "chat-id"
+    route.target_name = "Ops chat"
+    db_session.commit()
+
+    def fake_members(db, *, organization_id: str, chat_id: str):
+        assert organization_id == route.organization_id
+        assert chat_id == "chat-id"
+        members = [
+            BotConversationMember(id="member-1", name="Ada Admin"),
+            BotConversationMember(id="member-2", name="Ben Builder"),
+        ]
+        return BotConversationMembersResult(
+            members=members,
+            member_summary="Ada Admin, Ben Builder",
+            member_count=2,
+        )
+
+    monkeypatch.setattr("app.routers.webhook_routes.fetch_service_user_chat_members", fake_members)
+
+    response = client.post(
+        f"/api/v1/webhook-routes/{route.id}/refresh-members",
+        headers={"X-CSRF-Token": csrf_token},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["target_name"] == "Ada Admin, Ben Builder"
+    assert body["member_summary"] == "Ada Admin, Ben Builder"
+    assert body["member_count"] == 2
+    assert body["members_lookup_error"] == ""
+    assert body["members"][0]["name"] == "Ada Admin"
+    db_session.refresh(route)
+    assert route.graph_target_kind == "chat"
+    assert route.member_summary == "Ada Admin, Ben Builder"
 
 
 def test_create_graph_user_route_materializes_one_on_one_chat(
@@ -1271,6 +1816,40 @@ def test_delivery_events_endpoint_rejects_invalid_status_filter(client: TestClie
     assert response.status_code == 422
 
 
+def test_delivery_events_endpoint_uses_stable_order_for_equal_timestamps(client: TestClient, db_session: Session):
+    route = add_route(db_session)
+    login_admin(client)
+    created_at = utcnow()
+    db_session.add_all(
+        [
+            WebhookDeliveryEvent(
+                id="00000000-0000-0000-0000-000000000001",
+                organization_id=route.organization_id,
+                route_id=route.id,
+                route_token_hash=route.route_token_hash,
+                status="delivered",
+                normalized_message_json=dumps_json({"title": "First"}),
+                created_at=created_at,
+            ),
+            WebhookDeliveryEvent(
+                id="00000000-0000-0000-0000-000000000002",
+                organization_id=route.organization_id,
+                route_id=route.id,
+                route_token_hash=route.route_token_hash,
+                status="delivered",
+                normalized_message_json=dumps_json({"title": "Second"}),
+                created_at=created_at,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    response = client.get("/api/v1/webhook-delivery-events?page=1&page_size=2")
+
+    assert response.status_code == 200
+    assert [item["title"] for item in response.json()["items"]] == ["Second", "First"]
+
+
 def test_global_delivery_events_endpoint_paginates_summaries(client: TestClient, db_session: Session):
     route = add_route(db_session)
     login_admin(client)
@@ -1484,6 +2063,30 @@ def test_admin_cleanup_endpoint_cleans_all_log_tables(client: TestClient, db_ses
     assert body["deleted_webhook_delivery_events"] == 1
     assert body["deleted_audit_events"] == 1
     assert body["deleted_bot_activity_events"] == 1
+
+
+def test_delivery_log_cleanup_endpoint_returns_complete_cleanup_shape(client: TestClient, db_session: Session):
+    from app.services import log_retention
+
+    log_retention._last_log_cleanup_at = None
+    route = add_route(db_session)
+    db_session.add(
+        WebhookDeliveryEvent(
+            organization_id=route.organization_id,
+            route_id=route.id,
+            status="delivered",
+            created_at=utcnow() - timedelta(days=8),
+        )
+    )
+    db_session.commit()
+    csrf_token = login_admin(client)
+
+    response = client.post("/api/v1/webhook-delivery-events/cleanup", headers={"X-CSRF-Token": csrf_token})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["deleted_webhook_delivery_events"] == 1
+    assert body["deleted_event_log_entries"] >= 0
 
 
 def test_admin_system_logs_endpoint_returns_bot_activity_events(client: TestClient, db_session: Session):

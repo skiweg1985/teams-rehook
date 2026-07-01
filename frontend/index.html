@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Teams Rehook</title>
+    <link id="app-favicon" rel="icon" type="image/png" href="/brand/favicon-light.png" />
     <script>
       (function () {
         try {
@@ -12,6 +13,7 @@
           document.documentElement.classList.toggle("dark", dark);
           document.documentElement.dataset.themePreference = p;
           document.documentElement.style.colorScheme = dark ? "dark" : "light";
+          document.getElementById("app-favicon").href = dark ? "/brand/favicon-dark.png" : "/brand/favicon-light.png";
         } catch (e) {}
       })();
     </script>
