@@ -86,7 +86,7 @@ MS_APP_CLIENT_ID=
 MS_APP_CLIENT_SECRET=
 ```
 
-Delivery feature switches default to enabled and are controlled from the app's Delivery page. Disabled integrations are shown as disabled in readiness, excluded from the global monitoring rollup, and cannot be used for route setup or delivery.
+Delivery feature switches default to enabled and are controlled from the app's delivery settings controls. Disabled integrations are shown as disabled in readiness, excluded from the global monitoring rollup, and cannot be used for route setup or delivery.
 
 ## Microsoft Graph Permissions
 
@@ -138,6 +138,14 @@ Graph delivery messages appear as the connected delegated service user. The serv
 
 For Graph chat routes, administrators can refresh the stored participant summary from the route actions. The refresh reads current chat members through Microsoft Graph and updates the route display label, member count, refresh timestamp, and any lookup error.
 
+## Bot Access
+
+The **Users** page includes app user management and Bot Access management. App users sign in to the web UI. Bot Access entries control what authenticated Teams senders can do through bot commands.
+
+Bot Access can authorize individual Entra users or Entra groups. Roles are permission bundles; the repository seeds system roles for route viewing and route operation, and administrators can add custom roles. Available bot-command permissions include viewing routes, revealing webhook URLs, changing route status, deleting routes, managing route IP allowlists, and creating private-chat or channel routes.
+
+Group-based Bot Access depends on Microsoft Graph application permissions. See the Microsoft Graph permissions section above for the required group and membership reads.
+
 ## Start, Stop, Restart
 
 Start:
@@ -152,10 +160,10 @@ Stop:
 docker compose down
 ```
 
-Restart backend after configuration changes:
+Recreate services after environment-backed configuration changes:
 
 ```bash
-docker compose restart backend
+./manage.sh restart
 ```
 
 View logs:

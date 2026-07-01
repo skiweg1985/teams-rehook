@@ -48,6 +48,7 @@ Public or machine endpoints:
 - `POST /api/v1/webhooks/{route_token}` uses the route token embedded in the relay URL.
 - `POST /api/v1/bot/messages` receives Teams bot activities and requires a valid Bot Framework bearer token for the configured `MS_APP_CLIENT_ID`.
 - `GET /api/v1/monitoring/status` requires `Authorization: Bearer <MONITORING_API_KEY>`.
+- `GET /api/v1/monitoring/prtg` requires the same monitoring bearer key and returns PRTG sensor JSON.
 - `GET /api/v1/health` and `GET /api/v1/readyz` are health endpoints.
 
 ## Persistence
@@ -107,5 +108,5 @@ Admin readiness endpoints report non-secret diagnostic state. Monitoring output 
 
 - No dedicated migration framework is present; startup code handles table creation and additive/backfill schema maintenance.
 - No queue or retry worker is visible in the repository.
-- User management is list-only in the current UI.
+- User management and Bot Access management are implemented in the current UI, but the repository does not define external identity-provider SSO for web UI sign-in.
 - Production backup, restore, rollout, rollback, monitoring, and support ownership are TODOs.

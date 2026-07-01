@@ -102,12 +102,12 @@ Delivery feature switches are application-managed settings: they default to `tru
 | `ms_app_tenant_id` | string | No | Shared Microsoft tenant ID. |
 | `ms_app_client_id` | string | No | Shared Microsoft client ID. |
 | `ms_app_client_secret` | secret | Yes | Write-only in API responses. |
-| `botframework_scope` | string | No | Bot Framework OAuth scope. |
-| `graph_scope` | string | No | Microsoft Graph OAuth scope. |
 
 Secret overrides are encrypted at rest using Fernet with `SETTINGS_ENC_KEY`. `SESSION_SECRET` is not used for settings encryption.
 
 Advanced webhook abuse timings stay in environment configuration. Only `webhook_abuse_blocking_enabled`, `webhook_abuse_failure_limit`, and `webhook_abuse_window_minutes` are admin-overridable runtime settings.
+
+`BOTFRAMEWORK_SCOPE` and `GRAPH_SCOPE` are environment settings only. The current admin settings API does not expose runtime overrides for those OAuth scopes.
 
 `TRUSTED_PROXY_IPS` is environment-only because the bundled HAProxy consumes the same value at container start. The admin readiness view reports the effective compose subnet, trusted upstream proxies, and combined trust chain as read-only diagnostics.
 

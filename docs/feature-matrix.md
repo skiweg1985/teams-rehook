@@ -22,13 +22,15 @@ Status values:
 | 🔐 Security | Session authentication | 🔐 Security relevant | Admin UI and private APIs require authenticated sessions. | Administrators, developers |
 | 🔐 Security | CSRF protection | 🔐 Security relevant | Authenticated write requests require `X-CSRF-Token`. | Developers |
 | 🔐 Security | Relay URL rotation | 🔐 Security relevant | Regenerating a route URL immediately invalidates the previous URL. | Administrators |
+| 🔐 Security | Per-route client IP allowlists | 🔐 Security relevant | Routes can be public or restricted to configured IP addresses/CIDR ranges. | Administrators |
 | 🔐 Security | Secret masking | 🔐 Security relevant | Secret settings are write-only in API responses and UI diagnostics. | Administrators |
+| 🔐 Security | Bot Access controls | 🔐 Security relevant | Admins can authorize Teams bot users/groups and assign route command permissions. | Administrators |
 | ⚙️ Administration | Runtime settings overrides | ⚙️ Administrative | Selected settings can be overridden in the database through the admin settings API/UI. | Administrators |
 | ⚙️ Administration | Readiness diagnostics | ⚙️ Administrative | Reports non-secret Bot, Graph, runtime, OAuth, payload, retention, and cookie state. | Administrators |
 | ⚙️ Administration | User management | ✅ Available | Admins can create users, edit access state and roles, and set passwords. | Administrators |
 | 📊 Monitoring | Delivery event log | ✅ Available | Records successful, failed, and rejected webhook attempts with normalized metadata. | Users, administrators |
 | 📊 Monitoring | Audit and system logs | ✅ Available | Records admin actions and captured Teams bot activity events. | Administrators |
-| 📊 Monitoring | Machine monitoring endpoint | ✅ Available | Provides API-key protected JSON status at `/api/v1/monitoring/status`. | Administrators |
+| 📊 Monitoring | Machine monitoring endpoints | ✅ Available | Provides API-key protected JSON status at `/api/v1/monitoring/status` and PRTG sensor JSON at `/api/v1/monitoring/prtg`. | Administrators |
 | 📊 Monitoring | Prometheus/OpenMetrics | ❓ Unclear / to verify | The repository documents this as a future follow-up, not an implemented endpoint. | Administrators |
 | 🧪 Testing | Mock delivery mode | 🧪 Experimental | Simulates successful delivery without contacting Bot Framework. | Developers, administrators |
 | 🛠️ Developer Functions | Full validation script | ✅ Available | `npm run test` builds the frontend, checks backend syntax, and runs pytest. | Developers, maintainers |

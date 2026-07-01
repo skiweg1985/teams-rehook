@@ -4,7 +4,7 @@
 
 Microsoft Graph target lookup is implemented with app-only credentials. This keeps the relay service aligned with the service-owned operating model and avoids coupling route administration to a personal Microsoft 365 user session.
 
-The Graph lookup is only target discovery metadata for now. Bot delivery still uses the configured Bot Framework service URL and conversation ID, and each route must be validated with a test message before it is treated as reachable.
+Graph lookup is target discovery metadata and is also used for Bot Access group search/member lookup. Graph delivery is implemented separately through a delegated service-user connection. Every route must still be validated with a test message before it is treated as reachable.
 
 ## Required Configuration
 
@@ -38,6 +38,9 @@ Settings readiness also tries optional read-only metadata checks against `/servi
 
 - `GET /api/v1/teams-targets/search?kind=user|team|group&q=...`
 - `GET /api/v1/teams-targets/teams/{team_id}/channels?q=...`
+- `GET /api/v1/teams-targets/groups/{group_id}/members?offset=0&limit=100`
+- `GET /api/v1/teams-targets/groups/{group_id}/members/count`
+- `GET /api/v1/teams-targets/chats?q=...`
 - `POST /api/v1/webhook-routes/refresh-graph-names`
 - `POST /api/v1/webhook-routes/{route_id}/refresh-graph-names`
 
@@ -60,6 +63,7 @@ Responses use one shape:
 - Whether the existing Teams app/bot is installed in each selected target context.
 - Whether a selected Graph channel can be turned into a Bot Framework conversation reference without prior bot installation or interaction.
 - Whether proactive installation or proactive conversation creation should be added later, and which Teams app installation permissions would be acceptable for that path.
+- Tenant-specific approval for Graph permissions and delegated service-user operating model.
 
 ## References
 

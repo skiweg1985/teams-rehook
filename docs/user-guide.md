@@ -63,6 +63,8 @@ Known group chats show a participant summary when Teams Rehook can read the curr
 
 The generated relay URL is copied after creation and can be copied again from the route table.
 
+Routes can also be restricted by client IP address. Leave **Client IP access** public when any source with the relay URL may call the route. Use restricted mode only when the source system has stable IP addresses or CIDR ranges, and make sure proxy trust settings are correct so Teams Rehook sees the real caller IP.
+
 ## Sending Payloads
 
 Teams Rehook accepts:
@@ -117,6 +119,8 @@ Inbound Teams bot messages capture or refresh the conversation reference. The bo
 | `help` | Show available commands. |
 
 Routes created through `register` still need the same operational care as UI-created routes. Treat returned relay URLs as secrets.
+
+Administrators control who can use bot route commands from **Users > Bot Access**. Access can be granted directly to Entra users or through Entra groups, with roles that control actions such as viewing routes, revealing URLs, enabling/disabling routes, deleting routes, managing IP allowlists, and creating chat or channel routes.
 
 ## Monitoring What Happened
 

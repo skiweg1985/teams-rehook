@@ -1,5 +1,7 @@
 # Group Chat Member Summaries Implementation Plan
 
+Status note: this implementation plan has been completed. Current user and operator behavior is documented in [User guide](user-guide.md), [Admin guide](admin-guide.md), [Architecture](architecture.md), and [API reference](api.md).
+
 GitHub issue: https://github.com/skiweg1985/teams-rehook/issues/50
 
 ## Goal

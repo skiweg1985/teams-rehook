@@ -19,6 +19,7 @@ This project follows the structure of [Keep a Changelog](https://keepachangelog.
 
 ### Changed
 
+- Documentation audit: updated API/data-model coverage for Bot Access, Graph OAuth pending flows, group member lookup, webhook URL reveal links, idempotency keys, per-route client IP allowlists, PRTG monitoring, unified event logs, abuse buckets, pending Graph credentials, and generated instance secret rows; marked completed implementation notes as historical; corrected runtime-settings and deployment wording.
 - Documentation audit: corrected post-setup access URLs to the HTTPS `local` profile (`https://localhost:8443`), documented the `setup` profiles, documented the `event_debug_previews_enabled` runtime setting, and added the `event-logs`, `client-events`, and `webhook-abuse-buckets` admin endpoints to the API reference.
 - `./manage.sh restart` now recreates Compose services with the current `.env` values instead of only restarting existing containers, so environment changes apply immediately.
 - Compose network CIDR is now controlled through `COMPOSE_APP_SUBNET`, the backend always trusts that internal HAProxy hop by default, and the status view reports the effective proxy trust chain for operators.

@@ -30,6 +30,7 @@ If you are a user, start with the [User guide](user-guide.md). If you operate th
 
 - [Product requirements](prd-teams-webhook-relay-service.md)
 - [Graph target lookup notes](graph-target-lookup.md)
-- [Graph delivery decision note](graph-delivery-variante-a.md)
+- [Graph delivery historical decision note](graph-delivery-variante-a.md)
+- [Group chat member summaries historical implementation plan](implementation-plan-group-chat-members.md)
 - [Feature ideas backlog](feature-ideas.md)
 - [Documentation audit report](documentation-audit-report.md)

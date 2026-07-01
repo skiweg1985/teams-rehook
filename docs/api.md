@@ -5,7 +5,7 @@ The FastAPI app mounts routes under `API_V1_PREFIX`, which defaults to `/api/v1`
 Interactive docs are available in a running local stack at:
 
 ```text
-http://localhost:8080/api/v1/docs
+https://localhost:8443/api/v1/docs
 ```
 
 ## Authentication
@@ -53,10 +53,11 @@ curl -i -X POST "http://localhost:8080/api/v1/auth/login" \
 | `POST` | `/api/v1/webhook-routes/{route_id}/refresh-graph-names` | Admin session + CSRF | Refresh Graph names for one route. |
 | `POST` | `/api/v1/webhook-routes/{route_id}/refresh-members` | Admin session + CSRF | Refresh participant summary fields for a Bot Framework conversation or Graph chat route. |
 | `GET` | `/api/v1/webhook-routes/{route_id}/deliveries` | Admin session | List recent deliveries for one route. |
+| `GET` | `/api/v1/webhook-url-reveals/{token}` | Temporary reveal token | Reveals a relay URL until the reveal token expires. |
 
 Route create/update payloads are defined by `WebhookRouteCreate` and `WebhookRouteUpdate` in `backend/app/schemas.py`. Supported delivery backends are `bot_framework` and `graph`.
 
-Route responses include best-effort group-chat participant metadata: `member_summary`, `member_count`, `members`, `members_refreshed_at`, and `members_lookup_error`.
+Route responses include client IP access fields (`client_ip_access_mode`, `client_ip_allowlist`) and best-effort group-chat participant metadata (`member_summary`, `member_count`, `members`, `members_refreshed_at`, `members_lookup_error`).
 
 ## Public Relay Ingress
 
@@ -73,6 +74,8 @@ curl -X POST "YOUR_RELAY_URL" \
 ```
 
 The route token is secret. Do not log or publish real relay URLs.
+
+The public relay endpoint also supports an optional `Idempotency-Key` request header. Valid keys are 8-120 characters using letters, numbers, `.`, `_`, `:`, or `-`; repeated requests for the same route/key return the stored delivery result instead of sending a duplicate message.
 
 ## Delivery Events And Logs
 
@@ -112,12 +115,34 @@ Secret setting values are write-only. Responses report configured/missing state,
 
 The readiness runtime payload includes the configured Compose subnet, additional trusted upstream proxies, and the combined effective trust chain used for forwarded client IP resolution.
 
+## Bot Access Administration
+
+These endpoints manage which Microsoft Entra users and groups may operate routes through Teams bot commands.
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/admin/bot-roles` | Admin session + CSRF | List system and custom bot access roles. |
+| `POST` | `/api/v1/admin/bot-roles` | Admin session + CSRF | Create a custom bot access role. |
+| `PATCH` | `/api/v1/admin/bot-roles/{bot_role_id}` | Admin session + CSRF | Update a bot access role. |
+| `DELETE` | `/api/v1/admin/bot-roles/{bot_role_id}` | Admin session + CSRF | Delete an unassigned custom role. |
+| `GET` | `/api/v1/admin/bot-users` | Admin session + CSRF | List directly authorized Teams bot users. |
+| `POST` | `/api/v1/admin/bot-users` | Admin session + CSRF | Authorize a Teams bot user. |
+| `PATCH` | `/api/v1/admin/bot-users/{bot_user_id}` | Admin session + CSRF | Update a Teams bot user's access, status, or role. |
+| `DELETE` | `/api/v1/admin/bot-users/{bot_user_id}` | Admin session + CSRF | Remove a direct Teams bot user grant. |
+| `GET` | `/api/v1/admin/bot-groups` | Admin session + CSRF | List authorized Teams bot groups. |
+| `POST` | `/api/v1/admin/bot-groups` | Admin session + CSRF | Authorize a Teams bot group. |
+| `PATCH` | `/api/v1/admin/bot-groups/{bot_group_id}` | Admin session + CSRF | Update a Teams bot group's access, status, or role. |
+| `DELETE` | `/api/v1/admin/bot-groups/{bot_group_id}` | Admin session + CSRF | Remove a Teams bot group grant. |
+
 ## Graph Delivery OAuth
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `POST` | `/api/v1/admin/graph-delivery/oauth/start` | Admin session + CSRF | Build Microsoft authorization URL for delegated Graph delivery. |
 | `GET` | `/api/v1/admin/graph-delivery/oauth/callback` | Admin session | OAuth callback that stores delegated Graph credential material. |
+| `GET` | `/api/v1/admin/graph-delivery/oauth/pending/{pending_id}` | Admin session + CSRF | Inspect a pending delegated Graph connection before confirmation. |
+| `POST` | `/api/v1/admin/graph-delivery/oauth/pending/{pending_id}/confirm` | Admin session + CSRF | Promote a pending delegated Graph connection to the active service-user credential. |
+| `DELETE` | `/api/v1/admin/graph-delivery/oauth/pending/{pending_id}` | Admin session + CSRF | Cancel a pending delegated Graph connection. |
 | `DELETE` | `/api/v1/admin/graph-delivery/oauth` | Admin session + CSRF | Disconnect delegated Graph delivery. |
 
 The redirect URI is:
@@ -132,6 +157,9 @@ The redirect URI is:
 |---|---|---|---|
 | `POST` | `/api/v1/bot/messages` | Bot Framework bearer token | Receives Teams bot activities, captures conversation references, and handles bot commands. Invalid, missing, expired, mismatched, or incorrectly signed tokens are rejected before persistence. |
 | `GET` | `/api/v1/bot/conversation-references` | Admin session | Lists known Bot Framework conversations. |
+| `GET` | `/api/v1/bot/conversation-references/{reference_id}` | Admin session | Returns one known conversation and linked routes. |
+| `POST` | `/api/v1/bot/conversation-references/{reference_id}/refresh-members` | Admin session + CSRF | Refreshes the stored participant summary for a known conversation. |
+| `DELETE` | `/api/v1/bot/conversation-references/{reference_id}` | Admin session + CSRF | Deletes a known conversation reference when no route still uses it. |
 
 Accepted bot activities store non-sensitive authentication metadata such as validated issuer, audience, service URL match status and validation time. Raw bearer tokens and full JWTs are never stored. Historical bot activity rows created before auth metadata existed may report `auth_status` as `unknown`.
 
@@ -141,8 +169,10 @@ Captured group-chat references include the same best-effort participant metadata
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/api/v1/teams-targets/search?kind=user\|team&q=...` | Admin session | Search Graph users or teams. |
+| `GET` | `/api/v1/teams-targets/search?kind=user\|team\|group&q=...` | Admin session | Search Graph users, teams, or groups. |
 | `GET` | `/api/v1/teams-targets/teams/{team_id}/channels?q=...` | Admin session | List/search channels for a team. |
+| `GET` | `/api/v1/teams-targets/groups/{group_id}/members?offset=0&limit=100` | Admin session | List members for a Graph group when permissions allow it. |
+| `GET` | `/api/v1/teams-targets/groups/{group_id}/members/count` | Admin session | Count members for a Graph group when permissions allow it. |
 | `GET` | `/api/v1/teams-targets/chats?q=...` | Admin session | List/search chats for the delegated service user. |
 
 ## Machine Monitoring
@@ -155,14 +185,14 @@ Captured group-chat references include the same best-effort participant metadata
 Example:
 
 ```bash
-curl "http://localhost:8080/api/v1/monitoring/status" \
+curl "https://localhost:8443/api/v1/monitoring/status" \
   -H "Authorization: Bearer <MONITORING_API_KEY>"
 ```
 
 PRTG HTTP Data Advanced Sensor example:
 
 ```bash
-curl "http://localhost:8080/api/v1/monitoring/prtg" \
+curl "https://localhost:8443/api/v1/monitoring/prtg" \
   -H "Authorization: Bearer <MONITORING_API_KEY>"
 ```
 
