@@ -143,7 +143,9 @@ export function DataTable({
               }
             >
               {row.map((cell, cellIndex) => (
-                <td key={`${rowIndex}-${cellIndex}`}>{cell}</td>
+                <td key={`${rowIndex}-${cellIndex}`} data-label={columns[cellIndex] ?? ""}>
+                  {cell}
+                </td>
               ))}
             </tr>
           ))}
