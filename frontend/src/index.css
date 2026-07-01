@@ -727,48 +727,55 @@ html.dark .app-logo-image--dark {
 }
 
 .data-table.data-table--bot-groups {
-  width: max(100%, 1120px);
+  width: max(100%, 940px);
   table-layout: fixed;
+}
+
+.data-table--bot-groups th {
+  line-height: 1.2;
+  overflow-wrap: normal;
+  white-space: normal;
+  word-break: normal;
 }
 
 .data-table--bot-groups th:nth-child(1),
 .data-table--bot-groups td:nth-child(1) {
-  width: 27%;
+  width: 20%;
 }
 
 .data-table--bot-groups th:nth-child(2),
 .data-table--bot-groups td:nth-child(2) {
-  width: 20%;
+  width: 16%;
 }
 
 .data-table--bot-groups th:nth-child(3),
 .data-table--bot-groups td:nth-child(3) {
-  width: 9%;
+  width: 14%;
 }
 
 .data-table--bot-groups th:nth-child(4),
 .data-table--bot-groups td:nth-child(4) {
-  width: 8%;
+  width: 9%;
 }
 
 .data-table--bot-groups th:nth-child(5),
 .data-table--bot-groups td:nth-child(5) {
-  width: 18%;
+  width: 16%;
 }
 
 .data-table--bot-groups th:nth-child(6),
 .data-table--bot-groups td:nth-child(6) {
-  width: 6%;
+  width: 8%;
 }
 
 .data-table--bot-groups th:nth-child(7),
 .data-table--bot-groups td:nth-child(7) {
-  width: 8%;
+  width: 9%;
 }
 
 .data-table--bot-groups th:nth-child(8),
 .data-table--bot-groups td:nth-child(8) {
-  width: 4%;
+  width: 8%;
 }
 
 .data-table--dashboard-routes {
@@ -1258,8 +1265,8 @@ html.dark .app-logo-image--dark {
 
 .bot-group-name-cell strong {
   min-width: 0;
-  overflow-wrap: normal;
-  word-break: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .bot-group-mail-type-cell span {
