@@ -54,6 +54,7 @@ import { ThemeToggle } from "./theme-toggle";
 import type {
   AdminReadinessOut,
   AuditEventOut,
+  BotConversationReferenceDetailOut,
   BotConversationReferenceOut,
   ClientIpAccessMode,
   DeliveryAuthRefreshOut,
@@ -551,10 +552,43 @@ function FirstAdminSetupScreen() {
 
 function WebhookCopyPage() {
   const inputRef = useRef<HTMLInputElement>(null);
-  const webhookUrl = useMemo(() => new URLSearchParams(window.location.search).get("url") ?? "", []);
+  const revealToken = useMemo(() => new URLSearchParams(window.location.search).get("token") ?? "", []);
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [routeName, setRouteName] = useState("");
+  const [expiresAt, setExpiresAt] = useState("");
+  const [loading, setLoading] = useState(Boolean(revealToken));
+  const [error, setError] = useState(revealToken ? "" : "This webhook URL link is missing or expired.");
   const [status, setStatus] = useState("");
   const [copied, setCopied] = useState(false);
   const copiedTimer = useRef<ReturnType<typeof setTimeout>>();
+
+  useEffect(() => {
+    if (!revealToken) return;
+    let cancelled = false;
+    async function loadReveal() {
+      setLoading(true);
+      setError("");
+      try {
+        const reveal = await api.webhookUrlReveal(revealToken);
+        if (cancelled) return;
+        setWebhookUrl(reveal.webhook_url);
+        setRouteName(reveal.route_name);
+        setExpiresAt(reveal.expires_at);
+      } catch (err) {
+        if (cancelled) return;
+        setWebhookUrl("");
+        setRouteName("");
+        setExpiresAt("");
+        setError(isApiError(err) ? err.message : "This webhook URL link is invalid or expired.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    void loadReveal();
+    return () => {
+      cancelled = true;
+    };
+  }, [revealToken]);
 
   useEffect(() => () => clearTimeout(copiedTimer.current), []);
 
@@ -583,6 +617,7 @@ function WebhookCopyPage() {
         <div>
           <p className="eyebrow">Teams Rehook</p>
           <h1>Copy webhook URL</h1>
+          {routeName ? <p className="copy-route-name">{routeName}</p> : null}
         </div>
         <div className="copy-url-field">
           <label htmlFor="webhook-copy-url">Webhook URL</label>
@@ -591,18 +626,23 @@ function WebhookCopyPage() {
             ref={inputRef}
             readOnly
             value={webhookUrl}
-            placeholder="No webhook URL provided"
+            placeholder={loading ? "Loading webhook URL..." : "No webhook URL available"}
             onFocus={(event) => event.currentTarget.select()}
           />
         </div>
         <button
           className={`primary-button button-with-icon copy-url-button${copied ? " is-copied" : ""}`}
           type="button"
-          disabled={!webhookUrl}
+          disabled={loading || !webhookUrl}
           onClick={() => void copyWebhookUrl()}
         >
           <span className="copy-url-button-label" key={copied ? "copied" : "idle"}>
-            {copied ? (
+            {loading ? (
+              <>
+                <RefreshCw aria-hidden="true" className="button-icon button-icon--spin" focusable="false" />
+                Loading
+              </>
+            ) : copied ? (
               <>
                 <Check aria-hidden="true" className="button-icon" focusable="false" />
                 Copied
@@ -615,6 +655,15 @@ function WebhookCopyPage() {
             )}
           </span>
         </button>
+        {error ? (
+          <p className="copy-status copy-status--error" role="alert">
+            {error}
+          </p>
+        ) : expiresAt ? (
+          <p className="copy-status" role="status">
+            This reveal link expires {formatDateTime(expiresAt)}.
+          </p>
+        ) : null}
         {status ? (
           <p className="copy-status" role="status" aria-live="polite">
             {status}
@@ -1891,6 +1940,11 @@ function currentWebhookRouteId(): string {
   return match ? decodeURIComponent(match[1]) : "";
 }
 
+function currentBotConversationReferenceId(): string {
+  const match = window.location.pathname.match(/^\/webhooks\/conversations\/([^/]+)$/);
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
 function WebhooksPage() {
   const { session, notify } = useAppContext();
   const [routes, setRoutes] = useState<WebhookRouteOut[]>([]);
@@ -1911,6 +1965,7 @@ function WebhooksPage() {
   const [refreshingRouteNameId, setRefreshingRouteNameId] = useState("");
   const [refreshingMembersId, setRefreshingMembersId] = useState("");
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
+  const conversationReferenceId = currentBotConversationReferenceId();
   const routeDetailId = currentWebhookRouteId();
 
   const refresh = useCallback(async () => {
@@ -2073,18 +2128,19 @@ function WebhooksPage() {
 
   const routeViews = routes.map((route) => buildWebhookRouteView(route, featurePolicy));
   const selectedRouteView = routeDetailId ? routeViews.find((view) => view.route.id === routeDetailId) ?? null : null;
-  const pageTitle = routeDetailId && selectedRouteView ? selectedRouteView.route.name : "Webhooks";
-  const pageDescription = routeDetailId && selectedRouteView ? selectedRouteView.summary : undefined;
+  const pageTitle = conversationReferenceId ? "Conversation inspector" : routeDetailId && selectedRouteView ? selectedRouteView.route.name : "Webhooks";
+  const pageDescription = conversationReferenceId ? "Inspect a captured Teams bot conversation and its linked webhook routes." : routeDetailId && selectedRouteView ? selectedRouteView.summary : undefined;
+  const pageEyebrow = conversationReferenceId ? "Bot conversation" : routeDetailId ? "Route workspace" : undefined;
 
   return (
     <>
       <PageIntro
-        eyebrow={routeDetailId ? "Route workspace" : undefined}
+        eyebrow={pageEyebrow}
         title={pageTitle}
         description={pageDescription}
         actions={
           <div className="row-actions">
-            {routeDetailId ? (
+            {routeDetailId || conversationReferenceId ? (
               <button className="secondary-button button-with-icon" type="button" onClick={() => navigateInApp("/webhooks")}>
                 <ChevronLeft aria-hidden="true" className="button-icon" focusable="false" />
                 Back to routes
@@ -2112,7 +2168,17 @@ function WebhooksPage() {
           </div>
         }
       />
-      {routeDetailId ? (
+      {conversationReferenceId ? (
+        <BotConversationReferenceDetailPage
+          referenceId={conversationReferenceId}
+          csrfToken={csrfToken}
+          onCreateRoute={(reference) => setEditing(webhookRouteFromReference(reference))}
+          onDeleted={() => {
+            void refresh();
+            navigateInApp("/webhooks");
+          }}
+        />
+      ) : routeDetailId ? (
         <WebhookRouteDetailPage
           error={error}
           featurePolicy={featurePolicy}
@@ -2202,6 +2268,10 @@ function WebhooksPage() {
           onClose={() => setViewingBotReferences(false)}
           onCreateRoute={(reference) => {
             setEditing(webhookRouteFromReference(reference));
+            setViewingBotReferences(false);
+          }}
+          onInspect={(reference) => {
+            navigateInApp(`/webhooks/conversations/${encodeURIComponent(reference.id)}`);
             setViewingBotReferences(false);
           }}
         />
@@ -2874,9 +2944,11 @@ function WebhookUrlRevealModal({
 function BotConversationReferencesModal({
   onClose,
   onCreateRoute,
+  onInspect,
 }: {
   onClose: () => void;
   onCreateRoute: (reference: BotConversationReferenceOut) => void;
+  onInspect: (reference: BotConversationReferenceOut) => void;
 }) {
   const [references, setReferences] = useState<BotConversationReferenceOut[]>([]);
   const [loading, setLoading] = useState(true);
@@ -2932,9 +3004,15 @@ function BotConversationReferencesModal({
                   <span>{formatRelativeTime(reference.last_seen_at)}</span>
                 </p>
               </div>
-              <button className="secondary-button secondary-button--small" type="button" onClick={() => onCreateRoute(reference)}>
-                Create route
-              </button>
+              <div className="conversation-reference-actions">
+                <button className="secondary-button secondary-button--small button-with-icon" type="button" onClick={() => onInspect(reference)}>
+                  <Info aria-hidden="true" className="button-icon" focusable="false" />
+                  Inspect
+                </button>
+                <button className="secondary-button secondary-button--small" type="button" onClick={() => onCreateRoute(reference)}>
+                  Create route
+                </button>
+              </div>
             </section>
           ))}
         </div>
@@ -2946,6 +3024,323 @@ function BotConversationReferencesModal({
       </div>
     </Modal>
   );
+}
+
+function BotConversationReferenceDetailPage({
+  csrfToken,
+  onCreateRoute,
+  onDeleted,
+  referenceId,
+}: {
+  csrfToken: string;
+  onCreateRoute: (reference: BotConversationReferenceOut) => void;
+  onDeleted: () => void;
+  referenceId: string;
+}) {
+  const { notify } = useAppContext();
+  const [detail, setDetail] = useState<BotConversationReferenceDetailOut | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      setDetail(await api.botConversationReference(referenceId));
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Bot conversation could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
+  }, [referenceId]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  async function refreshMembers() {
+    setRefreshing(true);
+    try {
+      const updated = await api.refreshBotConversationReferenceMembers(csrfToken, referenceId);
+      setDetail(updated);
+      notify({
+        tone: updated.members_lookup_error ? "error" : "success",
+        title: updated.members_lookup_error ? "Member refresh failed" : "Members refreshed",
+        description: updated.members_lookup_error || (updated.member_count ? `${updated.member_count} members found.` : "Conversation metadata is current."),
+      });
+    } catch (err) {
+      notify({
+        tone: "error",
+        title: "Refresh failed",
+        description: isApiError(err) ? err.message : "The member list could not be refreshed.",
+      });
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  async function deleteConversation() {
+    setDeleting(true);
+    try {
+      await api.deleteBotConversationReference(csrfToken, referenceId, true);
+      notify({
+        tone: "info",
+        title: "Conversation deleted",
+        description: detail?.linked_route_count ? `${detail.linked_route_count} linked route${detail.linked_route_count === 1 ? "" : "s"} deleted.` : "No linked routes were deleted.",
+      });
+      setConfirmingDelete(false);
+      onDeleted();
+    } catch (err) {
+      notify({
+        tone: "error",
+        title: "Delete failed",
+        description: isApiError(err) ? err.message : "The conversation could not be deleted.",
+      });
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <Card>
+        <div className="table-state" role="status" aria-live="polite">
+          <div className="spinner spinner--small" aria-hidden="true" />
+          <p>Loading conversation inspector...</p>
+        </div>
+      </Card>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card>
+        <div className="table-state table-state--error" role="alert">
+          <h3>Could not load conversation</h3>
+          <p>{error}</p>
+          <button className="secondary-button secondary-button--small" type="button" onClick={() => void refresh()}>
+            Retry
+          </button>
+        </div>
+      </Card>
+    );
+  }
+
+  if (!detail) {
+    return (
+      <Card>
+        <EmptyState title="Conversation not found" body="This captured Teams conversation no longer exists." />
+      </Card>
+    );
+  }
+
+  const participants = botConversationParticipants(detail);
+  const title = referenceTitle(detail);
+  const actionItems: ResponsiveActionItem[] = [
+    {
+      label: "Create route",
+      icon: Plus,
+      buttonTone: "primary",
+      onClick: () => onCreateRoute(detail),
+    },
+    {
+      label: refreshing ? "Refreshing..." : "Refresh members",
+      icon: RefreshCw,
+      disabled: refreshing,
+      spinning: refreshing,
+      onClick: () => void refreshMembers(),
+    },
+    {
+      label: "Delete conversation",
+      icon: Trash2,
+      tone: "danger",
+      buttonTone: "danger",
+      separated: true,
+      onClick: () => setConfirmingDelete(true),
+    },
+  ];
+
+  return (
+    <>
+      <div className="bot-conversation-workspace" aria-label={`${title} conversation inspector`}>
+        <section className="status-relay-hero status-relay-hero--success" aria-label="Conversation overview">
+          <div className="status-relay-hero-main">
+            <div className="status-relay-indicator status-relay-indicator--success" aria-hidden="true" />
+            <div>
+              <p className="integration-kicker">Captured Teams conversation</p>
+              <h2>{title}</h2>
+              <p>{referenceSubtitle(detail)}</p>
+            </div>
+          </div>
+          <div className="status-relay-metrics">
+            <StatusOverviewMetric label="Scope" value={detail.scope || "unknown"} detail={detail.conversation_type || "Teams conversation"} tone={conversationScopeTone(detail)} />
+            <StatusOverviewMetric label="Last contact" value={formatRelativeTime(detail.last_seen_at)} detail={formatDateTime(detail.last_seen_at)} tone="success" />
+            <StatusOverviewMetric label="Routes" value={String(detail.linked_route_count)} detail={detail.linked_route_count ? "Using this conversation." : "No linked routes."} tone={detail.linked_route_count ? "success" : "neutral"} />
+            <StatusOverviewMetric label="Participants" value={detail.member_count ? String(detail.member_count) : String(participants.length || "-")} detail={detail.members_refreshed_at ? `Refreshed ${formatRelativeTime(detail.members_refreshed_at)}` : "Captured metadata."} tone={detail.members_lookup_error ? "warn" : "neutral"} />
+          </div>
+        </section>
+
+        {detail.members_lookup_error ? (
+          <div className="status-detail-alert">
+            <strong>Member lookup failed</strong>
+            <span>{detail.members_lookup_error}</span>
+          </div>
+        ) : null}
+
+        <section className="webhook-route-inspector webhook-route-workspace-card">
+          <div className="webhook-route-inspector-header">
+            <div>
+              <p className="integration-kicker">Operate</p>
+              <h2>Conversation actions</h2>
+            </div>
+          </div>
+          <ResponsiveActionBar items={actionItems} moreLabel="More conversation actions" />
+        </section>
+
+        <div className="webhook-route-workspace-grid">
+          <section className="webhook-route-inspector webhook-route-workspace-card">
+            <div className="webhook-route-inspector-header">
+              <div>
+                <p className="integration-kicker">Participants</p>
+                <h2>Known members</h2>
+              </div>
+            </div>
+            {participants.length ? (
+              <div className="bot-conversation-member-list">
+                {participants.map((member, index) => (
+                  <div className="bot-conversation-member" key={`${member.id || member.name}-${index}`}>
+                    <strong>{member.name || shortId(member.id) || "Unknown participant"}</strong>
+                    <span>{[member.email, member.user_principal_name, member.aad_object_id ? `AAD ${shortId(member.aad_object_id)}` : ""].filter(Boolean).join(" · ") || member.id || "No member identifiers"}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyGuidance title="No participants captured" body={detail.member_summary || "Teams has not provided a member list for this conversation yet."} />
+            )}
+          </section>
+
+          <section className="webhook-route-inspector webhook-route-workspace-card">
+            <div className="webhook-route-inspector-header">
+              <div>
+                <p className="integration-kicker">Usage</p>
+                <h2>Linked routes</h2>
+              </div>
+            </div>
+            {detail.linked_routes.length ? (
+              <DataTable
+                className="data-table--linked-routes"
+                columns={["Route", "Status", "Backend", "Last delivery", ""]}
+                emptyTitle="No linked routes"
+                emptyBody="Create a webhook route when this conversation should receive relay messages."
+                rows={detail.linked_routes.map((route) => [
+                  <div className="stacked-cell">
+                    <strong>{route.name}</strong>
+                    <span>{route.target_name}</span>
+                  </div>,
+                  <StatusBadge label={route.is_active ? "Active" : "Disabled"} tone={route.is_active ? "success" : "warn"} />,
+                  deliveryBackendLabel(route.delivery_backend),
+                  route.last_delivery_at ? `${route.last_delivery_status || "delivery"} ${formatRelativeTime(route.last_delivery_at)}` : "No deliveries",
+                  <button className="secondary-button secondary-button--small" type="button" onClick={() => navigateInApp(`/webhooks/${encodeURIComponent(route.id)}`)}>
+                    Open
+                  </button>,
+                ])}
+                rowKey={(index) => detail.linked_routes[index]?.id ?? index}
+              />
+            ) : (
+              <EmptyGuidance title="No linked routes" body="Create a webhook route when this conversation should receive relay messages." />
+            )}
+          </section>
+        </div>
+
+        <section className="webhook-route-inspector webhook-route-workspace-card">
+          <div className="webhook-route-inspector-header">
+            <div>
+              <p className="integration-kicker">Technical</p>
+              <h2>Conversation identifiers</h2>
+            </div>
+          </div>
+          <dl className="definition-list definition-list--compact advanced-definition-list bot-conversation-technical-list">
+            {botConversationTechnicalRows(detail).map((row) => (
+              <FragmentPair key={row.label} label={row.label} value={row.value || "-"} />
+            ))}
+          </dl>
+        </section>
+      </div>
+
+      {confirmingDelete ? (
+        <ConfirmModal
+          title="Delete bot conversation"
+          description={`Delete ${title}?`}
+          confirmLabel="Delete conversation"
+          busyLabel="Deleting..."
+          busy={deleting}
+          onClose={() => setConfirmingDelete(false)}
+          onConfirm={() => void deleteConversation()}
+        >
+          <div className="warning-box">
+            <strong>
+              {detail.linked_route_count
+                ? `${detail.linked_route_count} linked route${detail.linked_route_count === 1 ? "" : "s"} will be deleted too.`
+                : "This removes the captured conversation reference."}
+            </strong>
+            {detail.linked_routes.length ? (
+              <>
+                <p>These relay URLs will stop working immediately:</p>
+                <ul className="destructive-route-list">
+                  {detail.linked_routes.map((route) => (
+                    <li key={route.id}>{route.name}</li>
+                  ))}
+                </ul>
+              </>
+            ) : (
+              <p>No webhook routes currently use this conversation.</p>
+            )}
+          </div>
+        </ConfirmModal>
+      ) : null}
+    </>
+  );
+}
+
+function botConversationParticipants(reference: BotConversationReferenceOut) {
+  if (reference.members.length) return reference.members;
+  if (reference.user_name || reference.user_id || reference.graph_user_id) {
+    return [
+      {
+        id: reference.user_id || reference.graph_user_id,
+        name: reference.user_name,
+        aad_object_id: reference.graph_user_id,
+        email: "",
+        user_principal_name: "",
+      },
+    ];
+  }
+  return [];
+}
+
+function botConversationTechnicalRows(reference: BotConversationReferenceOut): Array<{ label: string; value: ReactNode }> {
+  return [
+    { label: "Service URL", value: <code>{reference.service_url || "-"}</code> },
+    { label: "Conversation ID", value: <code>{reference.conversation_id || "-"}</code> },
+    { label: "Tenant ID", value: <code>{reference.tenant_id || "-"}</code> },
+    { label: "Team ID", value: <code>{reference.team_id || "-"}</code> },
+    { label: "Graph team ID", value: <code>{reference.graph_team_id || "-"}</code> },
+    { label: "Channel ID", value: <code>{reference.channel_id || "-"}</code> },
+    { label: "User ID", value: <code>{reference.user_id || "-"}</code> },
+    { label: "Graph user ID", value: <code>{reference.graph_user_id || "-"}</code> },
+    { label: "Raw activity", value: reference.raw_activity_type || "-" },
+    { label: "Created", value: formatDateTime(reference.created_at) },
+    { label: "Updated", value: formatDateTime(reference.updated_at) },
+  ];
+}
+
+function conversationScopeTone(reference: BotConversationReferenceOut): StatusTone {
+  if (reference.scope === "channel" || reference.scope === "chat") return "success";
+  if (reference.scope === "team" || reference.scope === "user") return "neutral";
+  return "warn";
 }
 
 function referenceTitle(reference: BotConversationReferenceOut): string {
@@ -4476,6 +4871,14 @@ const SETTING_META: Record<string, SettingMeta> = {
     unit: "bytes",
     display: "number",
   },
+  webhook_url_reveal_ttl_hours: {
+    section: "runtime",
+    label: "URL reveal lifetime",
+    description: "How long Teams-generated webhook URL reveal links stay usable.",
+    unit: "hours",
+    display: "number",
+    sourceLabel: "App",
+  },
   webhook_abuse_blocking_enabled: {
     section: "runtime",
     label: "Abuse blocking",
@@ -4573,6 +4976,7 @@ const RUNTIME_SETTING_KEYS = [
   "session_secure_cookie",
   "bot_default_service_url",
   "webhook_max_payload_bytes",
+  "webhook_url_reveal_ttl_hours",
   "webhook_abuse_blocking_enabled",
   "webhook_abuse_failure_limit",
   "webhook_abuse_window_minutes",
@@ -6465,6 +6869,8 @@ function RuntimeSnapshotCard({ onCopy, readiness }: { onCopy: (value: string, la
           <dd>{readiness.runtime.trusted_proxy_chain || "-"}</dd>
           <dt>Payload limit</dt>
           <dd>{formatBytes(readiness.runtime.webhook_max_payload_bytes)}</dd>
+          <dt>URL reveal lifetime</dt>
+          <dd>{readiness.runtime.webhook_url_reveal_ttl_hours} hours</dd>
           <dt>Log retention</dt>
           <dd>{readiness.runtime.log_retention_days} days</dd>
           <dt>Cleanup interval</dt>

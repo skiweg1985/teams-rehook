@@ -123,6 +123,17 @@ class WebhookDeliveryEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
 
 
+class WebhookUrlRevealToken(Base):
+    __tablename__ = "webhook_url_reveal_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    route_id: Mapped[str] = mapped_column(ForeignKey("webhook_routes.id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
+
+
 class WebhookAbuseBucket(Base):
     __tablename__ = "webhook_abuse_buckets"
 

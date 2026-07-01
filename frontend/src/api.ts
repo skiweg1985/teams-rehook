@@ -2,6 +2,7 @@ import type {
   AdminReadinessOut,
   ApiError,
   AuditEventOut,
+  BotConversationReferenceDetailOut,
   BotConversationReferenceOut,
   DeliveryAuthRefreshOut,
   EventLogEntryPageOut,
@@ -31,6 +32,7 @@ import type {
   WebhookRouteOut,
   WebhookRouteTestRequest,
   WebhookRouteUpdate,
+  WebhookUrlRevealOut,
 } from "./types";
 
 type HttpMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
@@ -231,6 +233,9 @@ export const api = {
       csrfToken,
     });
   },
+  webhookUrlReveal(token: string) {
+    return request<WebhookUrlRevealOut>(`/api/v1/webhook-url-reveals/${encodeURIComponent(token)}`);
+  },
   webhookRoutes() {
     return request<WebhookRouteOut[]>("/api/v1/webhook-routes");
   },
@@ -239,6 +244,21 @@ export const api = {
   },
   botConversationReferences() {
     return request<BotConversationReferenceOut[]>("/api/v1/bot/conversation-references");
+  },
+  botConversationReference(id: string) {
+    return request<BotConversationReferenceDetailOut>(`/api/v1/bot/conversation-references/${encodeURIComponent(id)}`);
+  },
+  refreshBotConversationReferenceMembers(csrfToken: string, id: string) {
+    return request<BotConversationReferenceDetailOut>(`/api/v1/bot/conversation-references/${encodeURIComponent(id)}/refresh-members`, {
+      method: "POST",
+      csrfToken,
+    });
+  },
+  deleteBotConversationReference(csrfToken: string, id: string, deleteLinkedRoutes: boolean) {
+    return request<void>(`/api/v1/bot/conversation-references/${encodeURIComponent(id)}?delete_linked_routes=${deleteLinkedRoutes ? "true" : "false"}`, {
+      method: "DELETE",
+      csrfToken,
+    });
   },
   createWebhookRoute(csrfToken: string, body: WebhookRouteCreate) {
     return request<WebhookRouteOut>("/api/v1/webhook-routes", {

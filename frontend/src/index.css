@@ -506,6 +506,13 @@ html.dark .app-logo-image--dark {
   gap: var(--space-2);
 }
 
+.copy-route-name {
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
 .copy-url-field label {
   font-size: 0.875rem;
   font-weight: 700;
@@ -520,6 +527,10 @@ html.dark .app-logo-image--dark {
   margin: 0;
   color: var(--muted);
   font-weight: 700;
+}
+
+.copy-status--error {
+  color: var(--danger);
 }
 
 .copy-url-button {
@@ -4911,6 +4922,58 @@ html.dark .app-logo-image--dark {
 
 .conversation-reference-card .secondary-button--small {
   flex-shrink: 0;
+}
+
+.conversation-reference-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.bot-conversation-workspace {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.bot-conversation-member-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.bot-conversation-member {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+}
+
+.bot-conversation-member strong,
+.bot-conversation-member span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.bot-conversation-member span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.bot-conversation-technical-list code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.destructive-route-list {
+  margin: var(--space-2) 0 0;
+  padding-left: 1.1rem;
+}
+
+.destructive-route-list li + li {
+  margin-top: 4px;
 }
 
 .search-result-list {

@@ -336,6 +336,12 @@ class WebhookRouteDefaultsOut(BaseModel):
     bot_default_service_url: str = ""
 
 
+class WebhookUrlRevealOut(BaseModel):
+    webhook_url: str
+    route_name: str
+    expires_at: datetime
+
+
 class WebhookRouteNameRefreshOut(BaseModel):
     ok: bool = True
     routes_checked: int = 0
@@ -482,6 +488,7 @@ class RuntimeReadinessOut(BaseModel):
     trusted_proxy_ips: str
     trusted_proxy_chain: str
     webhook_max_payload_bytes: int
+    webhook_url_reveal_ttl_hours: int
     log_retention_days: int
     log_cleanup_interval_minutes: int
     event_debug_previews_enabled: bool
@@ -665,3 +672,19 @@ class BotConversationReferenceOut(BaseModel):
     last_seen_at: datetime
     created_at: datetime
     updated_at: datetime
+
+
+class BotConversationLinkedRouteOut(BaseModel):
+    id: str
+    name: str
+    is_active: bool
+    delivery_backend: str
+    target_name: str
+    last_delivery_status: str | None = None
+    last_delivery_at: datetime | None = None
+    updated_at: datetime
+
+
+class BotConversationReferenceDetailOut(BotConversationReferenceOut):
+    linked_routes: list[BotConversationLinkedRouteOut] = Field(default_factory=list)
+    linked_route_count: int = 0

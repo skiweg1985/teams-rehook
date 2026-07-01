@@ -14,7 +14,17 @@ from sqlalchemy.pool import StaticPool
 from app.core.settings_overrides import reset_override_state
 from app.database import Base, get_db
 from app.main import create_app
-from app.models import AuditEvent, BotActivityEvent, Organization, User, WebhookAbuseBucket, WebhookDeliveryEvent, WebhookRoute
+from app.models import (
+    AuditEvent,
+    BotActivityEvent,
+    BotConversationReference,
+    Organization,
+    User,
+    WebhookAbuseBucket,
+    WebhookDeliveryEvent,
+    WebhookRoute,
+    WebhookUrlRevealToken,
+)
 from app.security import dumps_json, hash_secret, lookup_secret_hash
 from app.security import ensure_utc, utcnow
 from app.routers.webhook_routes import _resolve_client_host
@@ -114,6 +124,260 @@ def set_admin_setting(client: TestClient, csrf_token: str, key: str, value: str)
         json={"value": value},
     )
     assert response.status_code == 200
+
+
+def test_webhook_url_reveal_returns_route_url_for_valid_token(client: TestClient, db_session: Session):
+    route = add_route(db_session, token="route-token")
+    reveal_token = "temporary-reveal-token"
+    db_session.add(
+        WebhookUrlRevealToken(
+            organization_id=route.organization_id,
+            route_id=route.id,
+            token_hash=lookup_secret_hash(reveal_token),
+            expires_at=utcnow() + timedelta(hours=24),
+        )
+    )
+    db_session.commit()
+
+    response = client.get(f"/api/v1/webhook-url-reveals/{reveal_token}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["route_name"] == route.name
+    assert body["webhook_url"].endswith("/api/v1/webhooks/route-token")
+    assert "temporary-reveal-token" not in body["webhook_url"]
+
+
+def test_webhook_url_reveal_rejects_expired_token(client: TestClient, db_session: Session):
+    route = add_route(db_session, token="expired-route-token")
+    reveal_token = "expired-reveal-token"
+    db_session.add(
+        WebhookUrlRevealToken(
+            organization_id=route.organization_id,
+            route_id=route.id,
+            token_hash=lookup_secret_hash(reveal_token),
+            expires_at=utcnow() - timedelta(minutes=1),
+        )
+    )
+    db_session.commit()
+
+    response = client.get(f"/api/v1/webhook-url-reveals/{reveal_token}")
+
+    assert response.status_code == 404
+
+
+def test_webhook_url_reveal_rejects_unknown_token(client: TestClient):
+    response = client.get("/api/v1/webhook-url-reveals/unknown-reveal-token")
+
+    assert response.status_code == 404
+
+
+def test_bot_conversation_reference_detail_returns_linked_routes(client: TestClient, db_session: Session):
+    org = db_session.scalar(select(Organization).where(Organization.slug == "default"))
+    assert org is not None
+    reference = BotConversationReference(
+        scope="channel",
+        service_url="https://smba.trafficmanager.net/emea/",
+        conversation_id="conversation-id",
+        graph_team_id="graph-team-id",
+        channel_id="channel-id",
+        conversation_type="channel",
+        team_name="Ops",
+        channel_name="Alerts",
+        user_name="Ada Admin",
+    )
+    linked = WebhookRoute(
+        organization_id=org.id,
+        name="Ops Alerts",
+        route_token_hash=lookup_secret_hash("linked-route"),
+        route_token="linked-route",
+        target_type="bot_conversation",
+        target_name="Ops / Alerts",
+        bot_service_url=reference.service_url,
+        bot_conversation_id=reference.conversation_id,
+        graph_team_id=reference.graph_team_id,
+        graph_channel_id=reference.channel_id,
+    )
+    other = WebhookRoute(
+        organization_id=org.id,
+        name="Other",
+        route_token_hash=lookup_secret_hash("other-route"),
+        route_token="other-route",
+        target_type="bot_conversation",
+        target_name="Other",
+        bot_service_url=reference.service_url,
+        bot_conversation_id="other-conversation",
+    )
+    db_session.add_all([reference, linked, other])
+    db_session.commit()
+    login_admin(client)
+
+    response = client.get(f"/api/v1/bot/conversation-references/{reference.id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == reference.id
+    assert body["linked_route_count"] == 1
+    assert body["linked_routes"][0]["id"] == linked.id
+    assert body["linked_routes"][0]["name"] == "Ops Alerts"
+
+
+def test_bot_conversation_reference_detail_deduplicates_bot_and_graph_route_matches(client: TestClient, db_session: Session):
+    org = db_session.scalar(select(Organization).where(Organization.slug == "default"))
+    assert org is not None
+    reference = BotConversationReference(
+        scope="channel",
+        service_url="https://smba.trafficmanager.net/emea/",
+        conversation_id="conversation-id",
+        graph_team_id="graph-team-id",
+        channel_id="channel-id",
+        conversation_type="channel",
+    )
+    route = WebhookRoute(
+        organization_id=org.id,
+        name="Duplicate Match",
+        route_token_hash=lookup_secret_hash("duplicate-route"),
+        route_token="duplicate-route",
+        target_type="bot_conversation",
+        target_name="Ops / Alerts",
+        bot_service_url=reference.service_url,
+        bot_conversation_id=reference.conversation_id,
+        graph_team_id=reference.graph_team_id,
+        graph_channel_id=reference.channel_id,
+    )
+    db_session.add_all([reference, route])
+    db_session.commit()
+    login_admin(client)
+
+    response = client.get(f"/api/v1/bot/conversation-references/{reference.id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["linked_route_count"] == 1
+    assert [row["id"] for row in body["linked_routes"]] == [route.id]
+
+
+def test_bot_conversation_reference_refresh_members_updates_chat_reference(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def fake_members(**kwargs):
+        assert kwargs["conversation_id"] == "chat-id"
+        return SimpleNamespace(
+            member_summary="Ada Admin, Ben Builder",
+            member_count=2,
+            members=[
+                SimpleNamespace(to_dict=lambda: {"id": "29:ada", "name": "Ada Admin", "aad_object_id": "aad-ada", "email": "", "user_principal_name": ""}),
+                SimpleNamespace(to_dict=lambda: {"id": "29:ben", "name": "Ben Builder", "aad_object_id": "aad-ben", "email": "", "user_principal_name": ""}),
+            ],
+        )
+
+    monkeypatch.setattr("app.routers.bot_messages.fetch_bot_conversation_members", fake_members)
+    reference = BotConversationReference(
+        scope="chat",
+        service_url="https://smba.trafficmanager.net/emea/",
+        conversation_id="chat-id",
+        conversation_type="groupchat",
+    )
+    db_session.add(reference)
+    db_session.commit()
+    csrf_token = login_admin(client)
+
+    response = client.post(
+        f"/api/v1/bot/conversation-references/{reference.id}/refresh-members",
+        headers={"X-CSRF-Token": csrf_token},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["member_summary"] == "Ada Admin, Ben Builder"
+    assert body["member_count"] == 2
+    assert body["members"][0]["aad_object_id"] == "aad-ada"
+    assert body["members_lookup_error"] == ""
+
+
+def test_bot_conversation_reference_delete_requires_csrf(client: TestClient, db_session: Session):
+    reference = BotConversationReference(
+        scope="chat",
+        service_url="https://smba.trafficmanager.net/emea/",
+        conversation_id="chat-id",
+        conversation_type="groupchat",
+    )
+    db_session.add(reference)
+    db_session.commit()
+    login_admin(client)
+
+    response = client.delete(f"/api/v1/bot/conversation-references/{reference.id}?delete_linked_routes=true")
+
+    assert response.status_code == 403
+
+
+def test_bot_conversation_reference_delete_removes_linked_routes_and_preserves_other_routes(
+    client: TestClient,
+    db_session: Session,
+):
+    org = db_session.scalar(select(Organization).where(Organization.slug == "default"))
+    assert org is not None
+    reference = BotConversationReference(
+        scope="chat",
+        service_url="https://smba.trafficmanager.net/emea/",
+        conversation_id="chat-id",
+        conversation_type="groupchat",
+    )
+    linked = WebhookRoute(
+        organization_id=org.id,
+        name="Linked Chat Route",
+        route_token_hash=lookup_secret_hash("linked-chat"),
+        route_token="linked-chat",
+        target_type="bot_conversation",
+        target_name="Chat",
+        bot_service_url=reference.service_url,
+        bot_conversation_id=reference.conversation_id,
+        graph_target_kind="chat",
+        graph_target_id=reference.conversation_id,
+    )
+    other = WebhookRoute(
+        organization_id=org.id,
+        name="Other Route",
+        route_token_hash=lookup_secret_hash("unlinked-route"),
+        route_token="unlinked-route",
+        target_type="bot_conversation",
+        target_name="Other",
+        bot_service_url=reference.service_url,
+        bot_conversation_id="other-chat-id",
+    )
+    db_session.add_all([reference, linked, other])
+    db_session.flush()
+    event = WebhookDeliveryEvent(
+        organization_id=org.id,
+        route_id=linked.id,
+        route_token_hash=linked.route_token_hash,
+        status="delivered",
+    )
+    db_session.add(event)
+    db_session.commit()
+    linked_id = linked.id
+    other_id = other.id
+    event_id = event.id
+    csrf_token = login_admin(client)
+
+    response = client.delete(
+        f"/api/v1/bot/conversation-references/{reference.id}?delete_linked_routes=true",
+        headers={"X-CSRF-Token": csrf_token},
+    )
+
+    assert response.status_code == 204
+    assert db_session.get(BotConversationReference, reference.id) is None
+    assert db_session.get(WebhookRoute, linked_id) is None
+    assert db_session.get(WebhookRoute, other_id) is not None
+    db_session.expire_all()
+    delivery_event = db_session.get(WebhookDeliveryEvent, event_id)
+    assert delivery_event is not None
+    assert delivery_event.route_id is None
+    audit = db_session.scalar(select(AuditEvent).where(AuditEvent.action == "bot_conversation_reference.deleted"))
+    assert audit is not None
+    assert linked_id in json.loads(audit.metadata_json)["linked_route_ids"]
 
 
 def test_admin_route_api_requires_session_and_csrf(client: TestClient):

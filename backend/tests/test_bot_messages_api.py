@@ -13,7 +13,14 @@ from sqlalchemy.pool import StaticPool
 from app.core.config import get_settings
 from app.database import Base, get_db
 from app.main import create_app
-from app.models import AuditEvent, BotActivityEvent, BotConversationReference, WebhookDeliveryEvent, WebhookRoute
+from app.models import (
+    AuditEvent,
+    BotActivityEvent,
+    BotConversationReference,
+    WebhookDeliveryEvent,
+    WebhookRoute,
+    WebhookUrlRevealToken,
+)
 from app.routers.bot_messages import _refresh_reference_chat_members, require_bot_framework_auth
 from app.security import loads_json, utcnow
 from app.services.bot_conversation_members import BotConversationMembersError
@@ -57,13 +64,22 @@ def card_from_sent_reply(reply: dict) -> dict:
     return sent_message.activity["attachments"][0]["content"]
 
 
-def assert_copy_webhook_action(card: dict, webhook_url: str) -> None:
-    action = next(action for action in card["actions"] if action["title"] == "Copy webhook URL")
+def assert_reveal_webhook_action(client: TestClient, db: Session, card: dict, route: WebhookRoute) -> None:
+    action = next(action for action in card["actions"] if action["title"] == "Open webhook URL")
     assert action["type"] == "Action.OpenUrl"
     parsed = urllib.parse.urlparse(action["url"])
     assert parsed.path == "/copy-webhook"
-    assert "/api/v1/webhooks/" not in parsed.path
-    assert urllib.parse.parse_qs(parsed.query) == {"url": [webhook_url]}
+    query = urllib.parse.parse_qs(parsed.query)
+    assert set(query) == {"token"}
+    token = query["token"][0]
+    assert "/api/v1/webhooks/" not in action["url"]
+    reveal = db.scalar(select(WebhookUrlRevealToken).where(WebhookUrlRevealToken.route_id == route.id))
+    assert reveal is not None
+    response = client.get(f"/api/v1/webhook-url-reveals/{token}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["route_name"] == route.name
+    assert body["webhook_url"] == expected_webhook_url(route.route_token)
 
 
 def expected_webhook_url(route_token: str) -> str:
@@ -316,7 +332,7 @@ def test_register_command_creates_webhook_route_from_current_conversation(monkey
     assert body["handled_command"] is True
     assert body["command"] == "register"
     assert body["reply_sent"] is True
-    assert "/webhooks/" in body["reply_text"]
+    assert "/webhooks/" not in body["reply_text"]
     route = db.scalar(select(WebhookRoute).where(WebhookRoute.name == "Jira Alerts"))
     assert route is not None
     assert route.bot_conversation_id == "19:channel@thread.tacv2"
@@ -336,7 +352,7 @@ def test_register_command_creates_webhook_route_from_current_conversation(monkey
     card = attachment["content"]
     assert card["msteams"] == {"width": "Full"}
     assert route.route_token
-    assert_copy_webhook_action(card, expected_webhook_url(route.route_token))
+    assert_reveal_webhook_action(client, db, card, route)
     assert any(action["type"] == "Action.ToggleVisibility" for action in card["actions"])
     assert any(item.get("id") == "technicalDetails" and item.get("isVisible") is False for item in card["body"])
     db.close()
@@ -537,21 +553,21 @@ def test_webhook_and_info_commands_reply_with_route_and_reference_details(monkey
     webhook_response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "webhook Personal Alerts"})
     info_response = client.post("/api/v1/bot/messages", json={**base_activity, "text": "info"})
 
+    route = db.scalar(select(WebhookRoute).where(WebhookRoute.name == "Personal Alerts"))
+    assert route is not None
     assert webhook_response.status_code == 200
-    assert "Webhook URL for `Personal Alerts`" in webhook_response.json()["reply_text"]
+    assert "Webhook URL for `Personal Alerts` is available" in webhook_response.json()["reply_text"]
+    assert expected_webhook_url(route.route_token) not in webhook_response.json()["reply_text"]
     assert info_response.status_code == 200
     reply_text = info_response.json()["reply_text"]
     assert "AAD user ID: `aad-user-id`" in reply_text
     assert "Conversation ID: `conversation-id`" in reply_text
     assert "Linked route: `Personal Alerts`" in reply_text
-    route = db.scalar(select(WebhookRoute).where(WebhookRoute.name == "Personal Alerts"))
-    assert route is not None
     assert route.route_token
-    webhook_url = expected_webhook_url(route.route_token)
     webhook_card = card_from_sent_reply(sent_replies[1])
     info_card = card_from_sent_reply(sent_replies[2])
-    assert_copy_webhook_action(webhook_card, webhook_url)
-    assert_copy_webhook_action(info_card, webhook_url)
+    assert_reveal_webhook_action(client, db, webhook_card, route)
+    assert_reveal_webhook_action(client, db, info_card, route)
     db.close()
 
 
@@ -673,8 +689,8 @@ def test_info_command_lists_all_linked_routes_with_core_details(monkeypatch):
     assert "Linked routes: `2`" in reply_text
     assert "`Primary Alerts`" in reply_text
     assert "`Secondary Alerts`" in reply_text
-    assert expected_webhook_url(primary.route_token) in reply_text
-    assert expected_webhook_url(secondary.route_token) in reply_text
+    assert expected_webhook_url(primary.route_token) not in reply_text
+    assert expected_webhook_url(secondary.route_token) not in reply_text
     assert "Team: Operations" in reply_text
     assert "Channel: Ops Alerts" in reply_text
     assert "User: Ada Admin" in reply_text
@@ -682,12 +698,11 @@ def test_info_command_lists_all_linked_routes_with_core_details(monkeypatch):
     assert "Details: info Secondary Alerts" in reply_text
     info_card = card_from_sent_reply(sent_replies[2])
     card_text = repr(info_card)
-    primary_url = expected_webhook_url(primary.route_token)
-    secondary_url = expected_webhook_url(secondary.route_token)
-    assert f"URL: [{primary_url}](" in card_text
-    assert f"URL: [{secondary_url}](" in card_text
-    assert f"/copy-webhook?url={urllib.parse.quote_plus(primary_url)}" in card_text
-    assert f"/copy-webhook?url={urllib.parse.quote_plus(secondary_url)}" in card_text
+    assert "URL: [Open webhook URL](" in card_text
+    assert expected_webhook_url(primary.route_token) not in card_text
+    assert expected_webhook_url(secondary.route_token) not in card_text
+    assert "/copy-webhook?token=" in card_text
+    assert "/copy-webhook?url=" not in card_text
     db.close()
 
 

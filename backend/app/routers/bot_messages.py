@@ -9,14 +9,27 @@ from html import unescape
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from sqlalchemy import select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.settings_overrides import get_effective_settings
 from app.database import get_db
-from app.deps import record_audit, require_admin
-from app.models import BotActivityEvent, BotConversationReference, Organization, User, WebhookDeliveryEvent, WebhookRoute
-from app.schemas import BotActivityIngestOut, BotConversationReferenceOut
+from app.deps import record_audit, require_admin, require_csrf
+from app.models import (
+    BotActivityEvent,
+    BotConversationReference,
+    Organization,
+    User,
+    WebhookDeliveryEvent,
+    WebhookRoute,
+    WebhookUrlRevealToken,
+)
+from app.schemas import (
+    BotActivityIngestOut,
+    BotConversationLinkedRouteOut,
+    BotConversationReferenceDetailOut,
+    BotConversationReferenceOut,
+)
 from app.security import dumps_json, ensure_utc, issue_plain_secret, lookup_secret_hash, utcnow
 from app.services.client_ip_allowlist import (
     CLIENT_IP_ACCESS_PUBLIC,
@@ -194,6 +207,98 @@ def list_bot_conversation_references(admin: User = Depends(require_admin), db: S
     return references
 
 
+@router.get("/bot/conversation-references/{reference_id}", response_model=BotConversationReferenceDetailOut)
+def get_bot_conversation_reference(reference_id: str, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    reference = _get_conversation_reference(db, reference_id)
+    linked_routes = _find_routes_for_conversation_reference(db, admin.organization_id, reference)
+    return _reference_detail_out(reference, linked_routes)
+
+
+@router.post(
+    "/bot/conversation-references/{reference_id}/refresh-members",
+    response_model=BotConversationReferenceDetailOut,
+    dependencies=[Depends(require_csrf)],
+)
+def refresh_bot_conversation_reference_members(
+    reference_id: str,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    reference = _get_conversation_reference(db, reference_id)
+    _refresh_reference_chat_members(reference, force=True)
+    linked_routes = _find_routes_for_conversation_reference(db, admin.organization_id, reference)
+    record_audit(
+        db,
+        action="bot_conversation_reference.members_refreshed",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata={
+            "conversation_reference_id": reference.id,
+            "conversation_id": reference.conversation_id,
+            "member_count": reference.member_count,
+            "lookup_error": bool(reference.members_lookup_error),
+        },
+    )
+    db.commit()
+    db.refresh(reference)
+    linked_routes = _find_routes_for_conversation_reference(db, admin.organization_id, reference)
+    return _reference_detail_out(reference, linked_routes)
+
+
+@router.delete(
+    "/bot/conversation-references/{reference_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_csrf)],
+)
+def delete_bot_conversation_reference(
+    reference_id: str,
+    delete_linked_routes: bool = False,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    reference = _get_conversation_reference(db, reference_id)
+    linked_routes = _find_routes_for_conversation_reference(db, admin.organization_id, reference)
+    if linked_routes and not delete_linked_routes:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Conversation is still used by webhook routes. Confirm linked route deletion first.",
+        )
+    linked_route_ids = [route.id for route in linked_routes]
+    for route in linked_routes:
+        db.execute(update(WebhookDeliveryEvent).where(WebhookDeliveryEvent.route_id == route.id).values(route_id=None))
+        record_audit(
+            db,
+            action="webhook_route.deleted",
+            actor_type="user",
+            actor_id=admin.id,
+            organization_id=admin.organization_id,
+            metadata={
+                "webhook_route_id": route.id,
+                "name": route.name,
+                "deleted_with_conversation_reference_id": reference.id,
+            },
+        )
+        db.delete(route)
+    record_audit(
+        db,
+        action="bot_conversation_reference.deleted",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata={
+            "conversation_reference_id": reference.id,
+            "conversation_id": reference.conversation_id,
+            "linked_route_ids": linked_route_ids,
+            "linked_route_count": len(linked_route_ids),
+            "delete_linked_routes": delete_linked_routes,
+        },
+    )
+    db.delete(reference)
+    db.commit()
+    return None
+
+
 @dataclass(frozen=True)
 class CommandResult:
     handled: bool = False
@@ -268,6 +373,66 @@ def _refresh_reference_chat_members(reference: BotConversationReference, *, forc
     reference.members_refreshed_at = now
     reference.updated_at = now
     return True
+
+
+def _get_conversation_reference(db: Session, reference_id: str) -> BotConversationReference:
+    reference = db.get(BotConversationReference, reference_id)
+    if reference is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation reference not found")
+    return reference
+
+
+def _find_routes_for_conversation_reference(
+    db: Session,
+    organization_id: str,
+    reference: BotConversationReference,
+) -> list[WebhookRoute]:
+    route_filters = []
+    if reference.conversation_id:
+        route_filters.append(WebhookRoute.bot_conversation_id == reference.conversation_id)
+        route_filters.append(
+            (WebhookRoute.graph_target_kind == "chat")
+            & (WebhookRoute.graph_target_id == reference.conversation_id)
+        )
+    if reference.graph_team_id and reference.channel_id:
+        route_filters.append(
+            (WebhookRoute.graph_team_id == reference.graph_team_id)
+            & (WebhookRoute.graph_channel_id == reference.channel_id)
+        )
+    if not route_filters:
+        return []
+    routes = db.scalars(
+        select(WebhookRoute)
+        .where(WebhookRoute.organization_id == organization_id, or_(*route_filters))
+        .order_by(WebhookRoute.updated_at.desc())
+    ).all()
+    routes_by_id: dict[str, WebhookRoute] = {}
+    for route in routes:
+        routes_by_id.setdefault(route.id, route)
+    return list(routes_by_id.values())
+
+
+def _reference_detail_out(
+    reference: BotConversationReference,
+    linked_routes: list[WebhookRoute],
+) -> BotConversationReferenceDetailOut:
+    detail = BotConversationReferenceDetailOut.model_validate(reference)
+    detail.linked_routes = [_linked_route_out(route) for route in linked_routes]
+    detail.linked_route_count = len(linked_routes)
+    return detail
+
+
+def _linked_route_out(route: WebhookRoute) -> BotConversationLinkedRouteOut:
+    return BotConversationLinkedRouteOut(
+        id=route.id,
+        name=route.name,
+        is_active=route.is_active,
+        delivery_backend=route.delivery_backend,
+        target_name=route.target_name,
+        last_delivery_status=route.last_delivery_status,
+        last_delivery_at=route.last_delivery_at,
+        updated_at=route.updated_at,
+    )
 
 
 def _scope_for(captured: dict[str, str]) -> str:
@@ -477,8 +642,8 @@ def _open_url_action(title: str, url: str) -> dict[str, str]:
     return {"type": "Action.OpenUrl", "title": title, "url": url}
 
 
-def _copy_webhook_url_action(webhook_url: str) -> dict[str, str]:
-    return _open_url_action("Copy webhook URL", _build_webhook_copy_url(webhook_url))
+def _copy_webhook_url_action(reveal_url: str) -> dict[str, str]:
+    return _open_url_action("Open webhook URL", reveal_url)
 
 
 def _technical_fields(captured: dict[str, str]) -> list[tuple[str, str]]:
@@ -494,7 +659,7 @@ def _technical_fields(captured: dict[str, str]) -> list[tuple[str, str]]:
     ]
 
 
-def _route_command_activity(route: WebhookRoute, verb: str, webhook_url: str, captured: dict[str, str]) -> dict[str, Any]:
+def _route_command_activity(route: WebhookRoute, verb: str, reveal_url: str, captured: dict[str, str]) -> dict[str, Any]:
     target_name = _target_name(captured)
     return _command_activity(
         f"Route {verb}",
@@ -504,24 +669,24 @@ def _route_command_activity(route: WebhookRoute, verb: str, webhook_url: str, ca
             ("Target", target_name),
             ("Scope", _scope_for(captured)),
         ],
-        long_fields=[("Webhook URL", webhook_url)],
+        long_fields=[("Webhook URL", "Open the button below to view and copy this URL.")],
         technical_fields=_technical_fields(captured),
-        actions=[_copy_webhook_url_action(webhook_url)],
+        actions=[_copy_webhook_url_action(reveal_url)] if reveal_url else [],
     )
 
 
-def _webhook_command_activity(route: WebhookRoute, webhook_url: str) -> dict[str, Any]:
+def _webhook_command_activity(route: WebhookRoute, reveal_url: str) -> dict[str, Any]:
     return _command_activity(
         "Webhook URL",
-        "Use this stable URL for incoming webhook requests.",
+        "Open the button below to view and copy the stable incoming webhook URL.",
         facts=[
             ("Route", route.name),
             ("Target", route.target_name),
             ("Status", "active" if route.is_active else "inactive"),
             ("Client IP access", _client_ip_access_summary(route)),
         ],
-        long_fields=[("Webhook URL", webhook_url)],
-        actions=[_copy_webhook_url_action(webhook_url)],
+        long_fields=[("Webhook URL", "Available through the button below.")],
+        actions=[_copy_webhook_url_action(reveal_url)] if reveal_url else [],
     )
 
 
@@ -529,10 +694,10 @@ def _info_detail_command_activity(
     captured: dict[str, str],
     reference: BotConversationReference | None,
     linked_route: WebhookRoute | None,
+    reveal_url: str = "",
 ) -> dict[str, Any]:
-    webhook_url = _build_webhook_url(linked_route.route_token) if linked_route and linked_route.route_token else ""
-    long_fields = [("Webhook URL", webhook_url)] if webhook_url else []
-    actions = [_copy_webhook_url_action(webhook_url)] if webhook_url else []
+    long_fields = [("Webhook URL", "Available through the button below.")] if reveal_url else []
+    actions = [_copy_webhook_url_action(reveal_url)] if reveal_url else []
     facts = [
         *_visible_context_facts(captured, linked_route),
         ("Reference saved", "yes" if reference else "no"),
@@ -554,8 +719,9 @@ def _info_overview_command_activity(
     captured: dict[str, str],
     reference: BotConversationReference | None,
     routes: list[WebhookRoute],
+    reveal_urls: dict[str, str],
 ) -> dict[str, Any]:
-    route_fields = [(route.name, _route_overview_text(route, captured, link_webhook_url=True)) for route in routes]
+    route_fields = [(route.name, _route_overview_text(route, captured, reveal_url=reveal_urls.get(route.id, ""))) for route in routes]
     if not route_fields:
         route_fields = [("Routes", "none")]
     return _command_activity(
@@ -571,11 +737,8 @@ def _info_overview_command_activity(
     )
 
 
-def _route_overview_text(route: WebhookRoute, captured: dict[str, str], *, link_webhook_url: bool = False) -> str:
-    webhook_url = _build_webhook_url(route.route_token) if route.route_token else "-"
-    webhook_label = webhook_url
-    if link_webhook_url and route.route_token:
-        webhook_label = f"[{webhook_url}]({_build_webhook_copy_url(webhook_url)})"
+def _route_overview_text(route: WebhookRoute, captured: dict[str, str], *, reveal_url: str = "") -> str:
+    webhook_label = f"[Open webhook URL]({reveal_url})" if reveal_url else "-"
     lines = [
         f"Status: {'active' if route.is_active else 'inactive'}",
         f"Client IP access: {_client_ip_access_summary(route)}",
@@ -846,17 +1009,17 @@ def _register_route_from_command(
     route.bot_registered_at = utcnow()
     try_resolve_route_graph_names(route)
     db.flush()
-    webhook_url = _build_webhook_url(route.route_token)
+    reveal_url = _issue_webhook_reveal_url(db, route)
     verb = "created" if created else "updated"
     return CommandResult(
         handled=True,
         command="register",
         reply_text=(
             f"Route `{route.name}` {verb} for this conversation.\n\n"
-            f"Webhook URL:\n{webhook_url}\n\n"
+            "Open the webhook URL button to view and copy the route URL.\n\n"
             "Use `info` to inspect the captured Teams IDs."
         ),
-        activity=_route_command_activity(route, verb, webhook_url, effective),
+        activity=_route_command_activity(route, verb, reveal_url, effective),
     )
 
 
@@ -899,12 +1062,12 @@ def _webhook_url_command(db: Session, route_name: str) -> CommandResult:
                 facts=[("Create it with", f"register {route_name}")],
             ),
         )
-    webhook_url = _build_webhook_url(route.route_token)
+    reveal_url = _issue_webhook_reveal_url(db, route)
     return CommandResult(
         handled=True,
         command="webhook",
-        reply_text=f"Webhook URL for `{route.name}`:\n{webhook_url}",
-        activity=_webhook_command_activity(route, webhook_url),
+        reply_text=f"Webhook URL for `{route.name}` is available through the button in this reply.",
+        activity=_webhook_command_activity(route, reveal_url),
     )
 
 
@@ -1015,11 +1178,19 @@ def _info_command(
         f"Reference saved: `{'yes' if reference else 'no'}`",
     ]
     if not route_name and linked_route is None:
+        reveal_urls = {
+            route.id: _issue_webhook_reveal_url(db, route)
+            for route in routes
+            if route.route_token
+        }
         if routes:
             lines.append(f"Linked routes: `{len(routes)}`")
             for route in routes:
                 lines.append(f"- `{route.name}`")
-                lines.extend(f"  {line}" for line in _route_overview_text(route, captured).splitlines())
+                lines.extend(
+                    f"  {line}"
+                    for line in _route_overview_text(route, captured, reveal_url=reveal_urls.get(route.id, "")).splitlines()
+                )
         else:
             lines.append("Linked routes: `none`")
             lines.append("Use `register <route name>` to link a route to this Teams conversation.")
@@ -1027,21 +1198,22 @@ def _info_command(
             handled=True,
             command="info",
             reply_text="\n".join(lines),
-            activity=_info_overview_command_activity(captured, reference, routes),
+            activity=_info_overview_command_activity(captured, reference, routes, reveal_urls),
         )
+    reveal_url = _issue_webhook_reveal_url(db, linked_route) if linked_route and linked_route.route_token else ""
     if linked_route and linked_route.route_token:
         lines.append(f"Linked route: `{linked_route.name}`")
         lines.append(f"Route status: `{'active' if linked_route.is_active else 'inactive'}`")
         lines.append(f"Client IP access: `{_client_ip_access_summary(linked_route)}`")
         lines.append(f"Target: `{linked_route.target_name or '-'}`")
-        lines.append(f"Webhook URL: {_build_webhook_url(linked_route.route_token)}")
+        lines.append("Webhook URL: open the button in this reply to view and copy it.")
     else:
         lines.append("Linked route: `none`")
     return CommandResult(
         handled=True,
         command="info",
         reply_text="\n".join(lines),
-        activity=_info_detail_command_activity(captured, reference, linked_route),
+        activity=_info_detail_command_activity(captured, reference, linked_route, reveal_url),
     )
 
 
@@ -1404,14 +1576,22 @@ def _clip(value: str, limit: int) -> str:
     return value[:limit]
 
 
-def _build_webhook_url(route_token: str) -> str:
+def _issue_webhook_reveal_url(db: Session, route: WebhookRoute) -> str:
+    if not route.route_token:
+        return ""
     settings = get_effective_settings()
-    return f"{settings.app_public_base_url.rstrip('/')}{settings.api_v1_prefix.rstrip('/')}/webhooks/{route_token}"
-
-
-def _build_webhook_copy_url(webhook_url: str) -> str:
-    settings = get_effective_settings()
-    query = urllib.parse.urlencode({"url": webhook_url})
+    now = utcnow()
+    db.execute(delete(WebhookUrlRevealToken).where(WebhookUrlRevealToken.expires_at <= now))
+    token = issue_plain_secret(24)
+    db.add(
+        WebhookUrlRevealToken(
+            organization_id=route.organization_id,
+            route_id=route.id,
+            token_hash=lookup_secret_hash(token),
+            expires_at=now + timedelta(hours=settings.webhook_url_reveal_ttl_hours),
+        )
+    )
+    query = urllib.parse.urlencode({"token": token})
     return f"{settings.frontend_base_url.rstrip('/')}/copy-webhook?{query}"
 
 

@@ -101,6 +101,11 @@ def test_list_settings_returns_env_defaults(db_session: Session, monkeypatch: py
         assert bot_enabled["env_default"] == "true"
         assert bot_enabled["effective_value"] == "true"
         assert bot_enabled["is_overridden"] is False
+        reveal_ttl = next(item for item in payload if item["key"] == "webhook_url_reveal_ttl_hours")
+        assert reveal_ttl["type"] == "int"
+        assert reveal_ttl["source"] == "application"
+        assert reveal_ttl["env_default"] == "24"
+        assert reveal_ttl["effective_value"] == "24"
         cors_origins = next(item for item in payload if item["key"] == "cors_origins")
         assert cors_origins["type"] == "string"
         assert cors_origins["source"] == "environment"
@@ -361,3 +366,36 @@ def test_delivery_feature_settings_are_application_managed(db_session: Session, 
         assert lookup.status_code == 200
         assert lookup.json()["effective_value"] == "false"
         assert lookup.json()["is_overridden"] is False
+
+
+def test_webhook_url_reveal_ttl_setting_is_application_managed_and_validated(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with make_client(db_session, monkeypatch) as client:
+        csrf = login_admin(client)
+        updated = client.put(
+            "/api/v1/admin/settings/webhook_url_reveal_ttl_hours",
+            headers={"X-CSRF-Token": csrf},
+            json={"value": "48"},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["source"] == "application"
+        assert updated.json()["effective_value"] == "48"
+        assert updated.json()["is_overridden"] is False
+
+        readiness = client.get("/api/v1/admin/readiness", headers={"X-CSRF-Token": csrf})
+        assert readiness.status_code == 200
+        assert readiness.json()["runtime"]["webhook_url_reveal_ttl_hours"] == 48
+
+        too_low = client.put(
+            "/api/v1/admin/settings/webhook_url_reveal_ttl_hours",
+            headers={"X-CSRF-Token": csrf},
+            json={"value": "0"},
+        )
+        too_high = client.put(
+            "/api/v1/admin/settings/webhook_url_reveal_ttl_hours",
+            headers={"X-CSRF-Token": csrf},
+            json={"value": "169"},
+        )
+        assert too_low.status_code == 400
+        assert too_high.status_code == 400

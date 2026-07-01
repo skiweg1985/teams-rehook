@@ -200,6 +200,12 @@ export type WebhookRouteOut = {
   updated_at: string;
 };
 
+export type WebhookUrlRevealOut = {
+  webhook_url: string;
+  route_name: string;
+  expires_at: string;
+};
+
 export type WebhookRouteCreate = {
   name: string;
   is_active: boolean;
@@ -388,6 +394,7 @@ export type AdminReadinessOut = {
     trusted_proxy_ips: string;
     trusted_proxy_chain: string;
     webhook_max_payload_bytes: number;
+    webhook_url_reveal_ttl_hours: number;
     log_retention_days: number;
     log_cleanup_interval_minutes: number;
     event_debug_previews_enabled: boolean;
@@ -481,4 +488,20 @@ export type BotConversationReferenceOut = {
   last_seen_at: string;
   created_at: string;
   updated_at: string;
+};
+
+export type BotConversationLinkedRouteOut = {
+  id: string;
+  name: string;
+  is_active: boolean;
+  delivery_backend: DeliveryBackend;
+  target_name: string;
+  last_delivery_status: "delivered" | "failed" | "rejected" | null;
+  last_delivery_at: string | null;
+  updated_at: string;
+};
+
+export type BotConversationReferenceDetailOut = BotConversationReferenceOut & {
+  linked_routes: BotConversationLinkedRouteOut[];
+  linked_route_count: number;
 };

@@ -13,7 +13,7 @@ from app.core.proxy_trust import combined_trusted_proxy_ips
 from app.core.settings_overrides import get_effective_settings
 from app.database import get_db
 from app.deps import record_audit, require_admin, require_csrf
-from app.models import User, WebhookDeliveryEvent, WebhookRoute
+from app.models import User, WebhookDeliveryEvent, WebhookRoute, WebhookUrlRevealToken
 from app.schemas import (
     WebhookDeliveryOut,
     WebhookDeliveryEventOut,
@@ -28,8 +28,9 @@ from app.schemas import (
     WebhookRouteOut,
     WebhookRouteTestRequest,
     WebhookRouteUpdate,
+    WebhookUrlRevealOut,
 )
-from app.security import dumps_json, issue_plain_secret, loads_json, lookup_secret_hash, utcnow
+from app.security import dumps_json, ensure_utc, issue_plain_secret, loads_json, lookup_secret_hash, utcnow
 from app.services.bot_conversation_members import (
     BotConversationMembersError,
     fetch_bot_conversation_members,
@@ -512,6 +513,31 @@ def test_webhook_route(
         route_id=route.id,
         delivery_event_id=delivery.id,
         message="Test message delivered",
+    )
+
+
+@router.get("/webhook-url-reveals/{token}", response_model=WebhookUrlRevealOut)
+def reveal_webhook_url(token: str, db: Session = Depends(get_db)):
+    token_hash = lookup_secret_hash(token)
+    reveal = db.scalar(select(WebhookUrlRevealToken).where(WebhookUrlRevealToken.token_hash == token_hash))
+    not_found = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook URL reveal link is invalid or expired")
+    if reveal is None:
+        raise not_found
+    expires_at = ensure_utc(reveal.expires_at)
+    if expires_at is None or expires_at <= utcnow():
+        raise not_found
+    route = db.scalar(
+        select(WebhookRoute).where(
+            WebhookRoute.id == reveal.route_id,
+            WebhookRoute.organization_id == reveal.organization_id,
+        )
+    )
+    if route is None or not route.route_token:
+        raise not_found
+    return WebhookUrlRevealOut(
+        webhook_url=_build_webhook_url(route.route_token),
+        route_name=route.name,
+        expires_at=expires_at,
     )
 
 

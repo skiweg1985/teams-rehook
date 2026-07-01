@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     _bot_framework_enabled: bool = PrivateAttr(default=True)
     _graph_lookup_enabled: bool = PrivateAttr(default=True)
     _graph_delivery_enabled: bool = PrivateAttr(default=True)
+    _webhook_url_reveal_ttl_hours: int = PrivateAttr(default=24)
 
     app_name: str = "Teams Rehook"
     app_version: str = "0.1.0"
@@ -75,12 +76,17 @@ class Settings(BaseSettings):
     def graph_delivery_enabled(self) -> bool:
         return self._graph_delivery_enabled
 
+    @property
+    def webhook_url_reveal_ttl_hours(self) -> int:
+        return self._webhook_url_reveal_ttl_hours
+
     def use_delivery_feature_settings(
         self,
         *,
         bot_framework_enabled: bool | None = None,
         graph_lookup_enabled: bool | None = None,
         graph_delivery_enabled: bool | None = None,
+        webhook_url_reveal_ttl_hours: int | None = None,
     ) -> None:
         if bot_framework_enabled is not None:
             self._bot_framework_enabled = bot_framework_enabled
@@ -88,6 +94,8 @@ class Settings(BaseSettings):
             self._graph_lookup_enabled = graph_lookup_enabled
         if graph_delivery_enabled is not None:
             self._graph_delivery_enabled = graph_delivery_enabled
+        if webhook_url_reveal_ttl_hours is not None:
+            self._webhook_url_reveal_ttl_hours = webhook_url_reveal_ttl_hours
 
     @property
     def cors_origin_list(self) -> list[str]:

@@ -550,6 +550,7 @@ def _admin_readiness(db: Session, admin: User, settings=None) -> AdminReadinessO
             trusted_proxy_ips=settings.trusted_proxy_ips,
             trusted_proxy_chain=combined_trusted_proxy_ips(settings.compose_app_subnet, settings.trusted_proxy_ips),
             webhook_max_payload_bytes=settings.webhook_max_payload_bytes,
+            webhook_url_reveal_ttl_hours=settings.webhook_url_reveal_ttl_hours,
             log_retention_days=settings.log_retention_days,
             log_cleanup_interval_minutes=settings.log_cleanup_interval_minutes,
             event_debug_previews_enabled=settings.event_debug_previews_enabled,

@@ -37,6 +37,9 @@ APPLICATION_SETTINGS: dict[str, SettingDefinition] = {
     "graph_delivery_enabled": SettingDefinition(
         "graph_delivery_enabled", "Graph delivery enabled", "bool", False, source="application"
     ),
+    "webhook_url_reveal_ttl_hours": SettingDefinition(
+        "webhook_url_reveal_ttl_hours", "Webhook URL reveal link lifetime", "int", False, source="application"
+    ),
 }
 
 OVERRIDABLE_SETTINGS: dict[str, SettingDefinition] = {
@@ -140,6 +143,11 @@ def _validate_and_normalize(key: str, value: str) -> str:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failure limit must be at least 1")
         if key == "webhook_abuse_window_minutes" and parsed < 1:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Value must be at least 1")
+        if key == "webhook_url_reveal_ttl_hours" and not 1 <= parsed <= 168:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Reveal link lifetime must be between 1 and 168 hours",
+            )
         if key == "log_retention_days" and parsed < 0:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Retention must be zero or greater")
         if key == "log_cleanup_interval_minutes" and parsed < 1:
@@ -278,6 +286,11 @@ def get_effective_settings() -> Settings:
         else None,
         graph_delivery_enabled=_coerce_for_settings("graph_delivery_enabled", cached_settings["graph_delivery_enabled"])
         if "graph_delivery_enabled" in cached_settings
+        else None,
+        webhook_url_reveal_ttl_hours=_coerce_for_settings(
+            "webhook_url_reveal_ttl_hours", cached_settings["webhook_url_reveal_ttl_hours"]
+        )
+        if "webhook_url_reveal_ttl_hours" in cached_settings
         else None,
     )
     return effective

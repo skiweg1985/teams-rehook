@@ -423,6 +423,31 @@ def test_init_db_rejects_placeholder_settings_enc_key(monkeypatch: pytest.Monkey
         get_settings.cache_clear()
 
 
+def test_init_db_creates_webhook_url_reveal_token_table(monkeypatch: pytest.MonkeyPatch):
+    from app.core.config import get_settings
+
+    engine = create_engine("sqlite://", future=True)
+    monkeypatch.setattr("app.seed.engine", engine)
+    monkeypatch.setenv("SESSION_SECRET", "")
+    monkeypatch.setenv("SETTINGS_ENC_KEY", "")
+    get_settings.cache_clear()
+    try:
+        init_db()
+        with engine.connect() as connection:
+            tables = {
+                row[0]
+                for row in connection.execute(text("SELECT name FROM sqlite_master WHERE type = 'table'")).all()
+            }
+            assert "webhook_url_reveal_tokens" in tables
+            columns = {
+                row[1]
+                for row in connection.execute(text("PRAGMA table_info(webhook_url_reveal_tokens)")).all()
+            }
+            assert {"organization_id", "route_id", "token_hash", "expires_at", "created_at"} <= columns
+    finally:
+        get_settings.cache_clear()
+
+
 def test_init_db_does_not_bootstrap_default_admin_when_org_has_user(monkeypatch: pytest.MonkeyPatch):
     from app.core.config import get_settings
 
