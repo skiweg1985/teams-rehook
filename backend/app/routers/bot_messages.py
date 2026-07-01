@@ -310,6 +310,7 @@ class CommandResult:
 
 
 KNOWN_COMMANDS = {"register", "webhook", "disable", "enable", "delete", "info", "allowlist", "help"}
+SAFE_SUBMIT_COMMANDS = {"webhook", "disable", "enable", "info", "help"}
 
 
 def _upsert_reference(db: Session, captured: dict[str, str]) -> BotConversationReference | None:
@@ -496,7 +497,7 @@ def _handle_command(
 ) -> CommandResult:
     if captured["activity_type"] != "message":
         return CommandResult()
-    parsed = _parse_command(_string(activity.get("text")))
+    parsed = _parse_activity_command(activity)
     if not parsed:
         return CommandResult()
     command, argument = parsed
@@ -519,6 +520,35 @@ def _handle_command(
     return CommandResult()
 
 
+def _parse_activity_command(activity: dict[str, Any]) -> tuple[str, str] | None:
+    parsed = _parse_submit_command(_dict(activity.get("value")))
+    if parsed:
+        return parsed
+    return _parse_command(_string(activity.get("text")))
+
+
+def _parse_submit_command(value: dict[str, Any]) -> tuple[str, str] | None:
+    command_value = _string(value.get("command")).strip()
+    if not command_value:
+        return None
+    parsed = _parse_command(command_value)
+    if parsed:
+        command, embedded_argument = parsed
+    else:
+        command = command_value.lower()
+        embedded_argument = ""
+    if command not in SAFE_SUBMIT_COMMANDS:
+        return None
+    route_name = (
+        _string(value.get("route_name"))
+        or _string(value.get("routeName"))
+        or _string(value.get("route"))
+        or _string(value.get("argument"))
+    )
+    argument = " ".join((route_name or embedded_argument).strip().split())
+    return command, argument
+
+
 def _parse_command(text: str) -> tuple[str, str] | None:
     cleaned = unescape(re.sub(r"<at>.*?</at>", "", text, flags=re.IGNORECASE | re.DOTALL)).strip()
     if not cleaned or cleaned.startswith("/"):
@@ -536,10 +566,12 @@ def _command_activity(
     title: str,
     message: str = "",
     *,
+    status: str = "info",
     facts: list[tuple[str, str]] | None = None,
     long_fields: list[tuple[str, str]] | None = None,
+    sections: list[dict[str, Any]] | None = None,
     technical_fields: list[tuple[str, str]] | None = None,
-    actions: list[dict[str, str]] | None = None,
+    actions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     body: list[dict[str, Any]] = [
         {
@@ -547,11 +579,25 @@ def _command_activity(
             "text": title,
             "weight": "Bolder",
             "size": "Medium",
+            "color": _card_status_color(status),
             "wrap": True,
         }
     ]
     if message:
         body.append({"type": "TextBlock", "text": message, "wrap": True, "spacing": "Small"})
+    status_text = _card_status_text(status)
+    if status_text:
+        body.append(
+            {
+                "type": "TextBlock",
+                "text": status_text,
+                "size": "Small",
+                "color": _card_status_color(status),
+                "weight": "Bolder",
+                "spacing": "Small",
+                "wrap": True,
+            }
+        )
     if facts:
         body.append(
             {
@@ -562,6 +608,8 @@ def _command_activity(
         )
     if long_fields:
         body.append({"type": "Container", "spacing": "Medium", "items": _long_field_items(long_fields)})
+    if sections:
+        body.append({"type": "Container", "spacing": "Medium", "items": sections})
     card_actions = list(actions or [])
     if technical_fields:
         body.append(
@@ -610,6 +658,22 @@ def _command_activity(
     }
 
 
+def _card_status_text(status: str) -> str:
+    return {
+        "success": "Status: ready",
+        "warning": "Status: needs attention",
+        "inactive": "Status: inactive",
+    }.get(status, "")
+
+
+def _card_status_color(status: str) -> str:
+    return {
+        "success": "Good",
+        "warning": "Warning",
+        "inactive": "Attention",
+    }.get(status, "Accent")
+
+
 def _long_field_items(fields: list[tuple[str, str]]) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for label, value in fields:
@@ -638,12 +702,35 @@ def _card_value(value: str) -> str:
     return value.strip() if value.strip() else "-"
 
 
-def _open_url_action(title: str, url: str) -> dict[str, str]:
+def _open_url_action(title: str, url: str) -> dict[str, Any]:
     return {"type": "Action.OpenUrl", "title": title, "url": url}
 
 
-def _copy_webhook_url_action(reveal_url: str) -> dict[str, str]:
+def _copy_webhook_url_action(reveal_url: str) -> dict[str, Any]:
     return _open_url_action("Open webhook URL", reveal_url)
+
+
+def _submit_command_action(title: str, command: str, route_name: str = "") -> dict[str, Any]:
+    data: dict[str, str] = {"command": command}
+    if route_name:
+        data["route_name"] = route_name
+    return {"type": "Action.Submit", "title": title, "data": data}
+
+
+def _route_safe_actions(route: WebhookRoute, *, reveal_url: str = "", include_status_toggle: bool = True) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    if reveal_url:
+        actions.append(_copy_webhook_url_action(reveal_url))
+    actions.append(_submit_command_action("Info", "info", route.name))
+    if include_status_toggle:
+        actions.append(
+            _submit_command_action(
+                "Disable" if route.is_active else "Enable",
+                "disable" if route.is_active else "enable",
+                route.name,
+            )
+        )
+    return actions
 
 
 def _technical_fields(captured: dict[str, str]) -> list[tuple[str, str]]:
@@ -664,13 +751,16 @@ def _route_command_activity(route: WebhookRoute, verb: str, reveal_url: str, cap
     return _command_activity(
         f"Route {verb}",
         f"{route.name} is ready for this Teams conversation.",
+        status="success",
         facts=[
             ("Route", route.name),
             ("Target", target_name),
             ("Scope", _scope_for(captured)),
+            ("Route status", "active" if route.is_active else "inactive"),
+            ("Client IP access", _client_ip_access_summary(route)),
         ],
         technical_fields=_technical_fields(captured),
-        actions=[_copy_webhook_url_action(reveal_url)] if reveal_url else [],
+        actions=_route_safe_actions(route, reveal_url=reveal_url),
     )
 
 
@@ -678,13 +768,14 @@ def _webhook_command_activity(route: WebhookRoute, reveal_url: str) -> dict[str,
     return _command_activity(
         "Webhook URL",
         "Open the button below to view and copy the stable incoming webhook URL.",
+        status="success" if route.is_active else "inactive",
         facts=[
             ("Route", route.name),
             ("Target", route.target_name),
             ("Status", "active" if route.is_active else "inactive"),
             ("Client IP access", _client_ip_access_summary(route)),
         ],
-        actions=[_copy_webhook_url_action(reveal_url)] if reveal_url else [],
+        actions=_route_safe_actions(route, reveal_url=reveal_url),
     )
 
 
@@ -705,9 +796,10 @@ def _info_detail_command_activity(
     return _command_activity(
         "Teams conversation captured",
         "This is the Teams context currently available to the relay bot.",
+        status="success" if linked_route and linked_route.is_active else "info",
         facts=facts,
         technical_fields=_technical_fields(captured),
-        actions=actions,
+        actions=[*actions, *(_route_safe_actions(linked_route, include_status_toggle=True) if linked_route else [])],
     )
 
 
@@ -717,9 +809,8 @@ def _info_overview_command_activity(
     routes: list[WebhookRoute],
     reveal_urls: dict[str, str],
 ) -> dict[str, Any]:
-    route_fields = [(route.name, _route_overview_text(route, captured, reveal_url=reveal_urls.get(route.id, ""))) for route in routes]
-    if not route_fields:
-        route_fields = [("Routes", "none")]
+    route_sections = [_route_section_item(route, captured, reveal_url=reveal_urls.get(route.id, "")) for route in routes]
+    long_fields = [] if route_sections else [("Routes", "none")]
     return _command_activity(
         "Teams conversation captured",
         "This is the Teams context currently available to the relay bot.",
@@ -728,9 +819,41 @@ def _info_overview_command_activity(
             ("Reference saved", "yes" if reference else "no"),
             ("Linked routes", str(len(routes))),
         ],
-        long_fields=route_fields,
+        long_fields=long_fields,
+        sections=route_sections,
         technical_fields=_technical_fields(captured),
+        actions=[_submit_command_action("Refresh info", "info")],
     )
+
+
+def _route_section_item(route: WebhookRoute, captured: dict[str, str], *, reveal_url: str = "") -> dict[str, Any]:
+    facts = [
+        ("Status", "active" if route.is_active else "inactive"),
+        ("Target", route.target_name),
+        ("Client IP access", _client_ip_access_summary(route)),
+    ]
+    names = _route_display_names(route, captured)
+    for label, key in [("Team", "team"), ("Channel", "channel"), ("User", "user")]:
+        if names[key]:
+            facts.append((label, names[key]))
+    return {
+        "type": "Container",
+        "style": "emphasis",
+        "spacing": "Medium",
+        "items": [
+            {"type": "TextBlock", "text": route.name, "weight": "Bolder", "wrap": True},
+            {
+                "type": "FactSet",
+                "spacing": "Small",
+                "facts": [{"title": f"{label}:", "value": _card_value(value)} for label, value in facts],
+            },
+            {
+                "type": "ActionSet",
+                "spacing": "Small",
+                "actions": _route_safe_actions(route, reveal_url=reveal_url),
+            },
+        ],
+    }
 
 
 def _route_overview_text(route: WebhookRoute, captured: dict[str, str], *, reveal_url: str = "") -> str:
@@ -850,7 +973,7 @@ def _help_command() -> CommandResult:
 
 
 def _help_command_activity(commands: list[tuple[str, str]]) -> dict[str, Any]:
-    command_rows = []
+    command_rows: list[dict[str, Any]] = []
     for command, description in commands:
         command_rows.append(
             {
@@ -883,46 +1006,25 @@ def _help_command_activity(commands: list[tuple[str, str]]) -> dict[str, Any]:
                 ],
             }
         )
-    return _adaptive_card_activity(
-        [
-            {
-                "type": "TextBlock",
-                "text": "Available commands",
-                "weight": "Bolder",
-                "size": "Medium",
-                "wrap": True,
-            },
-            {
-                "type": "TextBlock",
-                "text": "Use these commands in a chat or channel where the relay bot is installed.",
-                "wrap": True,
-                "spacing": "Small",
-            },
+    return _command_activity(
+        "Available commands",
+        "Use these commands in a chat or channel where the relay bot is installed.",
+        facts=[
+            ("Examples", "register Jira Alerts; info; webhook Jira Alerts"),
+            ("Typed-only", "delete <route name>"),
+        ],
+        sections=[
             {
                 "type": "Container",
                 "spacing": "Medium",
                 "items": command_rows,
-            },
-        ]
-    )
-
-
-def _adaptive_card_activity(body: list[dict[str, Any]]) -> dict[str, Any]:
-    return {
-        "type": "message",
-        "attachments": [
-            {
-                "contentType": "application/vnd.microsoft.card.adaptive",
-                "content": {
-                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                    "type": "AdaptiveCard",
-                    "version": "1.4",
-                    "msteams": {"width": "Full"},
-                    "body": body,
-                },
             }
         ],
-    }
+        actions=[
+            _submit_command_action("Show conversation info", "info"),
+            _submit_command_action("Show help", "help"),
+        ],
+    )
 
 
 def _register_route_from_command(
@@ -938,7 +1040,12 @@ def _register_route_from_command(
             command="register",
             reply_text=reply_text,
             severity="warn",
-            activity=_command_activity("Route name required", "Please include a route name before registering.", facts=[("Example", "register Jira Alerts")]),
+            activity=_command_activity(
+                "Route name required",
+                "Please include a route name before registering.",
+                status="warning",
+                facts=[("Example", "register Jira Alerts")],
+            ),
         )
     if len(route_name) > 200:
         reply_text = "Route names are limited to 200 characters. Please choose a shorter name."
@@ -947,7 +1054,11 @@ def _register_route_from_command(
             command="register",
             reply_text=reply_text,
             severity="warn",
-            activity=_command_activity("Route name too long", "Route names are limited to 200 characters. Please choose a shorter name."),
+            activity=_command_activity(
+                "Route name too long",
+                "Route names are limited to 200 characters. Please choose a shorter name.",
+                status="warning",
+            ),
         )
     if not captured["service_url"] or not captured["conversation_id"] or reference is None:
         reply_text = "I could not capture a complete Bot Framework conversation reference yet. Please send the command again from Teams."
@@ -959,6 +1070,7 @@ def _register_route_from_command(
             activity=_command_activity(
                 "Conversation reference missing",
                 "I could not capture a complete Bot Framework conversation reference yet. Please send the command again from Teams.",
+                status="warning",
             ),
         )
     organization = _default_organization(db)
@@ -1027,7 +1139,12 @@ def _webhook_url_command(db: Session, route_name: str) -> CommandResult:
             command="webhook",
             reply_text=reply_text,
             severity="warn",
-            activity=_command_activity("Route name required", "Please include a route name to look up.", facts=[("Example", "webhook Jira Alerts")]),
+            activity=_command_activity(
+                "Route name required",
+                "Please include a route name to look up.",
+                status="warning",
+                facts=[("Example", "webhook Jira Alerts")],
+            ),
         )
     if len(route_name) > 200:
         reply_text = "Route names are limited to 200 characters. Please choose a shorter name."
@@ -1036,7 +1153,11 @@ def _webhook_url_command(db: Session, route_name: str) -> CommandResult:
             command="webhook",
             reply_text=reply_text,
             severity="warn",
-            activity=_command_activity("Route name too long", "Route names are limited to 200 characters. Please choose a shorter name."),
+            activity=_command_activity(
+                "Route name too long",
+                "Route names are limited to 200 characters. Please choose a shorter name.",
+                status="warning",
+            ),
         )
     organization = _default_organization(db)
     route = db.scalar(
@@ -1055,6 +1176,7 @@ def _webhook_url_command(db: Session, route_name: str) -> CommandResult:
             activity=_command_activity(
                 "Route not found",
                 f"No route named {route_name} exists yet.",
+                status="warning",
                 facts=[("Create it with", f"register {route_name}")],
             ),
         )
@@ -1081,12 +1203,13 @@ def _set_route_active_command(db: Session, captured: dict[str, str], route_name:
     db.flush()
     _record_bot_route_audit(db, f"webhook_route.{verb}", route, captured, previous_is_active=was_active)
     state_text = "already " if was_active == is_active else ""
+    reveal_url = _issue_webhook_reveal_url(db, route) if route.route_token else ""
     reply_text = f"Route `{route.name}` is {state_text}{verb} for this Teams conversation."
     return CommandResult(
         handled=True,
         command=command,
         reply_text=reply_text,
-        activity=_route_status_command_activity(route, verb, captured),
+        activity=_route_status_command_activity(route, verb, captured, reveal_url),
     )
 
 
@@ -1101,6 +1224,7 @@ def _delete_linked_route_command(db: Session, captured: dict[str, str], route_na
             activity=_command_activity(
                 "Route name required",
                 "Please include the route name before deleting.",
+                status="warning",
                 facts=[("Example", "delete Jira Alerts")],
             ),
         )
@@ -1124,6 +1248,7 @@ def _delete_linked_route_command(db: Session, captured: dict[str, str], route_na
         activity=_command_activity(
             "Route deleted",
             "The route has been deleted and its webhook URL will no longer accept messages.",
+            status="inactive",
             facts=[
                 ("Route", route_name),
                 ("Target", target_name),
@@ -1153,6 +1278,7 @@ def _info_command(
                 activity=_command_activity(
                     "Linked route not found",
                     f"No route named {route_name} is linked to this Teams conversation.",
+                    status="warning",
                     facts=[("Linked routes", ", ".join(route.name for route in routes) if routes else "none")],
                 ),
             )
@@ -1283,6 +1409,7 @@ def _set_allowlist_command(
             activity=_command_activity(
                 "Invalid allowlist",
                 str(exc),
+                status="warning",
                 facts=[("Example", "allowlist restricted 203.0.113.10, 10.0.0.0/24")],
             ),
         )
@@ -1295,6 +1422,7 @@ def _set_allowlist_command(
             activity=_command_activity(
                 "Allowlist required",
                 "Restricted routes require at least one client IP or CIDR range.",
+                status="warning",
                 facts=[("Example", "allowlist restricted 203.0.113.10, 10.0.0.0/24")],
             ),
         )
@@ -1336,6 +1464,7 @@ def _allowlist_command_activity(route: WebhookRoute, title: str) -> dict[str, An
     return _command_activity(
         title,
         "Client IP access controls which source addresses may use this route URL.",
+        status="success",
         facts=[
             ("Route", route.name),
             ("Mode", route.client_ip_access_mode or CLIENT_IP_ACCESS_PUBLIC),
@@ -1385,7 +1514,12 @@ def _resolve_linked_route(
             command=command,
             reply_text=reply_text,
             severity="warn",
-            activity=_command_activity(title, message, facts=[("Create it with", "register <route name>")]),
+            activity=_command_activity(
+                title,
+                message,
+                status="warning",
+                facts=[("Create it with", "register <route name>")],
+            ),
         )
     if route_name:
         return routes[0], None
@@ -1401,6 +1535,7 @@ def _resolve_linked_route(
         activity=_command_activity(
             "Route name required",
             "Multiple routes are linked to this Teams conversation. Please include the route name.",
+            status="warning",
             facts=[("Linked routes", ", ".join(route.name for route in routes)), ("Example", example)],
         ),
     )
@@ -1439,20 +1574,26 @@ def _route_name_too_long_command(command: str) -> CommandResult:
         command=command,
         reply_text="Route names are limited to 200 characters. Please choose a shorter name.",
         severity="warn",
-        activity=_command_activity("Route name too long", "Route names are limited to 200 characters. Please choose a shorter name."),
+        activity=_command_activity(
+            "Route name too long",
+            "Route names are limited to 200 characters. Please choose a shorter name.",
+            status="warning",
+        ),
     )
 
 
-def _route_status_command_activity(route: WebhookRoute, verb: str, captured: dict[str, str]) -> dict[str, Any]:
+def _route_status_command_activity(route: WebhookRoute, verb: str, captured: dict[str, str], reveal_url: str) -> dict[str, Any]:
     return _command_activity(
         f"Route {verb}",
         f"{route.name} is {verb} for this Teams conversation.",
+        status="success" if route.is_active else "inactive",
         facts=[
             ("Route", route.name),
             ("Target", route.target_name),
             ("Scope", _scope_for(captured)),
             ("Status", "active" if route.is_active else "inactive"),
         ],
+        actions=_route_safe_actions(route, reveal_url=reveal_url),
     )
 
 

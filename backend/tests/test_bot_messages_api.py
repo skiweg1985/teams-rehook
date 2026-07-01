@@ -64,22 +64,68 @@ def card_from_sent_reply(reply: dict) -> dict:
     return sent_message.activity["attachments"][0]["content"]
 
 
+def collect_card_actions(value: object) -> list[dict]:
+    actions: list[dict] = []
+    if isinstance(value, dict):
+        for action in value.get("actions") or []:
+            if isinstance(action, dict):
+                actions.append(action)
+        for child in value.values():
+            actions.extend(collect_card_actions(child))
+    elif isinstance(value, list):
+        for child in value:
+            actions.extend(collect_card_actions(child))
+    return actions
+
+
+def collect_card_items(value: object, item_type: str) -> list[dict]:
+    items: list[dict] = []
+    if isinstance(value, dict):
+        if value.get("type") == item_type:
+            items.append(value)
+        for child in value.values():
+            items.extend(collect_card_items(child, item_type))
+    elif isinstance(value, list):
+        for child in value:
+            items.extend(collect_card_items(child, item_type))
+    return items
+
+
 def assert_reveal_webhook_action(client: TestClient, db: Session, card: dict, route: WebhookRoute) -> None:
-    action = next(action for action in card["actions"] if action["title"] == "Open webhook URL")
-    assert action["type"] == "Action.OpenUrl"
-    parsed = urllib.parse.urlparse(action["url"])
-    assert parsed.path == "/copy-webhook"
-    query = urllib.parse.parse_qs(parsed.query)
-    assert set(query) == {"token"}
-    token = query["token"][0]
-    assert "/api/v1/webhooks/" not in action["url"]
-    reveal = db.scalar(select(WebhookUrlRevealToken).where(WebhookUrlRevealToken.route_id == route.id))
-    assert reveal is not None
-    response = client.get(f"/api/v1/webhook-url-reveals/{token}")
-    assert response.status_code == 200
-    body = response.json()
-    assert body["route_name"] == route.name
-    assert body["webhook_url"] == expected_webhook_url(route.route_token)
+    for action in collect_card_actions(card):
+        if action.get("title") != "Open webhook URL":
+            continue
+        assert action["type"] == "Action.OpenUrl"
+        parsed = urllib.parse.urlparse(action["url"])
+        assert parsed.path == "/copy-webhook"
+        query = urllib.parse.parse_qs(parsed.query)
+        assert set(query) == {"token"}
+        token = query["token"][0]
+        assert "/api/v1/webhooks/" not in action["url"]
+        reveal = db.scalar(select(WebhookUrlRevealToken).where(WebhookUrlRevealToken.route_id == route.id))
+        assert reveal is not None
+        response = client.get(f"/api/v1/webhook-url-reveals/{token}")
+        assert response.status_code == 200
+        body = response.json()
+        if body["route_name"] != route.name:
+            continue
+        assert body["webhook_url"] == expected_webhook_url(route.route_token)
+        return
+    raise AssertionError(f"Open webhook URL action for {route.name} not found")
+
+
+def card_submit_actions(card: dict, command: str, route_name: str = "") -> list[dict]:
+    matches = []
+    for action in collect_card_actions(card):
+        data = action.get("data")
+        if action.get("type") != "Action.Submit" or not isinstance(data, dict):
+            continue
+        if data.get("command") != command:
+            continue
+        if route_name and data.get("route_name") != route_name:
+            continue
+        matches.append(action)
+    return matches
 
 
 def expected_webhook_url(route_token: str) -> str:
@@ -698,11 +744,14 @@ def test_info_command_lists_all_linked_routes_with_core_details(monkeypatch):
     assert "Details: info Secondary Alerts" in reply_text
     info_card = card_from_sent_reply(sent_replies[2])
     card_text = repr(info_card)
-    assert "URL: [Open webhook URL](" in card_text
     assert expected_webhook_url(primary.route_token) not in card_text
     assert expected_webhook_url(secondary.route_token) not in card_text
     assert "/copy-webhook?token=" in card_text
     assert "/copy-webhook?url=" not in card_text
+    assert_reveal_webhook_action(client, db, info_card, primary)
+    assert_reveal_webhook_action(client, db, info_card, secondary)
+    assert card_submit_actions(info_card, "info", "Primary Alerts")
+    assert card_submit_actions(info_card, "disable", "Primary Alerts")
     db.close()
 
 
@@ -726,8 +775,8 @@ def test_info_command_omits_missing_user_team_and_channel_fields_from_card(monke
     card_text = repr(info_card)
     assert "Personal Alerts" in card_text
     assert "Secondary Alerts" in card_text
-    assert "URL:" in card_text
-    assert "Details: info Personal Alerts" in card_text
+    assert "/copy-webhook?token=" in card_text
+    assert card_submit_actions(info_card, "info", "Personal Alerts")
     assert "User:" not in card_text
     assert "Team:" not in card_text
     assert "Channel:" not in card_text
@@ -756,12 +805,12 @@ def test_info_command_omits_id_only_user_team_and_channel_from_visible_card(monk
 
     assert response.status_code == 200
     info_card = card_from_sent_reply(sent_replies[2])
-    visible_facts = info_card["body"][2]["facts"]
+    visible_facts = collect_card_items(info_card["body"], "FactSet")[0]["facts"]
     visible_fact_titles = {fact["title"] for fact in visible_facts}
     assert "User:" not in visible_fact_titles
     assert "Team:" not in visible_fact_titles
     assert "Channel:" not in visible_fact_titles
-    route_blocks = [item["text"] for item in info_card["body"][3]["items"] if item["type"] == "TextBlock"]
+    route_blocks = [item["text"] for item in collect_card_items(info_card["body"], "TextBlock")]
     assert not any(text.startswith("User:") for text in route_blocks)
     assert not any(text.startswith("Team:") for text in route_blocks)
     assert not any(text.startswith("Channel:") for text in route_blocks)
@@ -807,7 +856,7 @@ def test_info_command_uses_stored_route_target_names_when_current_activity_only_
     assert route is not None
     assert route.target_name == "Operations / Ops Alerts"
     info_card = card_from_sent_reply(sent_replies[1])
-    visible_facts = info_card["body"][2]["facts"]
+    visible_facts = collect_card_items(info_card["body"], "FactSet")[0]["facts"]
     assert {"title": "Team:", "value": "Operations"} in visible_facts
     assert {"title": "Channel:", "value": "Ops Alerts"} in visible_facts
     assert "graph-team-id" in repr(info_card)
@@ -908,6 +957,55 @@ def test_enable_and_disable_commands_target_named_route_when_multiple_are_linked
     db.close()
 
 
+def test_adaptive_card_submit_payloads_execute_safe_route_commands(monkeypatch):
+    sent_replies: list[dict] = []
+    monkeypatch.setattr("app.routers.bot_messages.send_bot_activity", lambda **kwargs: sent_replies.append(kwargs))
+    client, db = make_client()
+    base_activity = {
+        "type": "message",
+        "serviceUrl": "https://smba.trafficmanager.net/emea/",
+        "conversation": {"id": "conversation-id", "conversationType": "personal"},
+        "from": {"id": "29:user", "aadObjectId": "aad-user-id"},
+        "channelData": {"tenant": {"id": "tenant-id"}},
+    }
+    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "register Personal Alerts"}).status_code == 200
+    route = db.scalar(select(WebhookRoute).where(WebhookRoute.name == "Personal Alerts"))
+    assert route is not None
+
+    disable_response = client.post(
+        "/api/v1/bot/messages",
+        json={**base_activity, "text": "", "value": {"command": "disable", "route_name": "Personal Alerts"}},
+    )
+    db.refresh(route)
+
+    assert disable_response.status_code == 200
+    assert disable_response.json()["command"] == "disable"
+    assert route.is_active is False
+    disable_card = card_from_sent_reply(sent_replies[-1])
+    assert card_submit_actions(disable_card, "enable", "Personal Alerts")
+    assert_reveal_webhook_action(client, db, disable_card, route)
+
+    enable_response = client.post(
+        "/api/v1/bot/messages",
+        json={**base_activity, "text": "", "value": {"command": "enable Personal Alerts"}},
+    )
+    db.refresh(route)
+
+    assert enable_response.status_code == 200
+    assert enable_response.json()["command"] == "enable"
+    assert route.is_active is True
+
+    webhook_response = client.post(
+        "/api/v1/bot/messages",
+        json={**base_activity, "text": "", "value": {"command": "webhook", "route_name": "Personal Alerts"}},
+    )
+
+    assert webhook_response.status_code == 200
+    assert webhook_response.json()["command"] == "webhook"
+    assert "Webhook URL for `Personal Alerts` is available" in webhook_response.json()["reply_text"]
+    db.close()
+
+
 def test_delete_command_removes_named_linked_route_and_detaches_delivery_events(monkeypatch):
     monkeypatch.setattr("app.routers.bot_messages.send_bot_activity", lambda **kwargs: None)
     client, db = make_client()
@@ -941,6 +1039,35 @@ def test_delete_command_removes_named_linked_route_and_detaches_delivery_events(
     audit = db.scalar(select(AuditEvent).where(AuditEvent.action == "webhook_route.deleted"))
     assert audit is not None
     assert audit.actor_type == "bot_command"
+    db.close()
+
+
+def test_adaptive_card_submit_payload_cannot_delete_route(monkeypatch):
+    sent_replies: list[dict] = []
+    monkeypatch.setattr("app.routers.bot_messages.send_bot_activity", lambda **kwargs: sent_replies.append(kwargs))
+    client, db = make_client()
+    base_activity = {
+        "type": "message",
+        "serviceUrl": "https://smba.trafficmanager.net/emea/",
+        "conversation": {"id": "conversation-id", "conversationType": "personal"},
+        "from": {"id": "29:user", "aadObjectId": "aad-user-id"},
+        "channelData": {"tenant": {"id": "tenant-id"}},
+    }
+    assert client.post("/api/v1/bot/messages", json={**base_activity, "text": "register Personal Alerts"}).status_code == 200
+    route = db.scalar(select(WebhookRoute).where(WebhookRoute.name == "Personal Alerts"))
+    assert route is not None
+    sent_replies.clear()
+
+    response = client.post(
+        "/api/v1/bot/messages",
+        json={**base_activity, "text": "", "value": {"command": "delete", "route_name": "Personal Alerts"}},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["handled_command"] is False
+    assert response.json()["reply_sent"] is False
+    assert sent_replies == []
+    assert db.scalar(select(WebhookRoute).where(WebhookRoute.name == "Personal Alerts")) is not None
     db.close()
 
 
@@ -1006,7 +1133,7 @@ def test_help_command_lists_available_commands_as_card(monkeypatch):
     assert sent_message.activity is not None
     card = sent_message.activity["attachments"][0]["content"]
     assert card["body"][0]["text"] == "Available commands"
-    command_rows = card["body"][2]["items"]
+    command_rows = collect_card_items(card["body"], "ColumnSet")
     command_labels = [row["columns"][0]["items"][0] for row in command_rows]
     assert {
         "register <route name>:",
@@ -1019,6 +1146,8 @@ def test_help_command_lists_available_commands_as_card(monkeypatch):
         "help:",
     }.issubset({label["text"] for label in command_labels})
     assert all(label["wrap"] is False for label in command_labels)
+    assert card_submit_actions(card, "info")
+    assert card_submit_actions(card, "help")
     db.close()
 
 
