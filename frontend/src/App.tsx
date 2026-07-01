@@ -203,7 +203,17 @@ function RowActionMenu({ label, items }: { label: string; items: RowActionItem[]
 
   function openMenu() {
     const rect = triggerRef.current?.getBoundingClientRect();
-    if (rect) setCoords({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+    if (rect) {
+      const viewportMargin = 8;
+      const menuWidth = 220;
+      const estimatedMenuHeight = items.length * 40 + 14;
+      const maxRight = Math.max(viewportMargin, window.innerWidth - menuWidth - viewportMargin);
+      const maxTop = Math.max(viewportMargin, window.innerHeight - estimatedMenuHeight - viewportMargin);
+      setCoords({
+        top: Math.min(rect.bottom + 4, maxTop),
+        right: Math.min(Math.max(viewportMargin, window.innerWidth - rect.right), maxRight),
+      });
+    }
     setOpen(true);
   }
 
@@ -5254,7 +5264,7 @@ function BotAccessCreateModal({
               Cancel
             </button>
             <button className="primary-button" type="submit" disabled={busy || !selectedUser}>
-              {busy ? "Adding..." : `Add ${botAccessLevelLabel(selectedRole, role)} Access`}
+              {busy ? "Adding..." : "Add access"}
             </button>
           </div>
         </div>
@@ -5399,7 +5409,7 @@ function BotAccessEditModal({
               Cancel
             </button>
             <button className="primary-button" type="submit" disabled={busy}>
-              {busy ? "Saving..." : `Save ${botAccessLevelLabel(selectedRole, role)} Access`}
+              {busy ? "Saving..." : "Save access"}
             </button>
           </div>
         </div>
@@ -5602,7 +5612,7 @@ function BotGroupCreateModal({
             Cancel
           </button>
           <button className="primary-button" type="submit" disabled={busy || !selectedGroup}>
-            {busy ? "Adding..." : `Add ${botAccessLevelLabel(selectedRole, role)} Access`}
+            {busy ? "Adding..." : "Add access"}
           </button>
           </div>
         </div>
@@ -6005,7 +6015,7 @@ function BotGroupEditModal({
               Cancel
             </button>
             <button className="primary-button" type="submit" disabled={busy}>
-              {busy ? "Saving..." : `Save ${botAccessLevelLabel(selectedRole, role)} Access`}
+              {busy ? "Saving..." : "Save access"}
             </button>
           </div>
         </div>
