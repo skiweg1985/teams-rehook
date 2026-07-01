@@ -50,6 +50,16 @@ def require_monitoring_api_key(authorization: str | None = Header(default=None, 
 
 @router.get("/status", response_model=MonitoringStatusOut, dependencies=[Depends(require_monitoring_api_key)])
 def monitoring_status(db: Session = Depends(get_db)):
+    return _build_monitoring_status(db)
+
+
+@router.get("/prtg", dependencies=[Depends(require_monitoring_api_key)])
+def monitoring_prtg(db: Session = Depends(get_db)):
+    status_out = _build_monitoring_status(db)
+    return {"prtg": {"result": _prtg_channels(status_out), "text": _prtg_text(status_out)}}
+
+
+def _build_monitoring_status(db: Session) -> MonitoringStatusOut:
     settings = get_effective_settings()
     generated_at = utcnow()
     delivery_mode = settings.bot_delivery_mode_normalized
@@ -141,6 +151,69 @@ def monitoring_status(db: Session = Depends(get_db)):
         deliveries=deliveries,
         rolling_windows=rolling_windows,
         problem_routes=problem_routes,
+    )
+
+
+def _prtg_channels(status_out: MonitoringStatusOut) -> list[dict[str, object]]:
+    channels: list[dict[str, object]] = [
+        {
+            "channel": "Service State",
+            "value": _prtg_service_state(status_out.status),
+            "unit": "Custom",
+            "customunit": "state",
+            "limitmode": 1,
+            "limitmaxwarning": 0.5,
+            "limitmaxerror": 1.5,
+            "limitwarningmsg": "Teams Rehook warning",
+            "limiterrormsg": "Teams Rehook critical",
+        },
+        _prtg_count_channel("Database OK", int(status_out.database.ok)),
+        _prtg_count_channel("Bot Ready", int(status_out.readiness.bot.ready)),
+        _prtg_count_channel("Graph Lookup Ready", int(status_out.readiness.graph_lookup.ready)),
+        _prtg_count_channel("Graph Delivery Ready", int(status_out.readiness.graph_delivery.ready)),
+        _prtg_count_channel("Routes Total", status_out.routes.total),
+        _prtg_count_channel("Routes Active", status_out.routes.active),
+        _prtg_count_channel("Routes Inactive", status_out.routes.inactive),
+        _prtg_count_channel("Routes Last Failed", status_out.routes.with_last_failure),
+        _prtg_count_channel("Routes Last Rejected", status_out.routes.with_last_rejection),
+        _prtg_count_channel("Routes Untested Active", status_out.routes.untested_active),
+    ]
+    for label in WINDOWS:
+        window = status_out.rolling_windows.get(label, MonitoringRollingWindowOut())
+        channels.extend(
+            [
+                _prtg_count_channel(f"Deliveries {label} Success", window.delivery_success_count),
+                _prtg_count_channel(f"Deliveries {label} Failed", window.delivery_failure_count),
+                _prtg_count_channel(f"Deliveries {label} Rejected", window.delivery_rejection_count),
+                _prtg_percent_channel(f"Success Rate {label}", window.success_rate),
+            ]
+        )
+    return channels
+
+
+def _prtg_count_channel(channel: str, value: int) -> dict[str, object]:
+    return {"channel": channel, "value": value, "unit": "Count"}
+
+
+def _prtg_percent_channel(channel: str, success_rate: float | None) -> dict[str, object]:
+    value = 100.0 if success_rate is None else round(success_rate * 100, 1)
+    return {"channel": channel, "value": value, "unit": "Percent", "float": 1, "decimalmode": "All"}
+
+
+def _prtg_service_state(status_value: str) -> int:
+    return {"ok": 0, "warn": 1, "crit": 2}.get(status_value, 2)
+
+
+def _prtg_text(status_out: MonitoringStatusOut) -> str:
+    routes = status_out.routes
+    short_window = status_out.rolling_windows.get("5m", MonitoringRollingWindowOut())
+    database = "ok" if status_out.database.ok else "failed"
+    route_issues = routes.inactive + routes.with_last_failure + routes.with_last_rejection + routes.untested_active
+    recent_issues = short_window.delivery_failure_count + short_window.delivery_rejection_count
+    return (
+        f"{status_out.service} {status_out.status}; database {database}; "
+        f"routes active={routes.active}/{routes.total}, issues={route_issues}; "
+        f"5m delivered={short_window.delivery_success_count}, issues={recent_issues}"
     )
 
 

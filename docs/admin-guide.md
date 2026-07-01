@@ -186,6 +186,29 @@ GET /api/v1/monitoring/status
 Authorization: Bearer <MONITORING_API_KEY>
 ```
 
+PRTG HTTP Data Advanced Sensor endpoint:
+
+```text
+GET /api/v1/monitoring/prtg
+Authorization: Bearer <MONITORING_API_KEY>
+```
+
+The PRTG endpoint returns JSON in the HTTP Data Advanced Sensor format. It uses the same monitoring API key as `/api/v1/monitoring/status`; no additional credential or environment variable is required.
+
+```json
+{
+  "prtg": {
+    "result": [
+      {
+        "channel": "Service State",
+        "value": 0
+      }
+    ],
+    "text": "Teams Rehook ok; database ok; routes active=1/1, issues=0; 5m delivered=1, issues=0"
+  }
+}
+```
+
 If `MONITORING_API_KEY` is empty, the endpoint returns `503` and does not expose status data. The response excludes relay URLs, route tokens, Bot service URLs, conversation IDs, OAuth tokens, secrets, and raw auth responses.
 
 ## Automatic Abuse Blocking

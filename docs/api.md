@@ -151,12 +151,34 @@ Captured group-chat references include the same best-effort participant metadata
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `GET` | `/api/v1/monitoring/status` | Bearer API key | Returns JSON service, database, readiness, route, delivery, rolling-window, and problem-route status. |
+| `GET` | `/api/v1/monitoring/prtg` | Bearer API key | Returns PRTG HTTP Data Advanced Sensor JSON derived from the same monitoring status. |
 
 Example:
 
 ```bash
 curl "http://localhost:8080/api/v1/monitoring/status" \
   -H "Authorization: Bearer <MONITORING_API_KEY>"
+```
+
+PRTG HTTP Data Advanced Sensor example:
+
+```bash
+curl "http://localhost:8080/api/v1/monitoring/prtg" \
+  -H "Authorization: Bearer <MONITORING_API_KEY>"
+```
+
+```json
+{
+  "prtg": {
+    "result": [
+      {
+        "channel": "Service State",
+        "value": 0
+      }
+    ],
+    "text": "Teams Rehook ok; database ok; routes active=1/1, issues=0; 5m delivered=1, issues=0"
+  }
+}
 ```
 
 If `MONITORING_API_KEY` is empty, the endpoint returns `503`. If the bearer token is missing or wrong, it returns `401`.
