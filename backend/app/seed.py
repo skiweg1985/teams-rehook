@@ -10,8 +10,14 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings, is_placeholder_session_secret, is_placeholder_settings_enc_key
 from app.core.settings_overrides import load_overrides
 from app.database import Base, engine
-from app.models import AppSetting, BotActivityEvent, BotConversationReference, Organization, User, WebhookRoute
+from app.models import AppSetting, BotActivityEvent, BotAuthorizedGroup, BotAuthorizedUser, BotConversationReference, Organization, User, WebhookRoute
 from app.security import issue_plain_secret
+from app.services.bot_access_roles import (
+    ROUTE_OPERATOR_SYSTEM_KEY,
+    ROUTE_VIEWER_SYSTEM_KEY,
+    ensure_bot_access_system_roles,
+    role_permissions,
+)
 from app.services.log_retention import cleanup_log_events
 
 INSTANCE_SESSION_SECRET_KEY = "__instance_session_secret"
@@ -38,6 +44,8 @@ def init_db() -> None:
             db.add(org)
             db.flush()
 
+        _ensure_bot_access_roles_for_organizations(db)
+        _backfill_bot_access_role_assignments(db)
         db.commit()
 
 
@@ -137,6 +145,50 @@ def _backfill_webhook_route_targets(db: Session) -> None:
         changed = True
     if changed:
         db.commit()
+
+
+def _ensure_bot_access_roles_for_organizations(db: Session) -> None:
+    for organization in db.scalars(select(Organization)).all():
+        ensure_bot_access_system_roles(db, organization.id)
+
+
+def _backfill_bot_access_role_assignments(db: Session) -> None:
+    changed = False
+    for organization in db.scalars(select(Organization)).all():
+        roles = ensure_bot_access_system_roles(db, organization.id)
+        viewer = roles[ROUTE_VIEWER_SYSTEM_KEY]
+        operator = roles[ROUTE_OPERATOR_SYSTEM_KEY]
+        grants = [
+            *db.scalars(
+                select(BotAuthorizedUser).where(
+                    BotAuthorizedUser.organization_id == organization.id,
+                    BotAuthorizedUser.role_id.is_(None),
+                )
+            ).all(),
+            *db.scalars(
+                select(BotAuthorizedGroup).where(
+                    BotAuthorizedGroup.organization_id == organization.id,
+                    BotAuthorizedGroup.role_id.is_(None),
+                )
+            ).all(),
+        ]
+        for grant in grants:
+            if grant.role == "custom":
+                continue
+            permissions = {field: bool(getattr(grant, field)) for field in role_permissions(operator)}
+            if grant.role in {"viewer", "route_viewer"} and permissions == role_permissions(viewer):
+                grant.role_id = viewer.id
+                grant.role = viewer.system_key or "route_viewer"
+                changed = True
+            elif grant.role in {"operator", "route_operator", "route_manager"} and permissions == role_permissions(operator):
+                grant.role_id = operator.id
+                grant.role = operator.system_key or "route_operator"
+                changed = True
+            elif grant.role in {"viewer", "operator", "route_manager"}:
+                grant.role = "custom"
+                changed = True
+    if changed:
+        db.flush()
 
 
 def _apply_reference_metadata(
@@ -317,6 +369,9 @@ def _ensure_additive_schema() -> None:
             "auth_service_url": "TEXT DEFAULT '' NOT NULL",
             "auth_service_url_matched": "BOOLEAN DEFAULT FALSE NOT NULL",
             "auth_validated_at": "TIMESTAMP NULL",
+            "bot_authorization_status": "VARCHAR(40) DEFAULT 'not_applicable' NOT NULL",
+            "bot_authorized_user_id": "TEXT DEFAULT '' NOT NULL",
+            "bot_authorization_reason": "TEXT DEFAULT '' NOT NULL",
         },
         "bot_conversation_references": {
             "graph_team_id": "TEXT DEFAULT '' NOT NULL",
@@ -330,6 +385,12 @@ def _ensure_additive_schema() -> None:
             "member_list_json": "TEXT DEFAULT '[]' NOT NULL",
             "members_refreshed_at": "TIMESTAMP NULL",
             "members_lookup_error": "TEXT DEFAULT '' NOT NULL",
+        },
+        "bot_authorized_users": {
+            "role_id": "VARCHAR(36) NULL",
+        },
+        "bot_authorized_groups": {
+            "role_id": "VARCHAR(36) NULL",
         },
         "webhook_abuse_buckets": {
             "last_client_host": "TEXT DEFAULT '' NOT NULL",

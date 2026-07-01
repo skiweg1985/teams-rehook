@@ -14,7 +14,7 @@ from app.core.settings_overrides import get_effective_settings
 from app.security import utcnow
 
 
-GraphTargetKind = Literal["user", "team", "channel", "chat"]
+GraphTargetKind = Literal["user", "team", "channel", "chat", "group"]
 
 
 class GraphConfigError(RuntimeError):
@@ -34,6 +34,25 @@ class GraphTarget:
     team_id: str | None = None
     team_name: str | None = None
     channel_id: str | None = None
+    mail: str = ""
+    security_enabled: bool | None = None
+    group_types: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class GraphGroupMember:
+    id: str
+    display_name: str
+    user_principal_name: str = ""
+    mail: str = ""
+
+
+@dataclass(frozen=True)
+class GraphGroupMemberPage:
+    items: list[GraphGroupMember]
+    offset: int
+    limit: int
+    has_more: bool
 
 
 TokenFetcher = Callable[[Settings], tuple[str, int]]
@@ -116,13 +135,94 @@ def fetch_graph_token(settings: Settings) -> tuple[str, int]:
     return str(body.get("access_token") or ""), int(body.get("expires_in") or 3600)
 
 
-def search_targets(kind: Literal["user", "team"], query: str, *, limit: int = 10) -> list[GraphTarget]:
+def search_targets(kind: Literal["user", "team", "group"], query: str, *, limit: int = 10) -> list[GraphTarget]:
     q = query.strip()
     if len(q) < 2:
         return []
     if kind == "user":
         return _search_users(q, limit=limit)
+    if kind == "group":
+        return _search_groups(q, limit=limit)
     return _search_teams(q, limit=limit)
+
+
+def list_user_transitive_group_ids(user_id: str) -> list[str]:
+    user_id = user_id.strip()
+    if not user_id:
+        return []
+    data_pages = _graph_get_pages(
+        f"/users/{urllib.parse.quote(user_id, safe='')}/transitiveMemberOf/microsoft.graph.group",
+        {"$select": "id", "$top": "999"},
+    )
+    group_ids: list[str] = []
+    for data in data_pages:
+        for group in data.get("value", []):
+            group_id = str(group.get("id") or "").strip().lower()
+            if group_id:
+                group_ids.append(group_id)
+    return list(dict.fromkeys(group_ids))
+
+
+def list_group_transitive_members(
+    group_id: str,
+    query: str = "",
+    *,
+    limit: int = 100,
+    offset: int = 0,
+) -> GraphGroupMemberPage:
+    group_id = group_id.strip()
+    if not group_id:
+        return GraphGroupMemberPage(items=[], offset=offset, limit=limit, has_more=False)
+    limit = max(1, min(limit, 200))
+    offset = max(offset, 0)
+    data_pages = _graph_get_pages(
+        f"/groups/{urllib.parse.quote(group_id, safe='')}/transitiveMembers/microsoft.graph.user",
+        {"$select": "id,displayName,userPrincipalName,mail", "$top": "999"},
+    )
+    needle = query.strip().lower()
+    members: list[GraphGroupMember] = []
+    matched_count = 0
+    for data in data_pages:
+        for member in data.get("value", []):
+            member_id = str(member.get("id") or "").strip()
+            display_name = str(member.get("displayName") or member.get("userPrincipalName") or "").strip()
+            user_principal_name = str(member.get("userPrincipalName") or "").strip()
+            mail = str(member.get("mail") or "").strip()
+            if not member_id or not display_name:
+                continue
+            haystack = " ".join([display_name, user_principal_name, mail]).lower()
+            if needle and needle not in haystack:
+                continue
+            if matched_count < offset:
+                matched_count += 1
+                continue
+            members.append(
+                GraphGroupMember(
+                    id=member_id,
+                    display_name=display_name,
+                    user_principal_name=user_principal_name,
+                    mail=mail,
+                )
+            )
+            matched_count += 1
+            if len(members) > limit:
+                return GraphGroupMemberPage(items=members[:limit], offset=offset, limit=limit, has_more=True)
+    return GraphGroupMemberPage(items=members, offset=offset, limit=limit, has_more=False)
+
+
+def count_group_transitive_user_members(group_id: str) -> int:
+    group_id = group_id.strip()
+    if not group_id:
+        return 0
+    raw_count = _graph_get_text(
+        f"/groups/{urllib.parse.quote(group_id, safe='')}/transitiveMembers/microsoft.graph.user/$count",
+        {},
+        headers={"ConsistencyLevel": "eventual"},
+    )
+    try:
+        return max(int(raw_count.strip()), 0)
+    except ValueError as exc:
+        raise GraphRequestError("Microsoft Graph group member count response was not numeric") from exc
 
 
 def list_team_channels(team_id: str, query: str = "", *, limit: int = 25) -> list[GraphTarget]:
@@ -280,11 +380,91 @@ def _search_teams(query: str, *, limit: int) -> list[GraphTarget]:
     return targets
 
 
+def _search_groups(query: str, *, limit: int) -> list[GraphTarget]:
+    escaped = _odata_string(query)
+    data = _graph_get(
+        "/groups",
+        {
+            "$top": str(limit),
+            "$select": "id,displayName,mail,mailNickname,securityEnabled,groupTypes",
+            "$filter": (
+                f"startswith(displayName,'{escaped}') or "
+                f"startswith(mail,'{escaped}') or "
+                f"startswith(mailNickname,'{escaped}')"
+            ),
+        },
+    )
+    targets = []
+    for group in data.get("value", []):
+        display_name = str(group.get("displayName") or group.get("mailNickname") or "").strip()
+        group_id = str(group.get("id") or "").strip()
+        if not display_name or not group_id:
+            continue
+        group_types = tuple(str(value).strip() for value in group.get("groupTypes", []) if str(value).strip())
+        mail = str(group.get("mail") or "").strip()
+        mail_nickname = str(group.get("mailNickname") or "").strip()
+        subtitle_parts = []
+        if mail:
+            subtitle_parts.append(mail)
+        elif mail_nickname:
+            subtitle_parts.append(mail_nickname)
+        subtitle_parts.append("Microsoft 365 group" if "Unified" in group_types else "Security group")
+        targets.append(
+            GraphTarget(
+                kind="group",
+                id=group_id,
+                display_name=display_name,
+                subtitle=" · ".join(subtitle_parts),
+                mail=mail,
+                security_enabled=bool(group.get("securityEnabled")),
+                group_types=group_types,
+            )
+        )
+    return targets
+
+
 def _graph_get(path: str, params: dict[str, str]) -> dict:
     token = get_graph_token_manager().get_token()
     query = urllib.parse.urlencode(params)
+    return _graph_get_url(f"https://graph.microsoft.com/v1.0{path}?{query}", token=token)
+
+
+def _graph_get_text(path: str, params: dict[str, str], *, headers: dict[str, str] | None = None) -> str:
+    token = get_graph_token_manager().get_token()
+    query = urllib.parse.urlencode(params)
+    suffix = f"?{query}" if query else ""
+    request_headers = {"Authorization": f"Bearer {token}", "Accept": "text/plain"}
+    request_headers.update(headers or {})
     request = urllib.request.Request(
-        f"https://graph.microsoft.com/v1.0{path}?{query}",
+        f"https://graph.microsoft.com/v1.0{path}{suffix}",
+        headers=request_headers,
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        safe_body = exc.read().decode("utf-8", errors="replace")[:500]
+        raise GraphRequestError(f"Microsoft Graph request failed with HTTP {exc.code}: {safe_body}") from exc
+    except urllib.error.URLError as exc:
+        raise GraphRequestError("Microsoft Graph request failed") from exc
+
+
+def _graph_get_pages(path: str, params: dict[str, str]) -> list[dict]:
+    token = get_graph_token_manager().get_token()
+    query = urllib.parse.urlencode(params)
+    url = f"https://graph.microsoft.com/v1.0{path}?{query}"
+    pages: list[dict] = []
+    while url:
+        data = _graph_get_url(url, token=token)
+        pages.append(data)
+        url = str(data.get("@odata.nextLink") or "")
+    return pages
+
+
+def _graph_get_url(url: str, *, token: str) -> dict:
+    request = urllib.request.Request(
+        url,
         headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
         method="GET",
     )

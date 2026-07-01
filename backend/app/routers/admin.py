@@ -15,7 +15,7 @@ from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import and_, delete, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.core.proxy_trust import combined_trusted_proxy_ips
 from app.core.settings_overrides import (
@@ -27,10 +27,30 @@ from app.core.settings_overrides import (
 )
 from app.database import get_db
 from app.deps import get_current_session, record_audit, require_admin, require_csrf
-from app.models import AuditEvent, BotActivityEvent, EventLogEntry, GraphDelegatedCredential, Session as UserSession, User, WebhookAbuseBucket
+from app.models import (
+    AuditEvent,
+    BotActivityEvent,
+    BotAccessRole,
+    BotAuthorizedGroup,
+    BotAuthorizedUser,
+    EventLogEntry,
+    GraphDelegatedCredential,
+    Session as UserSession,
+    User,
+    WebhookAbuseBucket,
+)
 from app.schemas import (
     AdminReadinessOut,
     AuditEventOut,
+    BotAccessRoleCreateIn,
+    BotAccessRoleOut,
+    BotAccessRoleUpdateIn,
+    BotAuthorizedGroupCreateIn,
+    BotAuthorizedGroupOut,
+    BotAuthorizedGroupUpdateIn,
+    BotAuthorizedUserCreateIn,
+    BotAuthorizedUserOut,
+    BotAuthorizedUserUpdateIn,
     BotReadinessOut,
     ClientEventIn,
     DeliveryAuthRefreshComponentOut,
@@ -57,8 +77,15 @@ from app.schemas import (
     WebhookAbuseBucketOut,
     WebhookAbuseCleanupOut,
 )
-from app.security import ensure_utc, hash_secret, loads_json, utcnow
+from app.security import dumps_json, ensure_utc, hash_secret, loads_json, utcnow
 from app.services.bot_framework_auth import reset_bot_framework_auth_cache
+from app.services.bot_access_roles import (
+    BOT_PERMISSION_FIELDS,
+    ROUTE_OPERATOR_SYSTEM_KEY,
+    ROUTE_VIEWER_SYSTEM_KEY,
+    ensure_bot_access_system_roles,
+    role_permissions,
+)
 from app.services.event_log import emit_event, event_from_entry
 from app.services.graph_delegated_auth import (
     DEFAULT_DELEGATED_GRAPH_SCOPES,
@@ -80,6 +107,8 @@ from app.services.webhook_abuse import cleanup_buckets, unblock_bucket
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 GRAPH_OAUTH_STATE_TTL_SECONDS = 600
+GRAPH_GROUP_MEMBERSHIP_REQUIRED_ROLES = ("GroupMember.Read.All",)
+GRAPH_GROUP_MEMBERSHIP_ALTERNATIVE_ROLES = ("Directory.Read.All",)
 
 
 @dataclass(frozen=True)
@@ -411,6 +440,571 @@ def update_user_password(
         _record_session_revocation(db, admin, user, revoked_sessions, "password_changed")
     db.commit()
     return user
+
+
+@router.get("/bot-roles", response_model=list[BotAccessRoleOut], dependencies=[Depends(require_csrf)])
+def list_bot_access_roles(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    ensure_bot_access_system_roles(db, admin.organization_id, actor_id=admin.id)
+    db.commit()
+    return db.scalars(
+        select(BotAccessRole)
+        .where(BotAccessRole.organization_id == admin.organization_id)
+        .order_by(BotAccessRole.is_system.desc(), BotAccessRole.name.asc())
+    ).all()
+
+
+@router.post(
+    "/bot-roles",
+    response_model=BotAccessRoleOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_csrf)],
+)
+def create_bot_access_role(
+    payload: BotAccessRoleCreateIn,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    _ensure_bot_role_name_available(db, admin.organization_id, payload.name)
+    role = BotAccessRole(
+        organization_id=admin.organization_id,
+        name=payload.name.strip(),
+        description=payload.description.strip(),
+        is_system=False,
+        system_key=None,
+        created_by_id=admin.id,
+        updated_by_id=admin.id,
+        **{field: bool(getattr(payload, field)) for field in BOT_PERMISSION_FIELDS},
+    )
+    db.add(role)
+    db.flush()
+    record_audit(
+        db,
+        action="admin.bot_role.created",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata=_bot_role_audit_metadata(role),
+    )
+    db.commit()
+    return role
+
+
+@router.patch("/bot-roles/{bot_role_id}", response_model=BotAccessRoleOut, dependencies=[Depends(require_csrf)])
+def update_bot_access_role(
+    bot_role_id: str,
+    payload: BotAccessRoleUpdateIn,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    role = _get_org_bot_role(db, admin.organization_id, bot_role_id)
+    before = _bot_role_audit_metadata(role)
+    if payload.name is not None:
+        _ensure_bot_role_name_available(db, admin.organization_id, payload.name, existing_role_id=role.id)
+        role.name = payload.name.strip()
+    if payload.description is not None:
+        role.description = payload.description.strip()
+    for field in BOT_PERMISSION_FIELDS:
+        value = getattr(payload, field)
+        if value is not None:
+            setattr(role, field, value)
+    role.updated_by_id = admin.id
+    role.updated_at = utcnow()
+    _sync_linked_bot_role_grants(db, role)
+    record_audit(
+        db,
+        action="admin.bot_role.updated",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata={"before": before, "after": _bot_role_audit_metadata(role)},
+    )
+    db.commit()
+    return role
+
+
+@router.delete("/bot-roles/{bot_role_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_csrf)])
+def delete_bot_access_role(
+    bot_role_id: str,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    role = _get_org_bot_role(db, admin.organization_id, bot_role_id)
+    if role.is_system:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="System bot access roles cannot be deleted")
+    linked_user_count = db.scalar(select(func.count()).select_from(BotAuthorizedUser).where(BotAuthorizedUser.role_id == role.id)) or 0
+    linked_group_count = db.scalar(select(func.count()).select_from(BotAuthorizedGroup).where(BotAuthorizedGroup.role_id == role.id)) or 0
+    if linked_user_count or linked_group_count:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Bot access role is still assigned")
+    metadata = _bot_role_audit_metadata(role)
+    db.delete(role)
+    record_audit(
+        db,
+        action="admin.bot_role.deleted",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata=metadata,
+    )
+    db.commit()
+    return None
+
+
+@router.get("/bot-users", response_model=list[BotAuthorizedUserOut], dependencies=[Depends(require_csrf)])
+def list_bot_authorized_users(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    ensure_bot_access_system_roles(db, admin.organization_id, actor_id=admin.id)
+    _backfill_bot_access_role_assignments(db, admin.organization_id)
+    db.commit()
+    return db.scalars(
+        select(BotAuthorizedUser)
+        .where(BotAuthorizedUser.organization_id == admin.organization_id)
+        .order_by(BotAuthorizedUser.display_name.asc(), BotAuthorizedUser.created_at.desc())
+    ).all()
+
+
+@router.post(
+    "/bot-users",
+    response_model=BotAuthorizedUserOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_csrf)],
+)
+def create_bot_authorized_user(
+    payload: BotAuthorizedUserCreateIn,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    aad_object_id = _normalize_aad_object_id(payload.aad_object_id)
+    _ensure_bot_user_available(db, admin.organization_id, aad_object_id)
+    access_role = _resolve_payload_bot_role(db, admin.organization_id, payload.role_id, payload.role)
+    permissions = role_permissions(access_role) if access_role is not None else _bot_permissions_from_payload(payload)
+    bot_user = BotAuthorizedUser(
+        organization_id=admin.organization_id,
+        aad_object_id=aad_object_id,
+        display_name=payload.display_name.strip(),
+        user_principal_name=payload.user_principal_name.strip(),
+        role_id=access_role.id if access_role else None,
+        role=_role_label_for_grant(access_role, payload.role),
+        is_active=payload.is_active,
+        created_by_id=admin.id,
+        updated_by_id=admin.id,
+        **permissions,
+    )
+    db.add(bot_user)
+    db.flush()
+    record_audit(
+        db,
+        action="admin.bot_user.created",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata=_bot_user_audit_metadata(bot_user),
+    )
+    db.commit()
+    return bot_user
+
+
+@router.patch("/bot-users/{bot_user_id}", response_model=BotAuthorizedUserOut, dependencies=[Depends(require_csrf)])
+def update_bot_authorized_user(
+    bot_user_id: str,
+    payload: BotAuthorizedUserUpdateIn,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    bot_user = _get_org_bot_user(db, admin.organization_id, bot_user_id)
+    before = _bot_user_audit_metadata(bot_user)
+    if payload.display_name is not None:
+        bot_user.display_name = payload.display_name.strip()
+    if payload.user_principal_name is not None:
+        bot_user.user_principal_name = payload.user_principal_name.strip()
+    if payload.is_active is not None:
+        bot_user.is_active = payload.is_active
+
+    payload_data = payload.model_dump(exclude_unset=True)
+    permission_patch = {
+        field: value
+        for field, value in payload_data.items()
+        if field in BOT_PERMISSION_FIELDS and value is not None
+    }
+    if "role_id" in payload_data or payload.role is not None:
+        access_role = _resolve_payload_bot_role(db, admin.organization_id, payload.role_id, payload.role)
+        bot_user.role_id = access_role.id if access_role else None
+        bot_user.role = _role_label_for_grant(access_role, payload.role)
+        if access_role is not None:
+            for field, value in role_permissions(access_role).items():
+                setattr(bot_user, field, value)
+            permission_patch = {}
+    for field, value in permission_patch.items():
+        setattr(bot_user, field, value)
+    if permission_patch and bot_user.role_id is None:
+        bot_user.role = _infer_bot_role(bot_user)
+    bot_user.updated_by_id = admin.id
+    bot_user.updated_at = utcnow()
+    record_audit(
+        db,
+        action="admin.bot_user.updated",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata={"before": before, "after": _bot_user_audit_metadata(bot_user)},
+    )
+    db.commit()
+    return bot_user
+
+
+@router.delete("/bot-users/{bot_user_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_csrf)])
+def delete_bot_authorized_user(
+    bot_user_id: str,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    bot_user = _get_org_bot_user(db, admin.organization_id, bot_user_id)
+    metadata = _bot_user_audit_metadata(bot_user)
+    db.delete(bot_user)
+    record_audit(
+        db,
+        action="admin.bot_user.deleted",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata=metadata,
+    )
+    db.commit()
+    return None
+
+
+@router.get("/bot-groups", response_model=list[BotAuthorizedGroupOut], dependencies=[Depends(require_csrf)])
+def list_bot_authorized_groups(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    ensure_bot_access_system_roles(db, admin.organization_id, actor_id=admin.id)
+    _backfill_bot_access_role_assignments(db, admin.organization_id)
+    db.commit()
+    return db.scalars(
+        select(BotAuthorizedGroup)
+        .where(BotAuthorizedGroup.organization_id == admin.organization_id)
+        .order_by(BotAuthorizedGroup.display_name.asc(), BotAuthorizedGroup.created_at.desc())
+    ).all()
+
+
+@router.post(
+    "/bot-groups",
+    response_model=BotAuthorizedGroupOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_csrf)],
+)
+def create_bot_authorized_group(
+    payload: BotAuthorizedGroupCreateIn,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    group_object_id = _normalize_aad_object_id(payload.group_object_id)
+    _ensure_bot_group_available(db, admin.organization_id, group_object_id)
+    access_role = _resolve_payload_bot_role(db, admin.organization_id, payload.role_id, payload.role)
+    permissions = role_permissions(access_role) if access_role is not None else _bot_permissions_from_payload(payload)
+    bot_group = BotAuthorizedGroup(
+        organization_id=admin.organization_id,
+        group_object_id=group_object_id,
+        display_name=payload.display_name.strip(),
+        mail=payload.mail.strip(),
+        security_enabled=payload.security_enabled,
+        group_types_json=_serialize_group_types(payload.group_types),
+        role_id=access_role.id if access_role else None,
+        role=_role_label_for_grant(access_role, payload.role),
+        is_active=payload.is_active,
+        created_by_id=admin.id,
+        updated_by_id=admin.id,
+        **permissions,
+    )
+    db.add(bot_group)
+    db.flush()
+    record_audit(
+        db,
+        action="admin.bot_group.created",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata=_bot_group_audit_metadata(bot_group),
+    )
+    db.commit()
+    return bot_group
+
+
+@router.patch("/bot-groups/{bot_group_id}", response_model=BotAuthorizedGroupOut, dependencies=[Depends(require_csrf)])
+def update_bot_authorized_group(
+    bot_group_id: str,
+    payload: BotAuthorizedGroupUpdateIn,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    bot_group = _get_org_bot_group(db, admin.organization_id, bot_group_id)
+    before = _bot_group_audit_metadata(bot_group)
+    if payload.display_name is not None:
+        bot_group.display_name = payload.display_name.strip()
+    if payload.mail is not None:
+        bot_group.mail = payload.mail.strip()
+    if payload.security_enabled is not None:
+        bot_group.security_enabled = payload.security_enabled
+    if payload.group_types is not None:
+        bot_group.group_types_json = _serialize_group_types(payload.group_types)
+    if payload.is_active is not None:
+        bot_group.is_active = payload.is_active
+
+    payload_data = payload.model_dump(exclude_unset=True)
+    permission_patch = {
+        field: value
+        for field, value in payload_data.items()
+        if field in BOT_PERMISSION_FIELDS and value is not None
+    }
+    if "role_id" in payload_data or payload.role is not None:
+        access_role = _resolve_payload_bot_role(db, admin.organization_id, payload.role_id, payload.role)
+        bot_group.role_id = access_role.id if access_role else None
+        bot_group.role = _role_label_for_grant(access_role, payload.role)
+        if access_role is not None:
+            for field, value in role_permissions(access_role).items():
+                setattr(bot_group, field, value)
+            permission_patch = {}
+    for field, value in permission_patch.items():
+        setattr(bot_group, field, value)
+    if permission_patch and bot_group.role_id is None:
+        bot_group.role = _infer_bot_role(bot_group)
+    bot_group.updated_by_id = admin.id
+    bot_group.updated_at = utcnow()
+    record_audit(
+        db,
+        action="admin.bot_group.updated",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata={"before": before, "after": _bot_group_audit_metadata(bot_group)},
+    )
+    db.commit()
+    return bot_group
+
+
+@router.delete("/bot-groups/{bot_group_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_csrf)])
+def delete_bot_authorized_group(
+    bot_group_id: str,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    bot_group = _get_org_bot_group(db, admin.organization_id, bot_group_id)
+    metadata = _bot_group_audit_metadata(bot_group)
+    db.delete(bot_group)
+    record_audit(
+        db,
+        action="admin.bot_group.deleted",
+        actor_type="user",
+        actor_id=admin.id,
+        organization_id=admin.organization_id,
+        metadata=metadata,
+    )
+    db.commit()
+    return None
+
+
+def _normalize_aad_object_id(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="AAD object ID is required")
+    return normalized
+
+
+def _ensure_bot_user_available(db: Session, organization_id: str, aad_object_id: str) -> None:
+    existing = db.scalar(
+        select(BotAuthorizedUser).where(
+            BotAuthorizedUser.organization_id == organization_id,
+            BotAuthorizedUser.aad_object_id == aad_object_id,
+        )
+    )
+    if existing is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A bot access user with this AAD object ID already exists")
+
+
+def _ensure_bot_group_available(db: Session, organization_id: str, group_object_id: str) -> None:
+    existing = db.scalar(
+        select(BotAuthorizedGroup).where(
+            BotAuthorizedGroup.organization_id == organization_id,
+            BotAuthorizedGroup.group_object_id == group_object_id,
+        )
+    )
+    if existing is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A bot access group with this object ID already exists")
+
+
+def _get_org_bot_user(db: Session, organization_id: str, bot_user_id: str) -> BotAuthorizedUser:
+    bot_user = db.scalar(select(BotAuthorizedUser).where(BotAuthorizedUser.id == bot_user_id, BotAuthorizedUser.organization_id == organization_id))
+    if bot_user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot access user not found")
+    return bot_user
+
+
+def _get_org_bot_group(db: Session, organization_id: str, bot_group_id: str) -> BotAuthorizedGroup:
+    bot_group = db.scalar(
+        select(BotAuthorizedGroup).where(
+            BotAuthorizedGroup.id == bot_group_id,
+            BotAuthorizedGroup.organization_id == organization_id,
+        )
+    )
+    if bot_group is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot access group not found")
+    return bot_group
+
+
+def _get_org_bot_role(db: Session, organization_id: str, bot_role_id: str) -> BotAccessRole:
+    role = db.scalar(
+        select(BotAccessRole).where(
+            BotAccessRole.id == bot_role_id,
+            BotAccessRole.organization_id == organization_id,
+        )
+    )
+    if role is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot access role not found")
+    return role
+
+
+def _ensure_bot_role_name_available(
+    db: Session,
+    organization_id: str,
+    name: str,
+    *,
+    existing_role_id: str | None = None,
+) -> None:
+    normalized = name.strip()
+    if not normalized:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Bot access role name is required")
+    existing = db.scalar(
+        select(BotAccessRole).where(
+            BotAccessRole.organization_id == organization_id,
+            func.lower(BotAccessRole.name) == normalized.lower(),
+        )
+    )
+    if existing is not None and existing.id != existing_role_id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A bot access role with this name already exists")
+
+
+def _resolve_payload_bot_role(
+    db: Session,
+    organization_id: str,
+    role_id: str | None,
+    role: str | None,
+) -> BotAccessRole | None:
+    if role_id:
+        return _get_org_bot_role(db, organization_id, role_id)
+    if role in {"route_viewer", "viewer"}:
+        return _get_system_bot_role(db, organization_id, ROUTE_VIEWER_SYSTEM_KEY)
+    if role in {"route_operator", "operator", "route_manager"}:
+        return _get_system_bot_role(db, organization_id, ROUTE_OPERATOR_SYSTEM_KEY)
+    return None
+
+
+def _get_system_bot_role(db: Session, organization_id: str, system_key: str) -> BotAccessRole:
+    roles = ensure_bot_access_system_roles(db, organization_id)
+    return roles[system_key]
+
+
+def _role_label_for_grant(access_role: BotAccessRole | None, requested_role: str | None) -> str:
+    if access_role is None:
+        return requested_role or "custom"
+    return access_role.system_key or "role"
+
+
+def _bot_permissions_from_payload(payload: BotAuthorizedUserCreateIn | BotAuthorizedGroupCreateIn) -> dict[str, bool]:
+    return {field: bool(getattr(payload, field)) for field in BOT_PERMISSION_FIELDS}
+
+
+def _infer_bot_role(grant) -> str:
+    permissions = {field: bool(getattr(grant, field)) for field in BOT_PERMISSION_FIELDS}
+    if permissions == role_permissions(_get_cached_role_for_infer(grant, ROUTE_VIEWER_SYSTEM_KEY)):
+        return "route_viewer"
+    if permissions == role_permissions(_get_cached_role_for_infer(grant, ROUTE_OPERATOR_SYSTEM_KEY)):
+        return "route_operator"
+    return "custom"
+
+
+def _get_cached_role_for_infer(grant, system_key: str) -> BotAccessRole | None:
+    session = object_session(grant)
+    if session is None:
+        return None
+    return session.scalar(
+        select(BotAccessRole).where(
+            BotAccessRole.organization_id == grant.organization_id,
+            BotAccessRole.system_key == system_key,
+        )
+    )
+
+
+def _backfill_bot_access_role_assignments(db: Session, organization_id: str) -> None:
+    roles = ensure_bot_access_system_roles(db, organization_id)
+    viewer = roles[ROUTE_VIEWER_SYSTEM_KEY]
+    operator = roles[ROUTE_OPERATOR_SYSTEM_KEY]
+    for grant in [
+        *db.scalars(select(BotAuthorizedUser).where(BotAuthorizedUser.organization_id == organization_id, BotAuthorizedUser.role_id.is_(None))).all(),
+        *db.scalars(select(BotAuthorizedGroup).where(BotAuthorizedGroup.organization_id == organization_id, BotAuthorizedGroup.role_id.is_(None))).all(),
+    ]:
+        if grant.role == "custom":
+            continue
+        permissions = {field: bool(getattr(grant, field)) for field in BOT_PERMISSION_FIELDS}
+        if grant.role in {"viewer", "route_viewer"} and permissions == role_permissions(viewer):
+            grant.role_id = viewer.id
+            grant.role = viewer.system_key or "route_viewer"
+        elif grant.role in {"operator", "route_operator", "route_manager"} and permissions == role_permissions(operator):
+            grant.role_id = operator.id
+            grant.role = operator.system_key or "route_operator"
+        elif grant.role in {"viewer", "operator", "route_manager"}:
+            grant.role = "custom"
+
+
+def _sync_linked_bot_role_grants(db: Session, role: BotAccessRole) -> None:
+    permissions = role_permissions(role)
+    role_label = _role_label_for_grant(role, None)
+    for grant in [
+        *db.scalars(select(BotAuthorizedUser).where(BotAuthorizedUser.role_id == role.id)).all(),
+        *db.scalars(select(BotAuthorizedGroup).where(BotAuthorizedGroup.role_id == role.id)).all(),
+    ]:
+        for field, value in permissions.items():
+            setattr(grant, field, value)
+        grant.role = role_label
+        grant.updated_at = utcnow()
+
+
+def _bot_user_audit_metadata(bot_user: BotAuthorizedUser) -> dict:
+    return {
+        "bot_user_id": bot_user.id,
+        "aad_object_id": bot_user.aad_object_id,
+        "display_name": bot_user.display_name,
+        "user_principal_name": bot_user.user_principal_name,
+        "role_id": bot_user.role_id,
+        "role": bot_user.role,
+        "is_active": bot_user.is_active,
+        "permissions": {field: bool(getattr(bot_user, field)) for field in BOT_PERMISSION_FIELDS},
+    }
+
+
+def _bot_group_audit_metadata(bot_group: BotAuthorizedGroup) -> dict:
+    return {
+        "bot_group_id": bot_group.id,
+        "group_object_id": bot_group.group_object_id,
+        "display_name": bot_group.display_name,
+        "mail": bot_group.mail,
+        "security_enabled": bot_group.security_enabled,
+        "group_types": bot_group.group_types,
+        "role_id": bot_group.role_id,
+        "role": bot_group.role,
+        "is_active": bot_group.is_active,
+        "permissions": {field: bool(getattr(bot_group, field)) for field in BOT_PERMISSION_FIELDS},
+    }
+
+
+def _bot_role_audit_metadata(role: BotAccessRole) -> dict:
+    return {
+        "bot_role_id": role.id,
+        "name": role.name,
+        "description": role.description,
+        "is_system": role.is_system,
+        "system_key": role.system_key,
+        "permissions": {field: bool(getattr(role, field)) for field in BOT_PERMISSION_FIELDS},
+    }
+
+
+def _serialize_group_types(values: list[str]) -> str:
+    return dumps_json([str(value).strip() for value in values if str(value).strip()])
 
 
 def _normalize_user_email(email: str) -> str:
@@ -926,6 +1520,7 @@ def _graph_lookup_readiness(settings) -> GraphReadinessOut:
         metadata=_metadata_from_graph_token(token_response.access_token, settings.ms_app_client_id),
     )
     metadata_available = oauth.app.available and oauth.tenant.available
+    group_membership = _graph_group_membership_readiness(oauth.token.roles)
     return GraphReadinessOut(
         ready=True,
         auth_status="ready" if metadata_available else "permission_warning",
@@ -935,12 +1530,34 @@ def _graph_lookup_readiness(settings) -> GraphReadinessOut:
         credential_source=credential_source,
         credential_fields=credential_fields,
         oauth=oauth,
+        group_membership_lookup_ready=group_membership["ready"],
+        group_membership_required_roles=list(GRAPH_GROUP_MEMBERSHIP_REQUIRED_ROLES),
+        group_membership_alternative_roles=list(GRAPH_GROUP_MEMBERSHIP_ALTERNATIVE_ROLES),
+        group_membership_missing_roles=group_membership["missing_roles"],
+        group_membership_message=group_membership["message"],
         message=(
             "Microsoft Graph token request succeeded. Lookup and readiness diagnostics are available."
             if metadata_available
             else "Microsoft Graph token request succeeded. Lookup can still work, but optional directory metadata is limited by tenant permissions."
         ),
     )
+
+
+def _graph_group_membership_readiness(roles: list[str]) -> dict:
+    granted = {role.lower() for role in roles}
+    has_required = any(role.lower() in granted for role in GRAPH_GROUP_MEMBERSHIP_REQUIRED_ROLES)
+    has_alternative = any(role.lower() in granted for role in GRAPH_GROUP_MEMBERSHIP_ALTERNATIVE_ROLES)
+    ready = has_required or has_alternative
+    missing_roles = [] if ready else list(GRAPH_GROUP_MEMBERSHIP_REQUIRED_ROLES)
+    return {
+        "ready": ready,
+        "missing_roles": missing_roles,
+        "message": (
+            "Bot Access group search and membership checks have a suitable Microsoft Graph app role."
+            if ready
+            else "Bot Access groups require GroupMember.Read.All or a broader directory-read app role such as Directory.Read.All."
+        ),
+    }
 
 
 def _disabled_graph_lookup_readiness(settings) -> GraphReadinessOut:
@@ -964,6 +1581,10 @@ def _disabled_graph_lookup_readiness(settings) -> GraphReadinessOut:
             client_id=settings.ms_app_client_id,
             scope=settings.graph_scope,
         ),
+        group_membership_required_roles=list(GRAPH_GROUP_MEMBERSHIP_REQUIRED_ROLES),
+        group_membership_alternative_roles=list(GRAPH_GROUP_MEMBERSHIP_ALTERNATIVE_ROLES),
+        group_membership_missing_roles=list(GRAPH_GROUP_MEMBERSHIP_REQUIRED_ROLES),
+        group_membership_message="Graph lookup is disabled, so Bot Access group membership cannot be checked.",
         message="Microsoft Graph lookup is disabled by feature policy.",
     )
 
@@ -1606,6 +2227,9 @@ def list_system_logs(
             auth_service_url=row.auth_service_url,
             auth_service_url_matched=row.auth_service_url_matched,
             auth_validated_at=row.auth_validated_at,
+            bot_authorization_status=row.bot_authorization_status,
+            bot_authorized_user_id=row.bot_authorized_user_id,
+            bot_authorization_reason=row.bot_authorization_reason,
             created_at=row.created_at,
         )
         for row in rows

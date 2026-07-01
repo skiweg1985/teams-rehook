@@ -23,14 +23,20 @@ The same Entra app registration credentials are used for Bot Framework delivery 
 - `User.Read.All` for user search.
 - `Team.ReadBasic.All` for Teams search.
 - `Channel.ReadBasic.All` for channel listing.
+- `Group.Read.All` for Bot Access group search.
+- `User.Read.All` plus `GroupMember.Read.All` for resolving a Teams sender's transitive group memberships during Bot Access authorization and for viewing transitive group members.
 
 Admin consent is expected for the app-only permissions.
+
+`Directory.Read.All` can be used instead of the narrower user/group/member read permissions when the tenant prefers one broader directory-read app permission, but the narrower permissions above are the intended baseline.
+
+If group search returns `Microsoft Graph request failed with HTTP 403` and `Authorization_RequestDenied`, the Entra app registration usually lacks `Group.Read.All` or tenant admin consent has not been granted after adding it. If Bot Access group authorization or the group member view fails while direct user search works, verify `User.Read.All` and `GroupMember.Read.All` or `Directory.Read.All`.
 
 Settings readiness also tries optional read-only metadata checks against `/servicePrincipals` and `/organization` so operators can see which app registration and tenant are behind the token. Missing optional metadata should produce a readiness warning, not block Graph target search when the starting permissions above are present.
 
 ## Implemented API Surface
 
-- `GET /api/v1/teams-targets/search?kind=user|team&q=...`
+- `GET /api/v1/teams-targets/search?kind=user|team|group&q=...`
 - `GET /api/v1/teams-targets/teams/{team_id}/channels?q=...`
 - `POST /api/v1/webhook-routes/refresh-graph-names`
 - `POST /api/v1/webhook-routes/{route_id}/refresh-graph-names`
@@ -60,5 +66,7 @@ Responses use one shape:
 - Microsoft Graph list users: https://learn.microsoft.com/en-us/graph/api/user-list
 - Microsoft Graph list teams: https://learn.microsoft.com/en-us/graph/api/teams-list
 - Microsoft Graph list channels: https://learn.microsoft.com/en-us/graph/api/channel-list
+- Microsoft Graph list groups: https://learn.microsoft.com/en-us/graph/api/group-list
+- Microsoft Graph user transitive memberships: https://learn.microsoft.com/en-us/graph/api/user-list-transitivememberof
 - Microsoft Graph service app authentication: https://learn.microsoft.com/en-us/graph/auth-v2-service
 - Teams proactive bot messages: https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/send-proactive-messages

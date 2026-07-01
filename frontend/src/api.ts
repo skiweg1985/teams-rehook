@@ -2,6 +2,15 @@ import type {
   AdminReadinessOut,
   ApiError,
   AuditEventOut,
+  BotAccessRoleCreate,
+  BotAccessRoleOut,
+  BotAccessRoleUpdate,
+  BotAuthorizedGroupCreate,
+  BotAuthorizedGroupOut,
+  BotAuthorizedGroupUpdate,
+  BotAuthorizedUserCreate,
+  BotAuthorizedUserOut,
+  BotAuthorizedUserUpdate,
   BotConversationReferenceDetailOut,
   BotConversationReferenceOut,
   DeliveryAuthRefreshOut,
@@ -14,6 +23,8 @@ import type {
   SettingItemOut,
   SetupStatusOut,
   SystemLogEventOut,
+  TeamsGroupMemberCount,
+  TeamsGroupMemberPage,
   TeamsTargetSearchResult,
   UserCreate,
   UserOut,
@@ -139,6 +150,75 @@ export const api = {
       method: "PUT",
       csrfToken,
       body,
+    });
+  },
+  adminBotRoles(csrfToken: string) {
+    return request<BotAccessRoleOut[]>("/api/v1/admin/bot-roles", { csrfToken });
+  },
+  createAdminBotRole(csrfToken: string, body: BotAccessRoleCreate) {
+    return request<BotAccessRoleOut>("/api/v1/admin/bot-roles", {
+      method: "POST",
+      csrfToken,
+      body,
+    });
+  },
+  updateAdminBotRole(csrfToken: string, id: string, body: BotAccessRoleUpdate) {
+    return request<BotAccessRoleOut>(`/api/v1/admin/bot-roles/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      csrfToken,
+      body,
+    });
+  },
+  deleteAdminBotRole(csrfToken: string, id: string) {
+    return request<void>(`/api/v1/admin/bot-roles/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      csrfToken,
+    });
+  },
+  adminBotUsers(csrfToken: string) {
+    return request<BotAuthorizedUserOut[]>("/api/v1/admin/bot-users", { csrfToken });
+  },
+  createAdminBotUser(csrfToken: string, body: BotAuthorizedUserCreate) {
+    return request<BotAuthorizedUserOut>("/api/v1/admin/bot-users", {
+      method: "POST",
+      csrfToken,
+      body,
+    });
+  },
+  updateAdminBotUser(csrfToken: string, id: string, body: BotAuthorizedUserUpdate) {
+    return request<BotAuthorizedUserOut>(`/api/v1/admin/bot-users/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      csrfToken,
+      body,
+    });
+  },
+  deleteAdminBotUser(csrfToken: string, id: string) {
+    return request<void>(`/api/v1/admin/bot-users/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      csrfToken,
+    });
+  },
+  adminBotGroups(csrfToken: string) {
+    return request<BotAuthorizedGroupOut[]>("/api/v1/admin/bot-groups", { csrfToken });
+  },
+  createAdminBotGroup(csrfToken: string, body: BotAuthorizedGroupCreate) {
+    return request<BotAuthorizedGroupOut>("/api/v1/admin/bot-groups", {
+      method: "POST",
+      csrfToken,
+      body,
+    });
+  },
+  updateAdminBotGroup(csrfToken: string, id: string, body: BotAuthorizedGroupUpdate) {
+    return request<BotAuthorizedGroupOut>(`/api/v1/admin/bot-groups/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      csrfToken,
+      body,
+    });
+  },
+  deleteAdminBotGroup(csrfToken: string, id: string) {
+    return request<void>(`/api/v1/admin/bot-groups/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      csrfToken,
     });
   },
   adminLogs(csrfToken: string) {
@@ -341,7 +421,7 @@ export const api = {
       body,
     });
   },
-  searchTeamsTargets(kind: "user" | "team", query: string) {
+  searchTeamsTargets(kind: "user" | "team" | "group", query: string) {
     const params = new URLSearchParams({ kind, q: query });
     return request<TeamsTargetSearchResult[]>(`/api/v1/teams-targets/search?${params.toString()}`);
   },
@@ -354,5 +434,12 @@ export const api = {
   serviceUserChats(query: string) {
     const params = new URLSearchParams({ q: query });
     return request<TeamsTargetSearchResult[]>(`/api/v1/teams-targets/chats?${params.toString()}`);
+  },
+  groupMembers(groupId: string, query = "", offset = 0, limit = 100) {
+    const params = new URLSearchParams({ q: query, offset: String(offset), limit: String(limit) });
+    return request<TeamsGroupMemberPage>(`/api/v1/teams-targets/groups/${encodeURIComponent(groupId)}/members?${params.toString()}`);
+  },
+  groupMemberCount(groupId: string) {
+    return request<TeamsGroupMemberCount>(`/api/v1/teams-targets/groups/${encodeURIComponent(groupId)}/members/count`);
   },
 };

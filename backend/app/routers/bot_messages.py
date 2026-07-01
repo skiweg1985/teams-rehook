@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from html import unescape
 from typing import Any
@@ -17,7 +17,10 @@ from app.database import get_db
 from app.deps import record_audit, require_admin, require_csrf
 from app.models import (
     BotActivityEvent,
+    BotAuthorizedGroup,
+    BotAuthorizedUser,
     BotConversationReference,
+    BotUserGroupMembershipCache,
     Organization,
     User,
     WebhookDeliveryEvent,
@@ -48,15 +51,16 @@ from app.services.bot_conversation_members import (
     serialize_members,
 )
 from app.services.graph_name_resolution import try_resolve_reference_graph_names, try_resolve_route_graph_names
+from app.services.graph_targets import GraphConfigError, GraphRequestError, list_user_transitive_group_ids
 from app.services.event_log import emit_event
+from app.services.bot_access_roles import BOT_PERMISSION_FIELDS, role_permissions
 from app.services.teams_bot import BotDeliveryError, send_bot_activity
 from app.services.webhook_payloads import NormalizedMessage
 
 router = APIRouter(tags=["bot-messages"])
 DELIVERY_BACKEND_BOT = "bot_framework"
 CHAT_MEMBER_REFRESH_AFTER = timedelta(hours=6)
-
-
+BOT_GROUP_MEMBERSHIP_CACHE_TTL = timedelta(minutes=10)
 async def require_bot_framework_auth(
     request: Request,
     authorization: str | None = Header(default=None, alias="Authorization"),
@@ -161,7 +165,20 @@ async def receive_bot_activity(
         domain_event_id=event.id,
     )
     reference = _upsert_reference(db, captured)
-    command_result = _handle_command(db, activity, captured, reference)
+    parsed_command = _parse_activity_command(activity) if captured["activity_type"] == "message" else None
+    command_result = CommandResult()
+    if parsed_command:
+        authorization = _authorize_bot_command(db, captured, parsed_command)
+        event.bot_authorization_status = authorization.status
+        event.bot_authorized_user_id = authorization.bot_user.id if authorization.bot_user else ""
+        event.bot_authorization_reason = authorization.reason
+        _record_bot_command_authorization(db, authorization, captured, parsed_command)
+        if authorization.allowed:
+            command_result = _handle_command(db, activity, captured, reference, parsed=parsed_command, bot_user=authorization)
+        else:
+            command_result = _authorization_denied_command(parsed_command[0], authorization)
+    else:
+        event.bot_authorization_status = "not_applicable"
     db.commit()
     reply_sent = False
     reply_error = ""
@@ -309,8 +326,30 @@ class CommandResult:
     activity: dict[str, Any] | None = None
 
 
+@dataclass(frozen=True)
+class BotCommandAuthorization:
+    allowed: bool
+    status: str
+    reason: str
+    command: str
+    required_permission: str = ""
+    bot_user: BotAuthorizedUser | None = None
+    bot_groups: list[BotAuthorizedGroup] = field(default_factory=list)
+    permissions: dict[str, bool] = field(default_factory=dict)
+    cache_status: str = ""
+    cache_error: str = ""
+
+    def __getattr__(self, name: str) -> bool:
+        if name in BOT_PERMISSION_FIELDS:
+            return bool(self.permissions.get(name))
+        raise AttributeError(name)
+
+
 KNOWN_COMMANDS = {"register", "webhook", "disable", "enable", "delete", "info", "allowlist", "help"}
 SAFE_SUBMIT_COMMANDS = {"webhook", "disable", "enable", "info", "help"}
+UNAUTHORIZED_BOT_USER_REPLY = (
+    "You are not authorized to use Teams Rehook. Please contact IT to request access."
+)
 
 
 def _upsert_reference(db: Session, captured: dict[str, str]) -> BotConversationReference | None:
@@ -489,34 +528,322 @@ def _extract_activity(activity: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _authorize_bot_command(
+    db: Session,
+    captured: dict[str, str],
+    parsed: tuple[str, str],
+) -> BotCommandAuthorization:
+    command, argument = parsed
+    aad_object_id = captured["graph_user_id"].strip().lower()
+    if not aad_object_id:
+        return BotCommandAuthorization(
+            allowed=False,
+            status="denied",
+            reason="missing_aad_object_id",
+            command=command,
+        )
+    organization = _default_organization(db)
+    bot_user = db.scalar(
+        select(BotAuthorizedUser).where(
+            BotAuthorizedUser.organization_id == organization.id,
+            BotAuthorizedUser.aad_object_id == aad_object_id,
+        )
+    )
+    active_bot_user = bot_user if bot_user and bot_user.is_active else None
+    group_ids, cache_status, cache_error = _bot_group_ids_for_sender(db, organization.id, aad_object_id)
+    if cache_status == "error":
+        return BotCommandAuthorization(
+            allowed=False,
+            status="denied",
+            reason="group_membership_lookup_unavailable",
+            command=command,
+            bot_user=active_bot_user,
+            cache_status=cache_status,
+            cache_error=cache_error,
+        )
+    bot_groups = _matching_bot_groups(db, organization.id, group_ids)
+    permissions = _union_bot_permissions([source for source in [active_bot_user, *bot_groups] if source is not None])
+    if active_bot_user is None and not bot_groups:
+        return BotCommandAuthorization(
+            allowed=False,
+            status="denied",
+            reason="bot_user_not_authorized",
+            command=command,
+            bot_user=active_bot_user,
+            bot_groups=bot_groups,
+            permissions=permissions,
+            cache_status=cache_status,
+            cache_error=cache_error,
+        )
+    required_permission = _required_bot_permission(command, argument, captured)
+    if required_permission and not bool(permissions.get(required_permission)):
+        return BotCommandAuthorization(
+            allowed=False,
+            status="permission_denied",
+            reason=f"missing_{required_permission}",
+            command=command,
+            required_permission=required_permission,
+            bot_user=active_bot_user,
+            bot_groups=bot_groups,
+            permissions=permissions,
+            cache_status=cache_status,
+            cache_error=cache_error,
+        )
+    now = utcnow()
+    if active_bot_user is not None:
+        active_bot_user.last_seen_at = now
+        active_bot_user.updated_at = now
+    for bot_group in bot_groups:
+        bot_group.last_matched_at = now
+        bot_group.updated_at = now
+    return BotCommandAuthorization(
+        allowed=True,
+        status="authorized",
+        reason="authorized",
+        command=command,
+        required_permission=required_permission,
+        bot_user=active_bot_user,
+        bot_groups=bot_groups,
+        permissions=permissions,
+        cache_status=cache_status,
+        cache_error=cache_error,
+    )
+
+
+def _required_bot_permission(command: str, argument: str, captured: dict[str, str]) -> str:
+    if command == "help":
+        return ""
+    if command == "info":
+        return "can_view_routes"
+    if command == "webhook":
+        return "can_reveal_webhook_urls"
+    if command in {"enable", "disable"}:
+        return "can_manage_route_status"
+    if command == "delete":
+        return "can_delete_routes"
+    if command == "register":
+        return "can_create_channel_routes" if _scope_for(captured) in {"team", "channel"} else "can_create_private_chat_routes"
+    if command == "allowlist":
+        return "can_manage_allowlist" if _allowlist_argument_is_write(argument) else "can_view_routes"
+    return ""
+
+
+def _allowlist_argument_is_write(argument: str) -> bool:
+    lowered = argument.strip().lower()
+    return lowered == CLIENT_IP_ACCESS_PUBLIC or lowered.startswith(f"{CLIENT_IP_ACCESS_PUBLIC} ") or lowered == CLIENT_IP_ACCESS_RESTRICTED or lowered.startswith(f"{CLIENT_IP_ACCESS_RESTRICTED} ")
+
+
+def _bot_group_ids_for_sender(db: Session, organization_id: str, aad_object_id: str) -> tuple[list[str], str, str]:
+    now = utcnow()
+    has_group_grants = db.scalar(
+        select(BotAuthorizedGroup.id)
+        .where(BotAuthorizedGroup.organization_id == organization_id, BotAuthorizedGroup.is_active.is_(True))
+        .limit(1)
+    )
+    if not has_group_grants:
+        return [], "not_configured", ""
+    cache = db.scalar(
+        select(BotUserGroupMembershipCache).where(
+            BotUserGroupMembershipCache.organization_id == organization_id,
+            BotUserGroupMembershipCache.aad_object_id == aad_object_id,
+        )
+    )
+    if cache and ensure_utc(cache.expires_at) and ensure_utc(cache.expires_at) > now:
+        return cache.group_ids, "hit", cache.last_error or ""
+    try:
+        group_ids = list_user_transitive_group_ids(aad_object_id)
+    except (GraphConfigError, GraphRequestError) as exc:
+        error = _clip(str(exc), 1000)
+        if cache is not None:
+            cache.checked_at = now
+            cache.last_error = error
+            cache.updated_at = now
+        return [], "error", error
+    if cache is None:
+        cache = BotUserGroupMembershipCache(organization_id=organization_id, aad_object_id=aad_object_id)
+        db.add(cache)
+    cache.group_ids_json = dumps_json(group_ids)
+    cache.checked_at = now
+    cache.expires_at = now + BOT_GROUP_MEMBERSHIP_CACHE_TTL
+    cache.last_error = ""
+    cache.updated_at = now
+    return group_ids, "miss", ""
+
+
+def _matching_bot_groups(db: Session, organization_id: str, group_ids: list[str]) -> list[BotAuthorizedGroup]:
+    normalized_ids = [group_id.strip().lower() for group_id in group_ids if group_id.strip()]
+    if not normalized_ids:
+        return []
+    return db.scalars(
+        select(BotAuthorizedGroup)
+        .where(
+            BotAuthorizedGroup.organization_id == organization_id,
+            BotAuthorizedGroup.is_active.is_(True),
+            BotAuthorizedGroup.group_object_id.in_(normalized_ids),
+        )
+        .order_by(BotAuthorizedGroup.display_name.asc())
+    ).all()
+
+
+def _union_bot_permissions(sources: list[BotAuthorizedUser | BotAuthorizedGroup]) -> dict[str, bool]:
+    return {
+        field_name: any(_effective_bot_permissions(source).get(field_name, False) for source in sources)
+        for field_name in BOT_PERMISSION_FIELDS
+    }
+
+
+def _effective_bot_permissions(source: BotAuthorizedUser | BotAuthorizedGroup) -> dict[str, bool]:
+    access_role = getattr(source, "access_role", None)
+    if getattr(source, "role_id", None) and access_role is not None:
+        return role_permissions(access_role)
+    return {field_name: bool(getattr(source, field_name)) for field_name in BOT_PERMISSION_FIELDS}
+
+
+def _authorization_denied_command(command: str, authorization: BotCommandAuthorization) -> CommandResult:
+    if authorization.status == "permission_denied":
+        message = _permission_denied_message(authorization.required_permission)
+        return CommandResult(
+            handled=True,
+            command=command,
+            reply_text=message,
+            severity="warn",
+            activity=_command_activity(
+                "Permission denied",
+                message,
+                status="warning",
+            ),
+        )
+    if authorization.reason == "group_membership_lookup_unavailable":
+        message = "Teams Rehook cannot verify your authorization right now. Please try again later or contact IT."
+        return CommandResult(
+            handled=True,
+            command=command,
+            reply_text=message,
+            severity="warn",
+            activity=_command_activity(
+                "Authorization unavailable",
+                message,
+                status="warning",
+            ),
+        )
+    return CommandResult(
+        handled=True,
+        command=command,
+        reply_text=UNAUTHORIZED_BOT_USER_REPLY,
+        severity="warn",
+        activity=_command_activity(
+            "Not authorized",
+            UNAUTHORIZED_BOT_USER_REPLY,
+            status="warning",
+        ),
+    )
+
+
+def _permission_denied_message(required_permission: str) -> str:
+    labels = {
+        "can_view_routes": "view Teams conversations and webhook routes",
+        "can_reveal_webhook_urls": "view webhook URLs",
+        "can_manage_route_status": "enable or disable webhook routes",
+        "can_delete_routes": "delete webhook routes",
+        "can_manage_allowlist": "manage client IP allowlists",
+        "can_create_private_chat_routes": "create webhook routes for private chats",
+        "can_create_channel_routes": "create webhook routes for Teams channels",
+    }
+    action = labels.get(required_permission, "run this bot command")
+    return f"You are signed in, but you do not have permission to {action}. Please contact IT if you need this access."
+
+
+def _record_bot_command_authorization(
+    db: Session,
+    authorization: BotCommandAuthorization,
+    captured: dict[str, str],
+    parsed: tuple[str, str],
+) -> None:
+    command, argument = parsed
+    action = {
+        "authorized": "bot_command.authorized",
+        "permission_denied": "bot_command.permission_denied",
+    }.get(authorization.status, "bot_command.denied")
+    record_audit(
+        db,
+        action=action,
+        actor_type="bot_command",
+        actor_id=captured["graph_user_id"] or captured["from_id"] or None,
+        organization_id=_default_organization(db).id,
+        metadata={
+            "command": command,
+            "argument": argument,
+            "scope": _scope_for(captured),
+            "reason": authorization.reason,
+            "required_permission": authorization.required_permission,
+            "bot_authorized_user_id": authorization.bot_user.id if authorization.bot_user else "",
+            "authorization_sources": {
+                "direct_user": (
+                    {
+                        "id": authorization.bot_user.id,
+                        "aad_object_id": authorization.bot_user.aad_object_id,
+                        "display_name": authorization.bot_user.display_name,
+                        "role": authorization.bot_user.role,
+                    }
+                    if authorization.bot_user
+                    else None
+                ),
+                "groups": [
+                    {
+                        "id": bot_group.id,
+                        "group_object_id": bot_group.group_object_id,
+                        "display_name": bot_group.display_name,
+                        "mail": bot_group.mail,
+                        "role": bot_group.role,
+                    }
+                    for bot_group in authorization.bot_groups
+                ],
+                "cache_status": authorization.cache_status,
+                "cache_error": authorization.cache_error,
+                "permissions": authorization.permissions,
+                "allowed": authorization.allowed,
+            },
+            "aad_object_id": captured["graph_user_id"],
+            "teams_user_id": captured["from_id"],
+            "user_name": captured["user_name"],
+            "conversation_id": captured["conversation_id"],
+            "graph_team_id": captured["graph_team_id"],
+            "channel_id": captured["channel_id"],
+        },
+    )
+
+
 def _handle_command(
     db: Session,
     activity: dict[str, Any],
     captured: dict[str, str],
     reference: BotConversationReference | None,
+    *,
+    parsed: tuple[str, str] | None = None,
+    bot_user: BotAuthorizedUser | None = None,
 ) -> CommandResult:
     if captured["activity_type"] != "message":
         return CommandResult()
-    parsed = _parse_activity_command(activity)
+    parsed = parsed or _parse_activity_command(activity)
     if not parsed:
         return CommandResult()
     command, argument = parsed
     if command == "register":
-        return _register_route_from_command(db, captured, argument, reference)
+        return _register_route_from_command(db, captured, argument, reference, bot_user=bot_user)
     if command == "webhook":
-        return _webhook_url_command(db, argument)
+        return _webhook_url_command(db, argument, bot_user=bot_user)
     if command == "disable":
-        return _set_route_active_command(db, captured, argument, is_active=False)
+        return _set_route_active_command(db, captured, argument, is_active=False, bot_user=bot_user)
     if command == "enable":
-        return _set_route_active_command(db, captured, argument, is_active=True)
+        return _set_route_active_command(db, captured, argument, is_active=True, bot_user=bot_user)
     if command == "delete":
         return _delete_linked_route_command(db, captured, argument)
     if command == "info":
-        return _info_command(db, captured, reference, argument)
+        return _info_command(db, captured, reference, argument, bot_user=bot_user)
     if command == "allowlist":
         return _allowlist_command(db, captured, argument)
     if command == "help":
-        return _help_command()
+        return _help_command(bot_user=bot_user)
     return CommandResult()
 
 
@@ -746,7 +1073,14 @@ def _technical_fields(captured: dict[str, str]) -> list[tuple[str, str]]:
     ]
 
 
-def _route_command_activity(route: WebhookRoute, verb: str, reveal_url: str, captured: dict[str, str]) -> dict[str, Any]:
+def _route_command_activity(
+    route: WebhookRoute,
+    verb: str,
+    reveal_url: str,
+    captured: dict[str, str],
+    *,
+    bot_user: BotAuthorizedUser | None = None,
+) -> dict[str, Any]:
     target_name = _target_name(captured)
     return _command_activity(
         f"Route {verb}",
@@ -760,11 +1094,15 @@ def _route_command_activity(route: WebhookRoute, verb: str, reveal_url: str, cap
             ("Client IP access", _client_ip_access_summary(route)),
         ],
         technical_fields=_technical_fields(captured),
-        actions=_route_safe_actions(route, reveal_url=reveal_url),
+        actions=_route_safe_actions(
+            route,
+            reveal_url=reveal_url,
+            include_status_toggle=bool(bot_user and bot_user.can_manage_route_status),
+        ),
     )
 
 
-def _webhook_command_activity(route: WebhookRoute, reveal_url: str) -> dict[str, Any]:
+def _webhook_command_activity(route: WebhookRoute, reveal_url: str, *, bot_user: BotAuthorizedUser | None = None) -> dict[str, Any]:
     return _command_activity(
         "Webhook URL",
         "Open the button below to view and copy the stable incoming webhook URL.",
@@ -775,7 +1113,11 @@ def _webhook_command_activity(route: WebhookRoute, reveal_url: str) -> dict[str,
             ("Status", "active" if route.is_active else "inactive"),
             ("Client IP access", _client_ip_access_summary(route)),
         ],
-        actions=_route_safe_actions(route, reveal_url=reveal_url),
+        actions=_route_safe_actions(
+            route,
+            reveal_url=reveal_url,
+            include_status_toggle=bool(bot_user and bot_user.can_manage_route_status),
+        ),
     )
 
 
@@ -784,6 +1126,8 @@ def _info_detail_command_activity(
     reference: BotConversationReference | None,
     linked_route: WebhookRoute | None,
     reveal_url: str = "",
+    *,
+    bot_user: BotAuthorizedUser | None = None,
 ) -> dict[str, Any]:
     actions = [_copy_webhook_url_action(reveal_url)] if reveal_url else []
     facts = [
@@ -799,7 +1143,17 @@ def _info_detail_command_activity(
         status="success" if linked_route and linked_route.is_active else "info",
         facts=facts,
         technical_fields=_technical_fields(captured),
-        actions=[*actions, *(_route_safe_actions(linked_route, include_status_toggle=True) if linked_route else [])],
+        actions=[
+            *actions,
+            *(
+                _route_safe_actions(
+                    linked_route,
+                    include_status_toggle=bool(bot_user and bot_user.can_manage_route_status),
+                )
+                if linked_route
+                else []
+            ),
+        ],
     )
 
 
@@ -808,8 +1162,13 @@ def _info_overview_command_activity(
     reference: BotConversationReference | None,
     routes: list[WebhookRoute],
     reveal_urls: dict[str, str],
+    *,
+    bot_user: BotAuthorizedUser | None = None,
 ) -> dict[str, Any]:
-    route_sections = [_route_section_item(route, captured, reveal_url=reveal_urls.get(route.id, "")) for route in routes]
+    route_sections = [
+        _route_section_item(route, captured, reveal_url=reveal_urls.get(route.id, ""), bot_user=bot_user)
+        for route in routes
+    ]
     long_fields = [] if route_sections else [("Routes", "none")]
     return _command_activity(
         "Teams conversation captured",
@@ -826,7 +1185,13 @@ def _info_overview_command_activity(
     )
 
 
-def _route_section_item(route: WebhookRoute, captured: dict[str, str], *, reveal_url: str = "") -> dict[str, Any]:
+def _route_section_item(
+    route: WebhookRoute,
+    captured: dict[str, str],
+    *,
+    reveal_url: str = "",
+    bot_user: BotAuthorizedUser | None = None,
+) -> dict[str, Any]:
     facts = [
         ("Status", "active" if route.is_active else "inactive"),
         ("Target", route.target_name),
@@ -850,7 +1215,11 @@ def _route_section_item(route: WebhookRoute, captured: dict[str, str], *, reveal
             {
                 "type": "ActionSet",
                 "spacing": "Small",
-                "actions": _route_safe_actions(route, reveal_url=reveal_url),
+                "actions": _route_safe_actions(
+                    route,
+                    reveal_url=reveal_url,
+                    include_status_toggle=bool(bot_user and bot_user.can_manage_route_status),
+                ),
             },
         ],
     }
@@ -947,17 +1316,8 @@ def _looks_like_display_label(value: str, route: WebhookRoute, captured: dict[st
     return True
 
 
-def _help_command() -> CommandResult:
-    commands = [
-        ("register <route name>", "Create or update a route for this Teams conversation."),
-        ("webhook <route name>", "Show the webhook URL for an existing route."),
-        ("disable [route name]", "Disable a route linked to this Teams conversation."),
-        ("enable [route name]", "Enable a route linked to this Teams conversation."),
-        ("delete <route name>", "Delete a route linked to this Teams conversation."),
-        ("info [route name]", "Show linked routes or details for one route."),
-        ("allowlist [route name]", "Show or change the route client IP allowlist."),
-        ("help", "Show this command list."),
-    ]
+def _help_command(*, bot_user: BotAuthorizedUser | None = None) -> CommandResult:
+    commands = _available_help_commands(bot_user)
     reply_text = "\n".join(
         [
             "Available commands:",
@@ -970,6 +1330,29 @@ def _help_command() -> CommandResult:
         reply_text=reply_text,
         activity=_help_command_activity(commands),
     )
+
+
+def _available_help_commands(bot_user: BotAuthorizedUser | None) -> list[tuple[str, str]]:
+    commands: list[tuple[str, str]] = []
+    if bot_user and (bot_user.can_create_private_chat_routes or bot_user.can_create_channel_routes):
+        commands.append(("register <route name>", "Create or update a route for this Teams conversation."))
+    if bot_user and bot_user.can_reveal_webhook_urls:
+        commands.append(("webhook <route name>", "Show the webhook URL for an existing route."))
+    if bot_user and bot_user.can_manage_route_status:
+        commands.extend(
+            [
+                ("disable [route name]", "Disable a route linked to this Teams conversation."),
+                ("enable [route name]", "Enable a route linked to this Teams conversation."),
+            ]
+        )
+    if bot_user and bot_user.can_delete_routes:
+        commands.append(("delete <route name>", "Delete a route linked to this Teams conversation."))
+    if bot_user and bot_user.can_view_routes:
+        commands.append(("info [route name]", "Show linked routes or details for one route."))
+    if bot_user and (bot_user.can_view_routes or bot_user.can_manage_allowlist):
+        commands.append(("allowlist [route name]", "Show or change the route client IP allowlist."))
+    commands.append(("help", "Show this command list."))
+    return commands
 
 
 def _help_command_activity(commands: list[tuple[str, str]]) -> dict[str, Any]:
@@ -1032,6 +1415,8 @@ def _register_route_from_command(
     captured: dict[str, str],
     route_name: str,
     reference: BotConversationReference | None,
+    *,
+    bot_user: BotAuthorizedUser | None = None,
 ) -> CommandResult:
     if not route_name:
         reply_text = "Please include a route name, for example `register Jira Alerts`."
@@ -1117,21 +1502,26 @@ def _register_route_from_command(
     route.bot_registered_at = utcnow()
     try_resolve_route_graph_names(route)
     db.flush()
-    reveal_url = _issue_webhook_reveal_url(db, route)
+    reveal_url = _issue_webhook_reveal_url(db, route) if bot_user and bot_user.can_reveal_webhook_urls else ""
     verb = "created" if created else "updated"
+    reveal_instruction = (
+        "Open the webhook URL button to view and copy the route URL.\n\n"
+        if reveal_url
+        else "You do not have permission to reveal the route URL from Teams.\n\n"
+    )
     return CommandResult(
         handled=True,
         command="register",
         reply_text=(
             f"Route `{route.name}` {verb} for this conversation.\n\n"
-            "Open the webhook URL button to view and copy the route URL.\n\n"
+            f"{reveal_instruction}"
             "Use `info` to inspect the captured Teams IDs."
         ),
-        activity=_route_command_activity(route, verb, reveal_url, effective),
+        activity=_route_command_activity(route, verb, reveal_url, effective, bot_user=bot_user),
     )
 
 
-def _webhook_url_command(db: Session, route_name: str) -> CommandResult:
+def _webhook_url_command(db: Session, route_name: str, *, bot_user: BotAuthorizedUser | None = None) -> CommandResult:
     if not route_name:
         reply_text = "Please include a route name, for example `webhook Jira Alerts`."
         return CommandResult(
@@ -1185,11 +1575,18 @@ def _webhook_url_command(db: Session, route_name: str) -> CommandResult:
         handled=True,
         command="webhook",
         reply_text=f"Webhook URL for `{route.name}` is available through the button in this reply.",
-        activity=_webhook_command_activity(route, reveal_url),
+        activity=_webhook_command_activity(route, reveal_url, bot_user=bot_user),
     )
 
 
-def _set_route_active_command(db: Session, captured: dict[str, str], route_name: str, *, is_active: bool) -> CommandResult:
+def _set_route_active_command(
+    db: Session,
+    captured: dict[str, str],
+    route_name: str,
+    *,
+    is_active: bool,
+    bot_user: BotAuthorizedUser | None = None,
+) -> CommandResult:
     command = "enable" if is_active else "disable"
     verb = "enabled" if is_active else "disabled"
     if len(route_name) > 200:
@@ -1203,13 +1600,13 @@ def _set_route_active_command(db: Session, captured: dict[str, str], route_name:
     db.flush()
     _record_bot_route_audit(db, f"webhook_route.{verb}", route, captured, previous_is_active=was_active)
     state_text = "already " if was_active == is_active else ""
-    reveal_url = _issue_webhook_reveal_url(db, route) if route.route_token else ""
+    reveal_url = _issue_webhook_reveal_url(db, route) if route.route_token and bot_user and bot_user.can_reveal_webhook_urls else ""
     reply_text = f"Route `{route.name}` is {state_text}{verb} for this Teams conversation."
     return CommandResult(
         handled=True,
         command=command,
         reply_text=reply_text,
-        activity=_route_status_command_activity(route, verb, captured, reveal_url),
+        activity=_route_status_command_activity(route, verb, captured, reveal_url, bot_user=bot_user),
     )
 
 
@@ -1262,6 +1659,8 @@ def _info_command(
     captured: dict[str, str],
     reference: BotConversationReference | None,
     route_name: str,
+    *,
+    bot_user: BotAuthorizedUser | None = None,
 ) -> CommandResult:
     if len(route_name) > 200:
         return _route_name_too_long_command("info")
@@ -1303,7 +1702,7 @@ def _info_command(
         reveal_urls = {
             route.id: _issue_webhook_reveal_url(db, route)
             for route in routes
-            if route.route_token
+            if route.route_token and bot_user and bot_user.can_reveal_webhook_urls
         }
         if routes:
             lines.append(f"Linked routes: `{len(routes)}`")
@@ -1320,22 +1719,29 @@ def _info_command(
             handled=True,
             command="info",
             reply_text="\n".join(lines),
-            activity=_info_overview_command_activity(captured, reference, routes, reveal_urls),
+            activity=_info_overview_command_activity(captured, reference, routes, reveal_urls, bot_user=bot_user),
         )
-    reveal_url = _issue_webhook_reveal_url(db, linked_route) if linked_route and linked_route.route_token else ""
+    reveal_url = (
+        _issue_webhook_reveal_url(db, linked_route)
+        if linked_route and linked_route.route_token and bot_user and bot_user.can_reveal_webhook_urls
+        else ""
+    )
     if linked_route and linked_route.route_token:
         lines.append(f"Linked route: `{linked_route.name}`")
         lines.append(f"Route status: `{'active' if linked_route.is_active else 'inactive'}`")
         lines.append(f"Client IP access: `{_client_ip_access_summary(linked_route)}`")
         lines.append(f"Target: `{linked_route.target_name or '-'}`")
-        lines.append("Webhook URL: open the button in this reply to view and copy it.")
+        if reveal_url:
+            lines.append("Webhook URL: open the button in this reply to view and copy it.")
+        else:
+            lines.append("Webhook URL: unavailable with your current Teams bot permissions.")
     else:
         lines.append("Linked route: `none`")
     return CommandResult(
         handled=True,
         command="info",
         reply_text="\n".join(lines),
-        activity=_info_detail_command_activity(captured, reference, linked_route, reveal_url),
+        activity=_info_detail_command_activity(captured, reference, linked_route, reveal_url, bot_user=bot_user),
     )
 
 
@@ -1582,7 +1988,14 @@ def _route_name_too_long_command(command: str) -> CommandResult:
     )
 
 
-def _route_status_command_activity(route: WebhookRoute, verb: str, captured: dict[str, str], reveal_url: str) -> dict[str, Any]:
+def _route_status_command_activity(
+    route: WebhookRoute,
+    verb: str,
+    captured: dict[str, str],
+    reveal_url: str,
+    *,
+    bot_user: BotAuthorizedUser | None = None,
+) -> dict[str, Any]:
     return _command_activity(
         f"Route {verb}",
         f"{route.name} is {verb} for this Teams conversation.",
@@ -1593,7 +2006,11 @@ def _route_status_command_activity(route: WebhookRoute, verb: str, captured: dic
             ("Scope", _scope_for(captured)),
             ("Status", "active" if route.is_active else "inactive"),
         ],
-        actions=_route_safe_actions(route, reveal_url=reveal_url),
+        actions=_route_safe_actions(
+            route,
+            reveal_url=reveal_url,
+            include_status_toggle=bool(bot_user and bot_user.can_manage_route_status),
+        ),
     )
 
 

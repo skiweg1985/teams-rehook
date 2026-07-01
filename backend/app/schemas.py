@@ -67,6 +67,153 @@ class UserPasswordUpdateIn(BaseModel):
     password: str = Field(min_length=8, max_length=200)
 
 
+BotUserRole = str
+
+
+class BotUserPermissions(BaseModel):
+    can_view_routes: bool = True
+    can_reveal_webhook_urls: bool = True
+    can_manage_route_status: bool = False
+    can_delete_routes: bool = False
+    can_manage_allowlist: bool = False
+    can_create_private_chat_routes: bool = False
+    can_create_channel_routes: bool = False
+
+
+class BotAccessRoleOut(BotUserPermissions):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    organization_id: str
+    name: str
+    description: str = ""
+    is_system: bool
+    system_key: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class BotAccessRoleCreateIn(BotUserPermissions):
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=500)
+
+
+class BotAccessRoleUpdateIn(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=500)
+    can_view_routes: bool | None = None
+    can_reveal_webhook_urls: bool | None = None
+    can_manage_route_status: bool | None = None
+    can_delete_routes: bool | None = None
+    can_manage_allowlist: bool | None = None
+    can_create_private_chat_routes: bool | None = None
+    can_create_channel_routes: bool | None = None
+
+    @model_validator(mode="after")
+    def require_change(self):
+        if all(value is None for value in self.model_dump().values()):
+            raise ValueError("At least one field must be provided")
+        return self
+
+
+class BotAuthorizedUserOut(BotUserPermissions):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    organization_id: str
+    aad_object_id: str
+    display_name: str
+    user_principal_name: str
+    role_id: str | None = None
+    role: BotUserRole
+    is_active: bool
+    last_seen_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class BotAuthorizedUserCreateIn(BotUserPermissions):
+    aad_object_id: str = Field(min_length=1, max_length=255)
+    display_name: str = Field(min_length=1, max_length=255)
+    user_principal_name: str = Field(default="", max_length=255)
+    role_id: str | None = None
+    role: BotUserRole = "custom"
+    is_active: bool = True
+
+
+class BotAuthorizedUserUpdateIn(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=255)
+    user_principal_name: str | None = Field(default=None, max_length=255)
+    role_id: str | None = None
+    role: BotUserRole | None = None
+    is_active: bool | None = None
+    can_view_routes: bool | None = None
+    can_reveal_webhook_urls: bool | None = None
+    can_manage_route_status: bool | None = None
+    can_delete_routes: bool | None = None
+    can_manage_allowlist: bool | None = None
+    can_create_private_chat_routes: bool | None = None
+    can_create_channel_routes: bool | None = None
+
+    @model_validator(mode="after")
+    def require_change(self):
+        if all(value is None for value in self.model_dump().values()):
+            raise ValueError("At least one field must be provided")
+        return self
+
+
+class BotAuthorizedGroupOut(BotUserPermissions):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    organization_id: str
+    group_object_id: str
+    display_name: str
+    mail: str
+    security_enabled: bool
+    group_types: list[str] = Field(default_factory=list)
+    role_id: str | None = None
+    role: BotUserRole
+    is_active: bool
+    last_matched_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class BotAuthorizedGroupCreateIn(BotUserPermissions):
+    group_object_id: str = Field(min_length=1, max_length=255)
+    display_name: str = Field(min_length=1, max_length=255)
+    mail: str = Field(default="", max_length=255)
+    security_enabled: bool = False
+    group_types: list[str] = Field(default_factory=list)
+    role_id: str | None = None
+    role: BotUserRole = "custom"
+    is_active: bool = True
+
+
+class BotAuthorizedGroupUpdateIn(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=255)
+    mail: str | None = Field(default=None, max_length=255)
+    security_enabled: bool | None = None
+    group_types: list[str] | None = None
+    role_id: str | None = None
+    role: BotUserRole | None = None
+    is_active: bool | None = None
+    can_view_routes: bool | None = None
+    can_reveal_webhook_urls: bool | None = None
+    can_manage_route_status: bool | None = None
+    can_delete_routes: bool | None = None
+    can_manage_allowlist: bool | None = None
+    can_create_private_chat_routes: bool | None = None
+    can_create_channel_routes: bool | None = None
+
+    @model_validator(mode="after")
+    def require_change(self):
+        if all(value is None for value in self.model_dump().values()):
+            raise ValueError("At least one field must be provided")
+        return self
+
+
 class SessionResponse(BaseModel):
     ok: bool = True
     user: UserOut
@@ -109,6 +256,9 @@ class SystemLogEventOut(BaseModel):
     auth_service_url: str = ""
     auth_service_url_matched: bool = False
     auth_validated_at: datetime | None = None
+    bot_authorization_status: str = "not_applicable"
+    bot_authorized_user_id: str = ""
+    bot_authorization_reason: str = ""
     created_at: datetime
 
 
@@ -175,7 +325,7 @@ class WebhookAbuseCleanupOut(BaseModel):
     cutoff: datetime
 
 
-GraphTargetKind = Literal["user", "team", "channel", "chat"]
+GraphTargetKind = Literal["user", "team", "channel", "chat", "group"]
 DeliveryBackend = Literal["bot_framework", "graph"]
 ClientIpAccessMode = Literal["public", "restricted"]
 WebhookTargetType = Literal["bot_conversation"]
@@ -463,6 +613,11 @@ class GraphReadinessOut(ReadinessComponentOut):
     credential_source: str
     credential_fields: dict[str, str]
     oauth: OAuthDiagnosticsOut
+    group_membership_lookup_ready: bool = False
+    group_membership_required_roles: list[str] = Field(default_factory=list)
+    group_membership_alternative_roles: list[str] = Field(default_factory=list)
+    group_membership_missing_roles: list[str] = Field(default_factory=list)
+    group_membership_message: str = ""
 
 
 class GraphDeliveryReadinessOut(ReadinessComponentOut):
@@ -632,6 +787,27 @@ class TeamsTargetSearchOut(BaseModel):
     team_id: str | None = None
     team_name: str | None = None
     channel_id: str | None = None
+    mail: str = ""
+    security_enabled: bool | None = None
+    group_types: list[str] = Field(default_factory=list)
+
+
+class TeamsGroupMemberOut(BaseModel):
+    id: str
+    display_name: str
+    user_principal_name: str = ""
+    mail: str = ""
+
+
+class TeamsGroupMemberPageOut(BaseModel):
+    items: list[TeamsGroupMemberOut] = Field(default_factory=list)
+    offset: int = 0
+    limit: int = 100
+    has_more: bool = False
+
+
+class TeamsGroupMemberCountOut(BaseModel):
+    count: int
 
 
 class BotActivityIngestOut(BaseModel):

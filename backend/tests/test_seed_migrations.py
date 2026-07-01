@@ -364,12 +364,16 @@ def test_additive_schema_backfills_bot_activity_auth_metadata_columns(monkeypatc
             "auth_service_url",
             "auth_service_url_matched",
             "auth_validated_at",
+            "bot_authorization_status",
+            "bot_authorized_user_id",
+            "bot_authorization_reason",
         } <= columns
         row = connection.execute(
             text(
                 """
                 SELECT auth_status, auth_issuer, auth_audience, auth_service_url,
-                       auth_service_url_matched, auth_validated_at
+                       auth_service_url_matched, auth_validated_at,
+                       bot_authorization_status, bot_authorized_user_id, bot_authorization_reason
                 FROM bot_activity_events
                 WHERE id = 'event-1'
                 """
@@ -381,6 +385,9 @@ def test_additive_schema_backfills_bot_activity_auth_metadata_columns(monkeypatc
         assert row[3] == ""
         assert row[4] == 0
         assert row[5] is None
+        assert row[6] == "not_applicable"
+        assert row[7] == ""
+        assert row[8] == ""
 
 
 def test_init_db_rejects_placeholder_session_secret(monkeypatch: pytest.MonkeyPatch):

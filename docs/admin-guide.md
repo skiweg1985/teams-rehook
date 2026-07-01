@@ -96,6 +96,12 @@ Graph lookup uses app-only client credentials for target search and display-name
 - `User.Read.All`
 - `Team.ReadBasic.All`
 - `Channel.ReadBasic.All`
+- `Group.Read.All`
+- `GroupMember.Read.All`
+
+Bot Access groups use the same app-only Graph credentials. Group search requires `Group.Read.All`; runtime membership checks and the group member view require the app to read transitive memberships, so keep `User.Read.All` and `GroupMember.Read.All` granted. `Directory.Read.All` is an acceptable broader alternative when the tenant intentionally grants directory-wide read access.
+
+When group search fails with `Authorization_RequestDenied` or `Insufficient privileges to complete the operation`, verify that `Group.Read.All` is configured as a Microsoft Graph **Application permission** and that tenant admin consent has been granted after adding it. When group member lookup fails with the same error, verify `GroupMember.Read.All` or `Directory.Read.All`.
 
 Graph delivery uses a delegated service-user connection. Configure delegated permissions as required by the tenant:
 

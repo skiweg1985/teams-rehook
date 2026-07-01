@@ -57,6 +57,90 @@ export type UserPasswordUpdate = {
   password: string;
 };
 
+export type BotUserRole = string;
+
+export type BotUserPermissions = {
+  can_view_routes: boolean;
+  can_reveal_webhook_urls: boolean;
+  can_manage_route_status: boolean;
+  can_delete_routes: boolean;
+  can_manage_allowlist: boolean;
+  can_create_private_chat_routes: boolean;
+  can_create_channel_routes: boolean;
+};
+
+export type BotAccessRoleOut = BotUserPermissions & {
+  id: string;
+  organization_id: string;
+  name: string;
+  description: string;
+  is_system: boolean;
+  system_key: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BotAccessRoleCreate = BotUserPermissions & {
+  name: string;
+  description: string;
+};
+
+export type BotAccessRoleUpdate = Partial<BotAccessRoleCreate>;
+
+export type BotAuthorizedUserOut = BotUserPermissions & {
+  id: string;
+  organization_id: string;
+  aad_object_id: string;
+  display_name: string;
+  user_principal_name: string;
+  role_id: string | null;
+  role: BotUserRole;
+  is_active: boolean;
+  last_seen_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BotAuthorizedUserCreate = BotUserPermissions & {
+  aad_object_id: string;
+  display_name: string;
+  user_principal_name: string;
+  role_id?: string | null;
+  role: BotUserRole;
+  is_active: boolean;
+};
+
+export type BotAuthorizedUserUpdate = Partial<Omit<BotAuthorizedUserCreate, "aad_object_id">>;
+
+export type BotAuthorizedGroupOut = BotUserPermissions & {
+  id: string;
+  organization_id: string;
+  group_object_id: string;
+  display_name: string;
+  mail: string;
+  security_enabled: boolean;
+  group_types: string[];
+  role_id: string | null;
+  role: BotUserRole;
+  is_active: boolean;
+  last_matched_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BotAuthorizedGroupCreate = BotUserPermissions & {
+  group_object_id: string;
+  display_name: string;
+  mail: string;
+  security_enabled: boolean;
+  group_types: string[];
+  role_id?: string | null;
+  role: BotUserRole;
+  is_active: boolean;
+};
+
+export type BotAuthorizedGroupUpdate = Partial<Omit<BotAuthorizedGroupCreate, "group_object_id">>;
+
 export type ToastTone = "success" | "error" | "info";
 
 export type Toast = {
@@ -96,6 +180,9 @@ export type SystemLogEventOut = {
   auth_service_url: string;
   auth_service_url_matched: boolean;
   auth_validated_at: string | null;
+  bot_authorization_status: string;
+  bot_authorized_user_id: string;
+  bot_authorization_reason: string;
   created_at: string;
 };
 
@@ -154,7 +241,7 @@ export type WebhookAbuseCleanupOut = {
 export type WebhookTargetType = "bot_conversation";
 export type DeliveryBackend = "bot_framework" | "graph";
 export type ClientIpAccessMode = "public" | "restricted";
-export type GraphTargetKind = "user" | "team" | "channel" | "chat";
+export type GraphTargetKind = "user" | "team" | "channel" | "chat" | "group";
 
 export type ConversationMemberOut = {
   id: string;
@@ -365,6 +452,11 @@ export type AdminReadinessOut = {
     credential_source: "ms_app" | "missing" | string;
     credential_fields: Record<string, string>;
     oauth: OAuthDiagnosticsOut;
+    group_membership_lookup_ready: boolean;
+    group_membership_required_roles: string[];
+    group_membership_alternative_roles: string[];
+    group_membership_missing_roles: string[];
+    group_membership_message: string;
   };
   graph_delivery: {
     enabled: boolean;
@@ -462,6 +554,27 @@ export type TeamsTargetSearchResult = {
   team_id: string | null;
   team_name: string | null;
   channel_id: string | null;
+  mail: string;
+  security_enabled: boolean | null;
+  group_types: string[];
+};
+
+export type TeamsGroupMember = {
+  id: string;
+  display_name: string;
+  user_principal_name: string;
+  mail: string;
+};
+
+export type TeamsGroupMemberPage = {
+  items: TeamsGroupMember[];
+  offset: number;
+  limit: number;
+  has_more: boolean;
+};
+
+export type TeamsGroupMemberCount = {
+  count: number;
 };
 
 export type BotConversationReferenceOut = {

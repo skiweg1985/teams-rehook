@@ -54,6 +54,15 @@ import { ThemeToggle } from "./theme-toggle";
 import type {
   AdminReadinessOut,
   AuditEventOut,
+  BotAccessRoleCreate,
+  BotAccessRoleOut,
+  BotAccessRoleUpdate,
+  BotAuthorizedGroupCreate,
+  BotAuthorizedGroupOut,
+  BotAuthorizedUserCreate,
+  BotAuthorizedUserOut,
+  BotUserPermissions,
+  BotUserRole,
   BotConversationReferenceDetailOut,
   BotConversationReferenceOut,
   ClientIpAccessMode,
@@ -66,6 +75,7 @@ import type {
   OAuthDiagnosticsOut,
   SettingItemOut,
   SystemLogEventOut,
+  TeamsGroupMember,
   TeamsTargetSearchResult,
   UserOut,
   WebhookAbuseBucketOut,
@@ -86,6 +96,7 @@ type PayloadImageSize = "Auto" | "Stretch";
 type PayloadTitleSize = "Default" | "Medium" | "Large";
 type PayloadTitleWeight = "Default" | "Bolder";
 type SystemLogTab = "timeline" | "security" | "audit" | "bot";
+type UserAdminTab = "app-users" | "bot-access";
 
 type PayloadFact = {
   id: string;
@@ -4509,6 +4520,40 @@ function deliveryBackendLabel(backend: string): string {
 }
 
 function UsersPage() {
+  const [activeTab, setActiveTab] = useState<UserAdminTab>("app-users");
+  return (
+    <>
+      <PageIntro
+        eyebrow="Admin"
+        title="Users"
+        description={activeTab === "app-users" ? "Manage administrator access for Teams Rehook operations." : "Manage Entra users who can operate the relay bot from Teams."}
+        actions={
+          <div className="segmented-control" aria-label="User management section">
+            <button
+              className={classNames("segmented-control-button", activeTab === "app-users" && "is-active")}
+              type="button"
+              aria-pressed={activeTab === "app-users"}
+              onClick={() => setActiveTab("app-users")}
+            >
+              App users
+            </button>
+            <button
+              className={classNames("segmented-control-button", activeTab === "bot-access" && "is-active")}
+              type="button"
+              aria-pressed={activeTab === "bot-access"}
+              onClick={() => setActiveTab("bot-access")}
+            >
+              Bot access
+            </button>
+          </div>
+        }
+      />
+      {activeTab === "app-users" ? <AppUsersPanel /> : <BotAccessPanel />}
+    </>
+  );
+}
+
+function AppUsersPanel() {
   const { notify, refreshSession, session } = useAppContext();
   const [users, setUsers] = useState<UserOut[]>([]);
   const [loading, setLoading] = useState(true);
@@ -4537,17 +4582,15 @@ function UsersPage() {
 
   return (
     <>
-      <PageIntro
-        eyebrow="Admin"
-        title="Users"
-        description="Manage administrator access for Teams Rehook operations."
-        actions={
+      <div className="section-actions">
+        <div />
+        <div>
           <button className="primary-button button-with-icon" type="button" onClick={() => setCreateOpen(true)}>
             <Plus aria-hidden="true" className="button-icon" focusable="false" />
             <span>Create user</span>
           </button>
-        }
-      />
+        </div>
+      </div>
       <Card>
         <DataTable
           columns={["Name", "Email", "Role", "Status", "Created", "Actions"]}
@@ -4618,6 +4661,1551 @@ function UsersPage() {
       ) : null}
     </>
   );
+}
+
+const BOT_PERMISSION_FIELDS: Array<{ key: keyof BotUserPermissions; label: string }> = [
+  { key: "can_view_routes", label: "View routes" },
+  { key: "can_reveal_webhook_urls", label: "Reveal webhook URLs" },
+  { key: "can_manage_route_status", label: "Enable or disable routes" },
+  { key: "can_delete_routes", label: "Delete routes" },
+  { key: "can_manage_allowlist", label: "Manage IP allowlists" },
+  { key: "can_create_private_chat_routes", label: "Create private chat routes" },
+  { key: "can_create_channel_routes", label: "Create channel routes" },
+];
+
+type BotGroupMemberCountState = { loading: boolean; count?: number; error?: string } | null;
+type BotAccessSubview = "users" | "groups" | "roles";
+type BotAccessGrant = (BotAuthorizedUserOut | BotAuthorizedGroupOut) & { role_id?: string | null; role?: BotUserRole };
+
+const BOT_PERMISSION_SHORT_LABELS: Record<keyof BotUserPermissions, string> = {
+  can_view_routes: "View routes",
+  can_reveal_webhook_urls: "Reveal URLs",
+  can_manage_route_status: "Enable / Disable",
+  can_delete_routes: "Delete routes",
+  can_manage_allowlist: "Manage allowlists",
+  can_create_private_chat_routes: "Private chat routes",
+  can_create_channel_routes: "Channel routes",
+};
+
+const BOT_PERMISSION_GROUPS: Array<{ title: string; fields: Array<keyof BotUserPermissions> }> = [
+  { title: "Read", fields: ["can_view_routes", "can_reveal_webhook_urls"] },
+  { title: "Operate", fields: ["can_manage_route_status"] },
+  { title: "Create", fields: ["can_create_channel_routes", "can_create_private_chat_routes"] },
+  { title: "Administration", fields: ["can_delete_routes", "can_manage_allowlist"] },
+];
+
+function BotAccessPanel() {
+  const { notify, session } = useAppContext();
+  const [activeView, setActiveView] = useState<BotAccessSubview>("users");
+  const [botRoles, setBotRoles] = useState<BotAccessRoleOut[]>([]);
+  const [botUsers, setBotUsers] = useState<BotAuthorizedUserOut[]>([]);
+  const [botGroups, setBotGroups] = useState<BotAuthorizedGroupOut[]>([]);
+  const [groupMemberCounts, setGroupMemberCounts] = useState<Record<string, { loading: boolean; count?: number; error?: string }>>({});
+  const requestedGroupMemberCounts = useRef(new Set<string>());
+  const [rolesLoading, setRolesLoading] = useState(true);
+  const [usersLoading, setUsersLoading] = useState(true);
+  const [groupsLoading, setGroupsLoading] = useState(true);
+  const [rolesError, setRolesError] = useState("");
+  const [usersError, setUsersError] = useState("");
+  const [groupsError, setGroupsError] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [editingRole, setEditingRole] = useState<BotAccessRoleOut | null>(null);
+  const [editingUser, setEditingUser] = useState<BotAuthorizedUserOut | null>(null);
+  const [editingGroup, setEditingGroup] = useState<BotAuthorizedGroupOut | null>(null);
+  const [viewingGroupMembers, setViewingGroupMembers] = useState<BotAuthorizedGroupOut | null>(null);
+  const [deletingRole, setDeletingRole] = useState<BotAccessRoleOut | null>(null);
+  const [deletingUser, setDeletingUser] = useState<BotAuthorizedUserOut | null>(null);
+  const [deletingGroup, setDeletingGroup] = useState<BotAuthorizedGroupOut | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
+
+  const refreshRoles = useCallback(async () => {
+    setRolesLoading(true);
+    setRolesError("");
+    try {
+      setBotRoles(await api.adminBotRoles(csrfToken));
+    } catch (err) {
+      setRolesError(isApiError(err) ? err.message : "Bot access roles could not be loaded.");
+    } finally {
+      setRolesLoading(false);
+    }
+  }, [csrfToken]);
+
+  const refreshUsers = useCallback(async () => {
+    setUsersLoading(true);
+    setUsersError("");
+    try {
+      setBotUsers(await api.adminBotUsers(csrfToken));
+    } catch (err) {
+      setUsersError(isApiError(err) ? err.message : "Bot access users could not be loaded.");
+    } finally {
+      setUsersLoading(false);
+    }
+  }, [csrfToken]);
+
+  const refreshGroups = useCallback(async () => {
+    setGroupsLoading(true);
+    setGroupsError("");
+    try {
+      setBotGroups(await api.adminBotGroups(csrfToken));
+    } catch (err) {
+      setGroupsError(isApiError(err) ? err.message : "Bot access groups could not be loaded.");
+    } finally {
+      setGroupsLoading(false);
+    }
+  }, [csrfToken]);
+
+  useEffect(() => {
+    void refreshRoles();
+    void refreshUsers();
+    void refreshGroups();
+  }, [refreshGroups, refreshRoles, refreshUsers]);
+
+  useEffect(() => {
+    if (!csrfToken || !botGroups.length) return;
+    const missingGroups = botGroups.filter((group) => !requestedGroupMemberCounts.current.has(group.id));
+    if (!missingGroups.length) return;
+    for (const group of missingGroups) {
+      requestedGroupMemberCounts.current.add(group.id);
+    }
+    setGroupMemberCounts((current) => {
+      const next = { ...current };
+      for (const group of botGroups) {
+        if (current[group.id]) continue;
+        next[group.id] = { loading: true };
+      }
+      return next;
+    });
+    for (const group of missingGroups) {
+      void api.groupMemberCount(group.group_object_id)
+        .then((result) => {
+          setGroupMemberCounts((current) => ({ ...current, [group.id]: { loading: false, count: result.count } }));
+        })
+        .catch((err) => {
+          setGroupMemberCounts((current) => ({
+            ...current,
+            [group.id]: { loading: false, error: isApiError(err) ? err.message : "Member count unavailable." },
+          }));
+        });
+    }
+  }, [botGroups, csrfToken]);
+
+  async function deleteBotUser() {
+    if (!deletingUser) return;
+    setDeleting(true);
+    try {
+      await api.deleteAdminBotUser(csrfToken, deletingUser.id);
+      notify({ tone: "success", title: "Bot access removed" });
+      setDeletingUser(null);
+      await refreshUsers();
+    } catch (err) {
+      notify({ tone: "error", title: "Bot access could not be removed", description: isApiError(err) ? err.message : undefined });
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  async function deleteBotGroup() {
+    if (!deletingGroup) return;
+    setDeleting(true);
+    try {
+      await api.deleteAdminBotGroup(csrfToken, deletingGroup.id);
+      notify({ tone: "success", title: "Bot group access removed" });
+      setDeletingGroup(null);
+      await refreshGroups();
+    } catch (err) {
+      notify({ tone: "error", title: "Bot group access could not be removed", description: isApiError(err) ? err.message : undefined });
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  async function deleteBotRole() {
+    if (!deletingRole) return;
+    setDeleting(true);
+    try {
+      await api.deleteAdminBotRole(csrfToken, deletingRole.id);
+      notify({ tone: "success", title: "Bot role removed" });
+      setDeletingRole(null);
+      await refreshRoles();
+    } catch (err) {
+      notify({ tone: "error", title: "Bot role could not be removed", description: isApiError(err) ? err.message : undefined });
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="section-actions">
+        <div className="segmented-control" aria-label="Bot access view">
+          <button
+            className={classNames("segmented-control-button", activeView === "users" && "is-active")}
+            type="button"
+            aria-pressed={activeView === "users"}
+            onClick={() => setActiveView("users")}
+          >
+            Users
+          </button>
+          <button
+            className={classNames("segmented-control-button", activeView === "groups" && "is-active")}
+            type="button"
+            aria-pressed={activeView === "groups"}
+            onClick={() => setActiveView("groups")}
+          >
+            Groups
+          </button>
+          <button
+            className={classNames("segmented-control-button", activeView === "roles" && "is-active")}
+            type="button"
+            aria-pressed={activeView === "roles"}
+            onClick={() => setActiveView("roles")}
+          >
+            Roles
+          </button>
+        </div>
+        <div>
+          <button className="primary-button button-with-icon" type="button" onClick={() => setCreateOpen(true)}>
+            <Plus aria-hidden="true" className="button-icon" focusable="false" />
+            <span>{activeView === "users" ? "Add bot user" : activeView === "groups" ? "Add bot group" : "Add bot role"}</span>
+          </button>
+        </div>
+      </div>
+      {activeView === "users" ? (
+        <Card>
+          <DataTable
+            columns={["Name", "UPN", "Role", "Status", "Permissions", "Last seen", "Actions"]}
+            rows={botUsers.map((user) => [
+              <span className="user-name-cell" title={`AAD object ID: ${user.aad_object_id}`}>
+                <strong>{user.display_name}</strong>
+              </span>,
+              user.user_principal_name || "-",
+              <StatusBadge label={botGrantRoleLabel(user, botRoles)} tone={user.role_id ? "success" : "warn"} />,
+              user.is_active ? <StatusBadge label="Active" tone="success" /> : <StatusBadge label="Disabled" tone="danger" />,
+              botPermissionSummary(botGrantPermissions(user, botRoles)),
+              user.last_seen_at ? formatRelativeTime(user.last_seen_at) : "Never",
+              <RowActionMenu
+                label={`Actions for ${user.display_name}`}
+                items={[
+                  { label: "Edit access", icon: Pencil, onClick: () => setEditingUser(user) },
+                  { label: "Remove access", icon: Trash2, onClick: () => setDeletingUser(user) },
+                ]}
+              />,
+            ])}
+            emptyTitle="No bot access users"
+            emptyBody="Add Entra users here before they can operate Teams bot commands."
+            loading={usersLoading}
+            loadingLabel="Loading bot access users..."
+            error={usersError}
+            onRetry={() => void refreshUsers()}
+            rowKey={(index) => botUsers[index]?.id ?? index}
+          />
+        </Card>
+      ) : activeView === "groups" ? (
+        <Card>
+          <DataTable
+            className="data-table--bot-groups"
+            columns={["Group", "Mail / Type", "Role", "Status", "Permissions", "Members", "Last matched", "Actions"]}
+            rows={botGroups.map((group) => [
+              <span className="bot-group-name-cell" title={`Group object ID: ${group.group_object_id}`}>
+                <strong>{group.display_name}</strong>
+              </span>,
+              <span className="bot-group-mail-type-cell">
+                {botGroupMailLabel(group) ? <span>{botGroupMailLabel(group)}</span> : null}
+                <small>{botGroupTypeLabel(group)}</small>
+              </span>,
+              <StatusBadge label={botGrantRoleLabel(group, botRoles)} tone={group.role_id ? "success" : "warn"} />,
+              group.is_active ? <StatusBadge label="Active" tone="success" /> : <StatusBadge label="Disabled" tone="danger" />,
+              botPermissionSummary(botGrantPermissions(group, botRoles)),
+              botGroupMemberCountLabel(groupMemberCounts[group.id]),
+              group.last_matched_at ? formatRelativeTime(group.last_matched_at) : "Never",
+              <RowActionMenu
+                label={`Actions for ${group.display_name}`}
+                items={[
+                  { label: "View members", icon: Eye, onClick: () => setViewingGroupMembers(group) },
+                  { label: "Edit access", icon: Pencil, onClick: () => setEditingGroup(group) },
+                  { label: "Remove access", icon: Trash2, onClick: () => setDeletingGroup(group) },
+                ]}
+              />,
+            ])}
+            emptyTitle="No bot access groups"
+            emptyBody="Add Entra groups here to grant Teams bot permissions by membership."
+            loading={groupsLoading}
+            loadingLabel="Loading bot access groups..."
+            error={groupsError}
+            onRetry={() => void refreshGroups()}
+            rowKey={(index) => botGroups[index]?.id ?? index}
+          />
+        </Card>
+      ) : (
+        <Card>
+          <DataTable
+            columns={["Role", "Type", "Permissions", "Updated", "Actions"]}
+            rows={botRoles.map((role) => [
+              <span className="user-name-cell">
+                <strong>{role.name}</strong>
+                {role.description ? <small>{role.description}</small> : null}
+              </span>,
+              <StatusBadge label={role.is_system ? "System" : "Custom"} tone={role.is_system ? "success" : "neutral"} />,
+              botPermissionSummary(role),
+              role.updated_at ? formatRelativeTime(role.updated_at) : "-",
+              <RowActionMenu
+                label={`Actions for ${role.name}`}
+                items={[
+                  { label: "Edit role", icon: Pencil, onClick: () => setEditingRole(role) },
+                  ...(role.is_system ? [] : [{ label: "Delete role", icon: Trash2, onClick: () => setDeletingRole(role) }]),
+                ]}
+              />,
+            ])}
+            emptyTitle="No bot access roles"
+            emptyBody="Create role templates to reuse permission sets for bot users and groups."
+            loading={rolesLoading}
+            loadingLabel="Loading bot access roles..."
+            error={rolesError}
+            onRetry={() => void refreshRoles()}
+            rowKey={(index) => botRoles[index]?.id ?? index}
+          />
+        </Card>
+      )}
+      {createOpen && activeView === "users" ? (
+        <BotAccessCreateModal
+          csrfToken={csrfToken}
+          roles={botRoles}
+          onClose={() => setCreateOpen(false)}
+          onSaved={() => {
+            setCreateOpen(false);
+            notify({ tone: "success", title: "Bot access added" });
+            void refreshUsers();
+          }}
+        />
+      ) : null}
+      {createOpen && activeView === "groups" ? (
+        <BotGroupCreateModal
+          csrfToken={csrfToken}
+          roles={botRoles}
+          onClose={() => setCreateOpen(false)}
+          onSaved={() => {
+            setCreateOpen(false);
+            notify({ tone: "success", title: "Bot group access added" });
+            void refreshGroups();
+          }}
+        />
+      ) : null}
+      {createOpen && activeView === "roles" ? (
+        <BotRoleEditModal
+          csrfToken={csrfToken}
+          onClose={() => setCreateOpen(false)}
+          onSaved={() => {
+            setCreateOpen(false);
+            notify({ tone: "success", title: "Bot role added" });
+            void refreshRoles();
+          }}
+        />
+      ) : null}
+      {editingRole ? (
+        <BotRoleEditModal
+          csrfToken={csrfToken}
+          role={editingRole}
+          onClose={() => setEditingRole(null)}
+          onSaved={() => {
+            setEditingRole(null);
+            notify({ tone: "success", title: "Bot role updated" });
+            void refreshRoles();
+            void refreshUsers();
+            void refreshGroups();
+          }}
+        />
+      ) : null}
+      {editingUser ? (
+        <BotAccessEditModal
+          csrfToken={csrfToken}
+          roles={botRoles}
+          user={editingUser}
+          onClose={() => setEditingUser(null)}
+          onSaved={() => {
+            setEditingUser(null);
+            notify({ tone: "success", title: "Bot access updated" });
+            void refreshUsers();
+          }}
+        />
+      ) : null}
+      {editingGroup ? (
+        <BotGroupEditModal
+          csrfToken={csrfToken}
+          roles={botRoles}
+          group={editingGroup}
+          onClose={() => setEditingGroup(null)}
+          onSaved={() => {
+            setEditingGroup(null);
+            notify({ tone: "success", title: "Bot group access updated" });
+            void refreshGroups();
+          }}
+        />
+      ) : null}
+      {viewingGroupMembers ? (
+        <BotGroupMembersModal group={viewingGroupMembers} onClose={() => setViewingGroupMembers(null)} />
+      ) : null}
+      {deletingUser ? (
+        <ConfirmModal
+          title="Remove bot access?"
+          description={`${deletingUser.display_name} will no longer be able to use Teams bot commands.`}
+          confirmLabel="Remove access"
+          busyLabel="Removing..."
+          busy={deleting}
+          tone="danger"
+          onClose={() => setDeletingUser(null)}
+          onConfirm={() => void deleteBotUser()}
+        />
+      ) : null}
+      {deletingGroup ? (
+        <ConfirmModal
+          title="Remove bot group access?"
+          description={`${deletingGroup.display_name} will no longer grant Teams bot permissions to its members.`}
+          confirmLabel="Remove access"
+          busyLabel="Removing..."
+          busy={deleting}
+          tone="danger"
+          onClose={() => setDeletingGroup(null)}
+          onConfirm={() => void deleteBotGroup()}
+        />
+      ) : null}
+      {deletingRole ? (
+        <ConfirmModal
+          title="Delete bot role?"
+          description={`${deletingRole.name} can only be deleted while no bot users or groups use it.`}
+          confirmLabel="Delete role"
+          busyLabel="Deleting..."
+          busy={deleting}
+          tone="danger"
+          onClose={() => setDeletingRole(null)}
+          onConfirm={() => void deleteBotRole()}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function BotAccessCreateModal({
+  csrfToken,
+  roles,
+  onClose,
+  onSaved,
+}: {
+  csrfToken: string;
+  roles: BotAccessRoleOut[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<TeamsTargetSearchResult[]>([]);
+  const [selectedUser, setSelectedUser] = useState<TeamsTargetSearchResult | null>(null);
+  const initialRole = defaultBotAccessRole(roles);
+  const [selectedRoleId, setSelectedRoleId] = useState<string | null>(initialRole?.id ?? null);
+  const [role, setRole] = useState<BotUserRole>(initialRole ? botRoleValue(initialRole) : "custom");
+  const [permissions, setPermissions] = useState<BotUserPermissions>(initialRole ? botPermissionsFromGrant(initialRole) : emptyBotPermissions());
+  const [isActive, setIsActive] = useState(true);
+  const [searching, setSearching] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const selectedRole = roles.find((entry) => entry.id === selectedRoleId) ?? null;
+
+  async function searchUsers() {
+    setSearching(true);
+    setError("");
+    try {
+      setResults(await api.searchTeamsTargets("user", query));
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "User search failed.");
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  function selectUser(user: TeamsTargetSearchResult) {
+    setSelectedUser(user);
+    setResults([]);
+    setQuery(user.display_name);
+  }
+
+  function changeSelectedUser() {
+    setSelectedUser(null);
+    setResults([]);
+  }
+
+  function selectRole(nextRole: BotAccessRoleOut | "custom") {
+    if (nextRole === "custom") {
+      setSelectedRoleId(null);
+      setRole("custom");
+      return;
+    }
+    setSelectedRoleId(nextRole.id);
+    setRole(botRoleValue(nextRole));
+    setPermissions(botPermissionsFromGrant(nextRole));
+  }
+
+  function updateCustomPermission(key: keyof BotUserPermissions, checked: boolean) {
+    setPermissions({ ...permissions, [key]: checked });
+    setSelectedRoleId(null);
+    setRole("custom");
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!selectedUser) {
+      setError("Select an Entra user first.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const body: BotAuthorizedUserCreate = {
+        aad_object_id: selectedUser.id,
+        display_name: selectedUser.display_name,
+        user_principal_name: selectedUser.subtitle || "",
+        role_id: selectedRoleId,
+        role,
+        is_active: isActive,
+        ...permissions,
+      };
+      await api.createAdminBotUser(csrfToken, body);
+      onSaved();
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Bot access could not be added.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Add bot access" onClose={onClose} panelClassName="bot-access-workflow-modal">
+      <form className="bot-access-flow" onSubmit={(event) => void submit(event)}>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading">
+            <span>1</span>
+            <h3>Select Entra user</h3>
+          </div>
+          {selectedUser ? (
+            <SelectedBotPrincipalSummary target={selectedUser} onChange={changeSelectedUser} />
+          ) : (
+            <>
+              <div className="bot-access-search">
+                <Search aria-hidden="true" focusable="false" />
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void searchUsers();
+                    }
+                  }}
+                  placeholder="Search users..."
+                  autoFocus
+                />
+                <button className="secondary-button secondary-button--small" type="button" onClick={() => void searchUsers()} disabled={searching || query.trim().length < 2}>
+                  {searching ? "Searching..." : "Search"}
+                </button>
+              </div>
+              <BotPrincipalSearchResults results={results} onSelect={selectUser} />
+            </>
+          )}
+        </section>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading bot-access-step-heading--split">
+            <span>2</span>
+            <h3>Access level</h3>
+            <label className="bot-access-active-toggle">
+              <input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} />
+              <span>Active</span>
+            </label>
+          </div>
+          <BotAccessRoleList roles={roles} selectedRoleId={selectedRoleId} permissions={permissions} onRoleChange={selectRole} />
+        </section>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading bot-access-step-heading--split">
+            <span>3</span>
+            <h3>Permissions</h3>
+            <small>{selectedRole ? `Inherited from ${selectedRole.name}` : "Inline custom"}</small>
+          </div>
+          {selectedRole ? (
+            <BotAccessPermissionSummary permissions={permissions} />
+          ) : (
+            <BotAccessCustomPermissions permissions={permissions} onPermissionChange={updateCustomPermission} />
+          )}
+        </section>
+        {error ? <p className="form-error">{error}</p> : null}
+        <div className="bot-access-flow-footer">
+          <div className="bot-access-footer-summary">
+            <div>
+              <span>User</span>
+              <strong>{selectedUser?.display_name ?? "Not selected"}</strong>
+            </div>
+            <div>
+              <span>Access level</span>
+              <strong>{botAccessLevelLabel(selectedRole, role)}</strong>
+            </div>
+            <div>
+              <span>UPN</span>
+              <strong>{selectedUser?.subtitle || "-"}</strong>
+            </div>
+          </div>
+          <div className="bot-access-footer-actions">
+            <button className="secondary-button" type="button" onClick={onClose} disabled={busy}>
+              Cancel
+            </button>
+            <button className="primary-button" type="submit" disabled={busy || !selectedUser}>
+              {busy ? "Adding..." : `Add ${botAccessLevelLabel(selectedRole, role)} Access`}
+            </button>
+          </div>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function directoryTargetMeta(target: TeamsTargetSearchResult): string {
+  if (target.kind === "group") {
+    return [target.mail, groupTypeLabelFromParts(target.group_types, target.security_enabled)].filter(Boolean).join(" · ");
+  }
+  return target.subtitle || "No mail address returned";
+}
+
+function BotAccessEditModal({
+  csrfToken,
+  roles,
+  user,
+  onClose,
+  onSaved,
+}: {
+  csrfToken: string;
+  roles: BotAccessRoleOut[];
+  user: BotAuthorizedUserOut;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [displayName, setDisplayName] = useState(user.display_name);
+  const [userPrincipalName, setUserPrincipalName] = useState(user.user_principal_name);
+  const initialRole = roleForGrant(user, roles);
+  const [selectedRoleId, setSelectedRoleId] = useState<string | null>(initialRole?.id ?? null);
+  const [role, setRole] = useState<BotUserRole>(initialRole ? botRoleValue(initialRole) : user.role);
+  const [permissions, setPermissions] = useState<BotUserPermissions>(initialRole ? botPermissionsFromGrant(initialRole) : botPermissionsFromGrant(user));
+  const [isActive, setIsActive] = useState(user.is_active);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const selectedRole = roles.find((entry) => entry.id === selectedRoleId) ?? null;
+
+  function selectRole(nextRole: BotAccessRoleOut | "custom") {
+    if (nextRole === "custom") {
+      setSelectedRoleId(null);
+      setRole("custom");
+      return;
+    }
+    setSelectedRoleId(nextRole.id);
+    setRole(botRoleValue(nextRole));
+    setPermissions(botPermissionsFromGrant(nextRole));
+  }
+
+  function updateCustomPermission(key: keyof BotUserPermissions, checked: boolean) {
+    setPermissions({ ...permissions, [key]: checked });
+    setSelectedRoleId(null);
+    setRole("custom");
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await api.updateAdminBotUser(csrfToken, user.id, {
+        display_name: displayName,
+        user_principal_name: userPrincipalName,
+        role_id: selectedRoleId,
+        role,
+        is_active: isActive,
+        ...permissions,
+      });
+      onSaved();
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Bot access could not be updated.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Edit bot access" onClose={onClose} panelClassName="bot-access-workflow-modal">
+      <form className="bot-access-flow" onSubmit={(event) => void submit(event)}>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading">
+            <span>1</span>
+            <h3>User details</h3>
+          </div>
+          <div className="bot-access-identity-editor">
+            <label>
+              <span>Display name</span>
+              <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} required maxLength={255} autoFocus />
+            </label>
+            <label>
+              <span>UPN</span>
+              <input value={userPrincipalName} onChange={(event) => setUserPrincipalName(event.target.value)} maxLength={255} />
+            </label>
+            <div className="bot-access-technical-id">
+              <span>AAD object ID</span>
+              <code>{user.aad_object_id}</code>
+            </div>
+          </div>
+        </section>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading bot-access-step-heading--split">
+            <span>2</span>
+            <h3>Access level</h3>
+            <label className="bot-access-active-toggle">
+              <input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} />
+              <span>Active</span>
+            </label>
+          </div>
+          <BotAccessRoleList roles={roles} selectedRoleId={selectedRoleId} permissions={permissions} onRoleChange={selectRole} />
+        </section>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading bot-access-step-heading--split">
+            <span>3</span>
+            <h3>Permissions</h3>
+            <small>{selectedRole ? `Inherited from ${selectedRole.name}` : "Inline custom"}</small>
+          </div>
+          {selectedRole ? (
+            <BotAccessPermissionSummary permissions={permissions} />
+          ) : (
+            <BotAccessCustomPermissions permissions={permissions} onPermissionChange={updateCustomPermission} />
+          )}
+        </section>
+        {error ? <p className="form-error">{error}</p> : null}
+        <div className="bot-access-flow-footer">
+          <div className="bot-access-footer-summary">
+            <div>
+              <span>User</span>
+              <strong>{displayName || "Not named"}</strong>
+            </div>
+            <div>
+              <span>Access level</span>
+              <strong>{botAccessLevelLabel(selectedRole, role)}</strong>
+            </div>
+            <div>
+              <span>UPN</span>
+              <strong>{userPrincipalName || "-"}</strong>
+            </div>
+          </div>
+          <div className="bot-access-footer-actions">
+            <button className="secondary-button" type="button" onClick={onClose} disabled={busy}>
+              Cancel
+            </button>
+            <button className="primary-button" type="submit" disabled={busy}>
+              {busy ? "Saving..." : `Save ${botAccessLevelLabel(selectedRole, role)} Access`}
+            </button>
+          </div>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function BotGroupCreateModal({
+  csrfToken,
+  roles,
+  onClose,
+  onSaved,
+}: {
+  csrfToken: string;
+  roles: BotAccessRoleOut[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<TeamsTargetSearchResult[]>([]);
+  const [selectedGroup, setSelectedGroup] = useState<TeamsTargetSearchResult | null>(null);
+  const [selectedGroupMemberCount, setSelectedGroupMemberCount] = useState<BotGroupMemberCountState>(null);
+  const initialRole = defaultBotAccessRole(roles);
+  const [selectedRoleId, setSelectedRoleId] = useState<string | null>(initialRole?.id ?? null);
+  const [role, setRole] = useState<BotUserRole>(initialRole ? botRoleValue(initialRole) : "custom");
+  const [permissions, setPermissions] = useState<BotUserPermissions>(initialRole ? botPermissionsFromGrant(initialRole) : emptyBotPermissions());
+  const [isActive, setIsActive] = useState(true);
+  const [searching, setSearching] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const selectedRole = roles.find((entry) => entry.id === selectedRoleId) ?? null;
+
+  async function searchGroups() {
+    setSearching(true);
+    setError("");
+    try {
+      setResults(await api.searchTeamsTargets("group", query));
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Group search failed.");
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!selectedGroup) {
+      setSelectedGroupMemberCount(null);
+      return;
+    }
+    let cancelled = false;
+    setSelectedGroupMemberCount({ loading: true });
+    void api.groupMemberCount(selectedGroup.id)
+      .then((result) => {
+        if (!cancelled) setSelectedGroupMemberCount({ loading: false, count: result.count });
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setSelectedGroupMemberCount({ loading: false, error: isApiError(err) ? err.message : "Member count unavailable." });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedGroup]);
+
+  function selectGroup(group: TeamsTargetSearchResult) {
+    setSelectedGroup(group);
+    setResults([]);
+    setQuery(group.display_name);
+  }
+
+  function changeSelectedGroup() {
+    setSelectedGroup(null);
+    setSelectedGroupMemberCount(null);
+    setResults([]);
+  }
+
+  function selectRole(nextRole: BotAccessRoleOut | "custom") {
+    if (nextRole === "custom") {
+      setSelectedRoleId(null);
+      setRole("custom");
+      return;
+    }
+    setSelectedRoleId(nextRole.id);
+    setRole(botRoleValue(nextRole));
+    setPermissions(botPermissionsFromGrant(nextRole));
+  }
+
+  function updateCustomPermission(key: keyof BotUserPermissions, checked: boolean) {
+    setPermissions({ ...permissions, [key]: checked });
+    setSelectedRoleId(null);
+    setRole("custom");
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!selectedGroup) {
+      setError("Select an Entra group first.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const body: BotAuthorizedGroupCreate = {
+        group_object_id: selectedGroup.id,
+        display_name: selectedGroup.display_name,
+        mail: selectedGroup.mail || "",
+        security_enabled: Boolean(selectedGroup.security_enabled),
+        group_types: selectedGroup.group_types || [],
+        role_id: selectedRoleId,
+        role,
+        is_active: isActive,
+        ...permissions,
+      };
+      await api.createAdminBotGroup(csrfToken, body);
+      onSaved();
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Bot group access could not be added.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Add bot group access" onClose={onClose} panelClassName="bot-access-workflow-modal">
+      <form className="bot-access-flow" onSubmit={(event) => void submit(event)}>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading">
+            <span>1</span>
+            <h3>Select Entra group</h3>
+          </div>
+          {selectedGroup ? (
+            <SelectedBotPrincipalSummary target={selectedGroup} metaSuffix={formatMemberCount(selectedGroupMemberCount, "members")} onChange={changeSelectedGroup} />
+          ) : (
+            <>
+              <div className="bot-access-search">
+                <Search aria-hidden="true" focusable="false" />
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void searchGroups();
+                    }
+                  }}
+                  placeholder="Search groups..."
+                  autoFocus
+                />
+                <button className="secondary-button secondary-button--small" type="button" onClick={() => void searchGroups()} disabled={searching || query.trim().length < 2}>
+                  {searching ? "Searching..." : "Search"}
+                </button>
+              </div>
+              <BotPrincipalSearchResults results={results} onSelect={selectGroup} />
+            </>
+          )}
+        </section>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading bot-access-step-heading--split">
+            <span>2</span>
+            <h3>Access level</h3>
+            <label className="bot-access-active-toggle">
+              <input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} />
+              <span>Active</span>
+            </label>
+          </div>
+          <BotAccessRoleList roles={roles} selectedRoleId={selectedRoleId} permissions={permissions} onRoleChange={selectRole} />
+        </section>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading bot-access-step-heading--split">
+            <span>3</span>
+            <h3>Permissions</h3>
+            <small>{selectedRole ? `Inherited from ${selectedRole.name}` : "Inline custom"}</small>
+          </div>
+          {selectedRole ? (
+            <BotAccessPermissionSummary permissions={permissions} />
+          ) : (
+            <BotAccessCustomPermissions permissions={permissions} onPermissionChange={updateCustomPermission} />
+          )}
+        </section>
+        {error ? <p className="form-error">{error}</p> : null}
+        <div className="bot-access-flow-footer">
+          <div className="bot-access-footer-summary">
+            <div>
+              <span>Group</span>
+              <strong>{selectedGroup?.display_name ?? "Not selected"}</strong>
+            </div>
+            <div>
+              <span>Access level</span>
+              <strong>{botAccessLevelLabel(selectedRole, role)}</strong>
+            </div>
+            <div>
+              <span>Members</span>
+              <strong>{formatMemberCount(selectedGroupMemberCount)}</strong>
+            </div>
+          </div>
+          <div className="bot-access-footer-actions">
+          <button className="secondary-button" type="button" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button className="primary-button" type="submit" disabled={busy || !selectedGroup}>
+            {busy ? "Adding..." : `Add ${botAccessLevelLabel(selectedRole, role)} Access`}
+          </button>
+          </div>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function BotPrincipalSearchResults({
+  results,
+  onSelect,
+}: {
+  results: TeamsTargetSearchResult[];
+  onSelect: (target: TeamsTargetSearchResult) => void;
+}) {
+  if (!results.length) return null;
+  return (
+    <div className="bot-principal-result-list">
+      {results.map((target) => (
+        <button type="button" key={target.id} className="bot-principal-result" onClick={() => onSelect(target)}>
+          <span>
+            <strong>{target.display_name}</strong>
+            <small>{directoryTargetMeta(target)}</small>
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function SelectedBotPrincipalSummary({
+  target,
+  metaSuffix,
+  onChange,
+}: {
+  target: TeamsTargetSearchResult;
+  metaSuffix?: string;
+  onChange: () => void;
+}) {
+  const meta = [directoryTargetMeta(target), metaSuffix].filter((value) => value && value !== "-").join(" · ");
+  return (
+    <div className="selected-bot-principal">
+      <div>
+        <strong>{target.display_name}</strong>
+        <span>{meta || "No directory metadata returned"}</span>
+      </div>
+      <button className="secondary-button secondary-button--small" type="button" onClick={onChange}>
+        Change
+      </button>
+    </div>
+  );
+}
+
+function BotAccessRoleList({
+  roles,
+  selectedRoleId,
+  permissions,
+  onRoleChange,
+}: {
+  roles: BotAccessRoleOut[];
+  selectedRoleId: string | null;
+  permissions: BotUserPermissions;
+  onRoleChange: (role: BotAccessRoleOut | "custom") => void;
+}) {
+  return (
+    <div className="bot-access-role-list" role="radiogroup" aria-label="Access level">
+      {roles.map((entry) => {
+        const selected = selectedRoleId === entry.id;
+        return (
+          <button
+            type="button"
+            key={entry.id}
+            className={classNames("bot-access-role-option", selected && "is-selected")}
+            role="radio"
+            aria-checked={selected}
+            onClick={() => onRoleChange(entry)}
+          >
+            <span className="bot-access-radio" aria-hidden="true" />
+            <span className="bot-access-role-copy">
+              <strong>{entry.name}</strong>
+              <small>{entry.description || (entry.is_system ? "Managed system role" : "Managed custom role")}</small>
+            </span>
+            <span className="bot-access-role-summary">{compactPermissionSummary(entry)}</span>
+          </button>
+        );
+      })}
+      <button
+        type="button"
+        className={classNames("bot-access-role-option", selectedRoleId === null && "is-selected")}
+        role="radio"
+        aria-checked={selectedRoleId === null}
+        onClick={() => onRoleChange("custom")}
+      >
+        <span className="bot-access-radio" aria-hidden="true" />
+        <span className="bot-access-role-copy">
+          <strong>Inline Custom</strong>
+          <small>Specific permissions for this assignment only</small>
+        </span>
+        <span className="bot-access-role-summary">{compactPermissionSummary(permissions)}</span>
+      </button>
+    </div>
+  );
+}
+
+function BotAccessPermissionSummary({ permissions }: { permissions: BotUserPermissions }) {
+  const selected = BOT_PERMISSION_FIELDS.filter((field) => permissions[field.key]);
+  return (
+    <div className="bot-access-permission-summary">
+      {selected.slice(0, 4).map((field) => (
+        <span key={field.key}>{BOT_PERMISSION_SHORT_LABELS[field.key]}</span>
+      ))}
+      {selected.length > 4 ? <span>+{selected.length - 4} more</span> : null}
+      {!selected.length ? <span>No permissions</span> : null}
+    </div>
+  );
+}
+
+function BotAccessCustomPermissions({
+  permissions,
+  onPermissionChange,
+}: {
+  permissions: BotUserPermissions;
+  onPermissionChange: (key: keyof BotUserPermissions, checked: boolean) => void;
+}) {
+  return (
+    <div className="bot-access-custom-permissions">
+      {BOT_PERMISSION_GROUPS.map((group) => (
+        <div className="bot-access-permission-group" key={group.title}>
+          <h4>{group.title}</h4>
+          <div>
+            {group.fields.map((field) => (
+              <label className="bot-access-permission-check" key={field}>
+                <input type="checkbox" checked={permissions[field]} onChange={(event) => onPermissionChange(field, event.target.checked)} />
+                <span>{BOT_PERMISSION_FIELDS.find((entry) => entry.key === field)?.label ?? BOT_PERMISSION_SHORT_LABELS[field]}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function BotRoleEditModal({
+  csrfToken,
+  role,
+  onClose,
+  onSaved,
+}: {
+  csrfToken: string;
+  role?: BotAccessRoleOut;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState(role?.name ?? "");
+  const [description, setDescription] = useState(role?.description ?? "");
+  const [permissions, setPermissions] = useState<BotUserPermissions>(role ? botPermissionsFromGrant(role) : emptyBotPermissions());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const permissionCount = permissionCountFor(permissions);
+
+  function updatePermission(key: keyof BotUserPermissions, checked: boolean) {
+    setPermissions({ ...permissions, [key]: checked });
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const body: BotAccessRoleCreate | BotAccessRoleUpdate = {
+        name,
+        description,
+        ...permissions,
+      };
+      if (role) {
+        await api.updateAdminBotRole(csrfToken, role.id, body);
+      } else {
+        await api.createAdminBotRole(csrfToken, body as BotAccessRoleCreate);
+      }
+      onSaved();
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Bot role could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title={role ? "Edit bot role" : "Add bot role"} onClose={onClose} panelClassName="bot-access-workflow-modal">
+      <form className="bot-access-flow" onSubmit={(event) => void submit(event)}>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading">
+            <span>1</span>
+            <h3>Role details</h3>
+          </div>
+          <div className="bot-access-identity-editor">
+            <label>
+              <span>Name</span>
+              <input value={name} onChange={(event) => setName(event.target.value)} required maxLength={120} autoFocus />
+            </label>
+            <label>
+              <span>Description</span>
+              <input value={description} onChange={(event) => setDescription(event.target.value)} maxLength={500} />
+            </label>
+            {role?.is_system ? (
+              <div className="bot-access-readonly-meta">
+                <span>Type</span>
+                <strong>System role</strong>
+              </div>
+            ) : null}
+          </div>
+        </section>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading bot-access-step-heading--split">
+            <span>2</span>
+            <h3>Permissions</h3>
+            <small>{permissionCount === 1 ? "1 permission" : `${permissionCount} permissions`}</small>
+          </div>
+          <BotAccessCustomPermissions permissions={permissions} onPermissionChange={updatePermission} />
+        </section>
+        {error ? <p className="form-error">{error}</p> : null}
+        <div className="bot-access-flow-footer">
+          <div className="bot-access-footer-summary">
+            <div>
+              <span>Role</span>
+              <strong>{name || "Not named"}</strong>
+            </div>
+            <div>
+              <span>Type</span>
+              <strong>{role?.is_system ? "System" : "Custom"}</strong>
+            </div>
+            <div>
+              <span>Permissions</span>
+              <strong>{permissionCount}</strong>
+            </div>
+          </div>
+          <div className="bot-access-footer-actions">
+            <button className="secondary-button" type="button" onClick={onClose} disabled={busy}>
+              Cancel
+            </button>
+            <button className="primary-button" type="submit" disabled={busy || !name.trim()}>
+              {busy ? "Saving..." : role ? "Save Role" : "Add Role"}
+            </button>
+          </div>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function BotGroupEditModal({
+  csrfToken,
+  roles,
+  group,
+  onClose,
+  onSaved,
+}: {
+  csrfToken: string;
+  roles: BotAccessRoleOut[];
+  group: BotAuthorizedGroupOut;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [displayName, setDisplayName] = useState(group.display_name);
+  const [mail, setMail] = useState(group.mail);
+  const [memberCount, setMemberCount] = useState<BotGroupMemberCountState>(null);
+  const initialRole = roleForGrant(group, roles);
+  const [selectedRoleId, setSelectedRoleId] = useState<string | null>(initialRole?.id ?? null);
+  const [role, setRole] = useState<BotUserRole>(initialRole ? botRoleValue(initialRole) : group.role);
+  const [permissions, setPermissions] = useState<BotUserPermissions>(initialRole ? botPermissionsFromGrant(initialRole) : botPermissionsFromGrant(group));
+  const [isActive, setIsActive] = useState(group.is_active);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const selectedRole = roles.find((entry) => entry.id === selectedRoleId) ?? null;
+
+  useEffect(() => {
+    let cancelled = false;
+    setMemberCount({ loading: true });
+    void api.groupMemberCount(group.group_object_id)
+      .then((result) => {
+        if (!cancelled) setMemberCount({ loading: false, count: result.count });
+      })
+      .catch((err) => {
+        if (!cancelled) setMemberCount({ loading: false, error: isApiError(err) ? err.message : "Member count unavailable." });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [group.group_object_id]);
+
+  function selectRole(nextRole: BotAccessRoleOut | "custom") {
+    if (nextRole === "custom") {
+      setSelectedRoleId(null);
+      setRole("custom");
+      return;
+    }
+    setSelectedRoleId(nextRole.id);
+    setRole(botRoleValue(nextRole));
+    setPermissions(botPermissionsFromGrant(nextRole));
+  }
+
+  function updateCustomPermission(key: keyof BotUserPermissions, checked: boolean) {
+    setPermissions({ ...permissions, [key]: checked });
+    setSelectedRoleId(null);
+    setRole("custom");
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await api.updateAdminBotGroup(csrfToken, group.id, {
+        display_name: displayName,
+        mail,
+        security_enabled: group.security_enabled,
+        group_types: group.group_types,
+        role_id: selectedRoleId,
+        role,
+        is_active: isActive,
+        ...permissions,
+      });
+      onSaved();
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Bot group access could not be updated.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Edit bot group access" onClose={onClose} panelClassName="bot-access-workflow-modal">
+      <form className="bot-access-flow" onSubmit={(event) => void submit(event)}>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading">
+            <span>1</span>
+            <h3>Group details</h3>
+          </div>
+          <div className="bot-access-identity-editor">
+            <label>
+              <span>Display name</span>
+              <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} required maxLength={255} autoFocus />
+            </label>
+            <label>
+              <span>Mail</span>
+              <input value={mail} onChange={(event) => setMail(event.target.value)} maxLength={255} />
+            </label>
+            <div className="bot-access-readonly-meta">
+              <span>Type</span>
+              <strong>{botGroupTypeLabel(group)}</strong>
+            </div>
+            <div className="bot-access-technical-id">
+              <span>Group object ID</span>
+              <code>{group.group_object_id}</code>
+            </div>
+          </div>
+        </section>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading bot-access-step-heading--split">
+            <span>2</span>
+            <h3>Access level</h3>
+            <label className="bot-access-active-toggle">
+              <input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} />
+              <span>Active</span>
+            </label>
+          </div>
+          <BotAccessRoleList roles={roles} selectedRoleId={selectedRoleId} permissions={permissions} onRoleChange={selectRole} />
+        </section>
+        <section className="bot-access-step">
+          <div className="bot-access-step-heading bot-access-step-heading--split">
+            <span>3</span>
+            <h3>Permissions</h3>
+            <small>{selectedRole ? `Inherited from ${selectedRole.name}` : "Inline custom"}</small>
+          </div>
+          {selectedRole ? (
+            <BotAccessPermissionSummary permissions={permissions} />
+          ) : (
+            <BotAccessCustomPermissions permissions={permissions} onPermissionChange={updateCustomPermission} />
+          )}
+        </section>
+        {error ? <p className="form-error">{error}</p> : null}
+        <div className="bot-access-flow-footer">
+          <div className="bot-access-footer-summary">
+            <div>
+              <span>Group</span>
+              <strong>{displayName || "Not named"}</strong>
+            </div>
+            <div>
+              <span>Access level</span>
+              <strong>{botAccessLevelLabel(selectedRole, role)}</strong>
+            </div>
+            <div>
+              <span>Members</span>
+              <strong>{formatMemberCount(memberCount)}</strong>
+            </div>
+          </div>
+          <div className="bot-access-footer-actions">
+            <button className="secondary-button" type="button" onClick={onClose} disabled={busy}>
+              Cancel
+            </button>
+            <button className="primary-button" type="submit" disabled={busy}>
+              {busy ? "Saving..." : `Save ${botAccessLevelLabel(selectedRole, role)} Access`}
+            </button>
+          </div>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function BotGroupMembersModal({ group, onClose }: { group: BotAuthorizedGroupOut; onClose: () => void }) {
+  const [members, setMembers] = useState<TeamsGroupMember[]>([]);
+  const [query, setQuery] = useState("");
+  const [activeQuery, setActiveQuery] = useState("");
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState("");
+  const pageSize = 100;
+
+  const loadMembers = useCallback(async (nextQuery: string, nextOffset = 0, append = false) => {
+    if (append) {
+      setLoadingMore(true);
+    } else {
+      setLoading(true);
+    }
+    setError("");
+    try {
+      const page = await api.groupMembers(group.group_object_id, nextQuery, nextOffset, pageSize);
+      setMembers((current) => (append ? [...current, ...page.items] : page.items));
+      setActiveQuery(nextQuery);
+      setHasMore(page.has_more);
+    } catch (err) {
+      setError(isApiError(err) ? err.message : "Group members could not be loaded.");
+    } finally {
+      if (append) {
+        setLoadingMore(false);
+      } else {
+        setLoading(false);
+      }
+    }
+  }, [group.group_object_id]);
+
+  useEffect(() => {
+    void loadMembers("");
+  }, [loadMembers]);
+
+  function submitSearch(event: FormEvent) {
+    event.preventDefault();
+    void loadMembers(query);
+  }
+
+  return (
+    <Modal title="Group members" onClose={onClose} panelClassName="group-members-modal">
+      <div className="group-members-heading">
+        <strong>{group.display_name}</strong>
+        <span>{[botGroupMailLabel(group), botGroupTypeLabel(group)].filter((value) => value && value !== "-").join(" · ")}</span>
+      </div>
+      <form className="inline-search" onSubmit={submitSearch}>
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter members" />
+        <button className="secondary-button button-with-icon" type="submit" disabled={loading}>
+          <Search aria-hidden="true" className="button-icon" focusable="false" />
+          <span>Search</span>
+        </button>
+      </form>
+      <DataTable
+        className="group-members-table"
+        columns={["Name", "UPN", "Mail"]}
+        rows={members.map((member) => [
+          <span className="user-name-cell" title={`AAD object ID: ${member.id}`}>
+            <strong>{member.display_name}</strong>
+          </span>,
+          member.user_principal_name || "-",
+          member.mail || "-",
+        ])}
+        emptyTitle="No members found"
+        emptyBody="No transitive user members matched this query."
+        loading={loading}
+        loadingLabel="Loading group members..."
+        error={error}
+        onRetry={() => void loadMembers(query)}
+        rowKey={(index) => members[index]?.id ?? index}
+      />
+      {!loading && !error ? (
+        <div className="member-pagination-row">
+          <span>
+            Showing {members.length}
+            {hasMore ? "+" : ""} {activeQuery.trim() ? "matching" : "transitive"} user members
+          </span>
+          {hasMore ? (
+            <button className="secondary-button" type="button" onClick={() => void loadMembers(activeQuery, members.length, true)} disabled={loadingMore}>
+              {loadingMore ? "Loading..." : "Load next 100"}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      <div className="form-actions">
+        <button className="secondary-button" type="button" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function botPermissionsFromGrant(grant: BotUserPermissions): BotUserPermissions {
+  return Object.fromEntries(BOT_PERMISSION_FIELDS.map((field) => [field.key, Boolean(grant[field.key])])) as BotUserPermissions;
+}
+
+function emptyBotPermissions(): BotUserPermissions {
+  return Object.fromEntries(BOT_PERMISSION_FIELDS.map((field) => [field.key, false])) as BotUserPermissions;
+}
+
+function defaultBotAccessRole(roles: BotAccessRoleOut[]): BotAccessRoleOut | null {
+  return roles.find((role) => role.system_key === "route_viewer") ?? roles[0] ?? null;
+}
+
+function roleForGrant(grant: BotAccessGrant, roles: BotAccessRoleOut[]): BotAccessRoleOut | null {
+  if (grant.role_id) {
+    const byId = roles.find((role) => role.id === grant.role_id);
+    if (byId) return byId;
+  }
+  if (grant.role === "route_viewer" || grant.role === "viewer") {
+    return roles.find((role) => role.system_key === "route_viewer") ?? null;
+  }
+  if (grant.role === "route_operator" || grant.role === "operator" || grant.role === "route_manager") {
+    return roles.find((role) => role.system_key === "route_operator") ?? null;
+  }
+  return null;
+}
+
+function botRoleValue(role: BotAccessRoleOut): BotUserRole {
+  return role.system_key || "role";
+}
+
+function botAccessLevelLabel(role: BotAccessRoleOut | null, fallback: BotUserRole): string {
+  if (role) return role.name;
+  return fallback === "custom" ? "Custom" : titleCaseRole(fallback);
+}
+
+function botGrantRoleLabel(grant: BotAccessGrant, roles: BotAccessRoleOut[]): string {
+  return botAccessLevelLabel(roleForGrant(grant, roles), grant.role ?? "custom");
+}
+
+function botGrantPermissions(grant: BotAccessGrant, roles: BotAccessRoleOut[]): BotUserPermissions {
+  const role = roleForGrant(grant, roles);
+  return role ? botPermissionsFromGrant(role) : botPermissionsFromGrant(grant);
+}
+
+function titleCaseRole(role: string): string {
+  return role
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
+}
+
+function permissionCountFor(grant: BotUserPermissions): number {
+  return BOT_PERMISSION_FIELDS.filter((field) => grant[field.key]).length;
+}
+
+function botPermissionSummary(grant: BotUserPermissions): string {
+  const permissions = BOT_PERMISSION_FIELDS.filter((field) => grant[field.key]).map((field) => field.label);
+  if (!permissions.length) return "No command permissions";
+  if (permissions.length <= 2) return permissions.join(", ");
+  return `${permissions.length} permissions`;
+}
+
+function compactPermissionSummary(grant: BotUserPermissions): string {
+  const permissions = BOT_PERMISSION_FIELDS.filter((field) => grant[field.key]).map((field) => BOT_PERMISSION_SHORT_LABELS[field.key]);
+  if (!permissions.length) return "No permissions";
+  if (permissions.length <= 2) return permissions.join(", ");
+  return `${permissions[0]}, ${permissions[1]}, +${permissions.length - 2} more`;
+}
+
+function botGroupTypeLabel(group: BotAuthorizedGroupOut): string {
+  return groupTypeLabelFromParts(group.group_types, group.security_enabled);
+}
+
+function botGroupMailLabel(group: BotAuthorizedGroupOut): string {
+  const mail = group.mail.trim();
+  return mail && mail !== group.display_name ? mail : "";
+}
+
+function botGroupMemberCountLabel(state?: { loading: boolean; count?: number; error?: string }): ReactNode {
+  if (!state || state.loading) return <span className="muted">Loading...</span>;
+  if (state.error) return <span className="muted" title={state.error}>Unavailable</span>;
+  return String(state.count ?? 0);
+}
+
+function formatMemberCount(state: BotGroupMemberCountState | undefined, suffix = ""): string {
+  if (!state) return "-";
+  if (state.loading) return "Loading";
+  if (state.error) return "Unavailable";
+  const count = state.count ?? 0;
+  if (suffix === "members") return count === 1 ? "1 member" : `${count} members`;
+  return suffix ? `${count} ${suffix}` : String(count);
+}
+
+function groupTypeLabelFromParts(groupTypes: string[], securityEnabled: boolean | null): string {
+  const type = groupTypes.includes("Unified") ? "Microsoft 365 group" : "Security group";
+  return securityEnabled ? `${type}, security enabled` : type;
 }
 
 function UserCreateModal({
@@ -6452,6 +8040,14 @@ function buildGraphLookupIntegrationView(readiness: AdminReadinessOut, onCopy: (
   const oauth = readiness.graph_lookup.oauth;
   const authStatus = readiness.graph_lookup.auth_status;
   const permissionTone = oauth.token.succeeded && oauth.token.roles.length ? "success" : oauth.token.succeeded ? "neutral" : "warn";
+  const attentionItems = readinessAttentionItems(authStatus, readiness.graph_lookup.message, oauth);
+  if (readiness.graph_lookup.enabled && !readiness.graph_lookup.group_membership_lookup_ready) {
+    attentionItems.push({
+      title: "Graph group membership permission missing",
+      description: readiness.graph_lookup.group_membership_message,
+      tone: "warn",
+    });
+  }
   return {
     id: "graph-lookup",
     title: "Graph lookup",
@@ -6474,11 +8070,23 @@ function buildGraphLookupIntegrationView(readiness: AdminReadinessOut, onCopy: (
       { label: "App credentials", value: readiness.graph_lookup.configured ? "Configured" : "Missing", tone: readiness.graph_lookup.configured ? "success" : "warn" },
       { label: "Token request", value: tokenFact(oauth), tone: oauth.token.succeeded ? "success" : oauth.token.checked ? "danger" : "neutral" },
       { label: "Directory metadata", value: oauth.app.available || oauth.tenant.available ? "Available" : "Limited", tone: oauth.app.available || oauth.tenant.available ? "success" : "warn" },
+      {
+        label: "Group membership",
+        value: readiness.graph_lookup.group_membership_lookup_ready ? "Ready" : "Permission warning",
+        tone: readiness.graph_lookup.group_membership_lookup_ready ? "success" : "warn",
+      },
     ],
     capabilities: [
       { label: "Lookup mode", value: readiness.graph_lookup.enabled ? "Enabled" : "Disabled", tone: readiness.graph_lookup.enabled ? "success" : "neutral" },
       { label: "Credentials", value: graphCredentialLabel(readiness.graph_lookup.credential_source), tone: readiness.graph_lookup.credential_source === "missing" ? "warn" : "neutral" },
       { label: "Scope", value: compactScope(oauth.scope || oauth.token.audience) },
+      {
+        label: "Group roles",
+        value: readiness.graph_lookup.group_membership_lookup_ready
+          ? "GroupMember.Read.All / Directory.Read.All"
+          : readiness.graph_lookup.group_membership_missing_roles.join(", ") || "Not verified",
+        tone: readiness.graph_lookup.group_membership_lookup_ready ? "success" : "warn",
+      },
     ],
     credentials: [
       ["Tenant ID", credentialStatusLabel(readiness.graph_lookup.credential_fields.tenant_id)],
@@ -6487,7 +8095,7 @@ function buildGraphLookupIntegrationView(readiness: AdminReadinessOut, onCopy: (
     ],
     permissionSummary: permissionSummary(oauth),
     permissionBadges: oauthPermissionBadges(oauth, permissionTone),
-    attentionItems: readinessAttentionItems(authStatus, readiness.graph_lookup.message, oauth),
+    attentionItems,
     diagnosticRows: oauthDiagnosticRows(oauth),
     technicalRows: oauthTechnicalRows(oauth, onCopy),
   };
