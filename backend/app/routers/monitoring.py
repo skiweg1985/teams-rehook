@@ -197,7 +197,8 @@ def _prtg_boolean_channel(channel: str, value: bool) -> dict[str, object]:
     return {
         "channel": channel,
         "value": int(value),
-        "unit": "Count",
+        "unit": "Custom",
+        "customunit": "state",
         "valuelookup": PRTG_BOOLEAN_TRUE_OK_LOOKUP,
     }
 

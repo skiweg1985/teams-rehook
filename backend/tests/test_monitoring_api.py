@@ -299,7 +299,8 @@ def test_monitoring_prtg_returns_advanced_sensor_json_for_warning_status(
     assert channel_by_name(body, "Database OK") == {
         "channel": "Database OK",
         "value": 1,
-        "unit": "Count",
+        "unit": "Custom",
+        "customunit": "state",
         "valuelookup": "prtg.standardlookups.boolean.statetrueok",
     }
     assert channel_by_name(body, "Routes Total") == {"channel": "Routes Total", "value": 3, "unit": "Count"}

@@ -179,6 +179,8 @@ curl "http://localhost:8080/api/v1/monitoring/prtg" \
       {
         "channel": "Database OK",
         "value": 1,
+        "unit": "Custom",
+        "customunit": "state",
         "valuelookup": "prtg.standardlookups.boolean.statetrueok"
       }
     ],

@@ -207,6 +207,8 @@ The PRTG endpoint returns JSON in the HTTP Data Advanced Sensor format. It uses 
       {
         "channel": "Database OK",
         "value": 1,
+        "unit": "Custom",
+        "customunit": "state",
         "valuelookup": "prtg.standardlookups.boolean.statetrueok"
       }
     ],
