@@ -3,7 +3,9 @@ FROM python:3.11-slim@sha256:b27df5841f3355e9473f9a516d38a6783b6c8dfeacaf2d14a24
 WORKDIR /app
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir --require-hashes -r requirements.txt
+RUN pip install --no-cache-dir --require-hashes -r requirements.txt \
+    && pip uninstall -y setuptools wheel \
+    && pip uninstall -y pip
 
 COPY app ./app
 
