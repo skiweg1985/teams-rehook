@@ -15,6 +15,7 @@ If you are a user, start with the [User guide](user-guide.md). If you operate th
 - [Admin guide](admin-guide.md)
 - [Configuration](configuration.md)
 - [Deployment](deployment.md)
+- [Operational hardening runbook](operational-hardening-runbook.md)
 - [Troubleshooting](troubleshooting.md)
 - [Security policy](../SECURITY.md)
 
@@ -22,6 +23,7 @@ If you are a user, start with the [User guide](user-guide.md). If you operate th
 
 - [Architecture](architecture.md)
 - [Developer guide](developer-guide.md)
+- [Operational hardening runbook](operational-hardening-runbook.md)
 - [API reference](api.md)
 - [Data model](data-model.md)
 - [ADR template](decisions/ADR-0001-template.md)
