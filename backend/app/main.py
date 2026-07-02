@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request, Response
 
 from app.core.config import get_settings
 from app.core.settings_overrides import get_effective_settings
-from app.routers import admin, auth, bot_messages, monitoring, public, teams_targets, webhook_routes
+from app.routers import admin, auth, bot_messages, events, monitoring, public, teams_targets, webhook_routes
 from app.seed import init_db
 from app.services.event_log import log_api_request
 
@@ -60,6 +60,7 @@ def create_app() -> FastAPI:
     app.include_router(webhook_routes.router, prefix=settings.api_v1_prefix)
     app.include_router(teams_targets.router, prefix=settings.api_v1_prefix)
     app.include_router(admin.router, prefix=settings.api_v1_prefix)
+    app.include_router(events.router, prefix=settings.api_v1_prefix)
     app.include_router(monitoring.router, prefix=settings.api_v1_prefix)
     return app
 

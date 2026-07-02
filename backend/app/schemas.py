@@ -560,6 +560,7 @@ class ReadinessComponentOut(BaseModel):
 class OAuthTokenDiagnosticsOut(BaseModel):
     checked: bool = False
     succeeded: bool = False
+    checked_at: datetime | None = None
     expires_in_seconds: int | None = None
     expires_at: datetime | None = None
     audience: str = ""
@@ -663,6 +664,22 @@ DeliveryAuthRefreshStatus = Literal["refreshed", "cleared", "skipped", "failed"]
 class DeliveryAuthRefreshComponentOut(BaseModel):
     status: DeliveryAuthRefreshStatus
     message: str
+
+
+class DeliveryAuthRefreshJobOut(BaseModel):
+    job_id: str
+    status: Literal["queued", "running", "completed", "failed"]
+    stream_url: str
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    ok: bool | None = None
+    bot_delivery: DeliveryAuthRefreshComponentOut | None = None
+    graph_lookup: DeliveryAuthRefreshComponentOut | None = None
+    graph_delivery: DeliveryAuthRefreshComponentOut | None = None
+    bot_inbound_auth: DeliveryAuthRefreshComponentOut | None = None
+    readiness: AdminReadinessOut | None = None
+    message: str = ""
 
 
 class DeliveryAuthRefreshOut(BaseModel):
