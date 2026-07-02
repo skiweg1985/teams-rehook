@@ -8310,11 +8310,12 @@ function StatusFactList({ facts }: { facts: StatusFact[] }) {
   return (
     <dl className="status-detail-facts">
       {facts.map((fact) => (
-        <FragmentPair
-          key={fact.label}
-          label={fact.label}
-          value={<span className={classNames("status-detail-fact-value", fact.tone && fact.tone !== "neutral" && `status-detail-fact-value--${fact.tone}`)}>{fact.value}</span>}
-        />
+        <div className="status-detail-fact" key={fact.label}>
+          <dt>{fact.label}</dt>
+          <dd>
+            <span className={classNames("status-detail-fact-value", fact.tone && fact.tone !== "neutral" && `status-detail-fact-value--${fact.tone}`)}>{fact.value}</span>
+          </dd>
+        </div>
       ))}
     </dl>
   );
