@@ -1,0 +1,102 @@
+name: Sync main into dev-1
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: sync-main-to-dev-1
+  cancel-in-progress: false
+
+jobs:
+  create-sync-pr:
+    name: Create main-to-dev-1 sync PR
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
+      REPOSITORY: ${{ github.repository }}
+      SOURCE_BRANCH: main
+      TARGET_BRANCH: dev-1
+    steps:
+      - name: Verify token is available
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "RENOVATE_TOKEN is required so PR-created events can trigger normal CI."
+            exit 1
+          fi
+
+      - name: Compare main and dev-1
+        id: compare
+        run: |
+          set -euo pipefail
+          compare_json="$(gh api "repos/${REPOSITORY}/compare/${TARGET_BRANCH}...${SOURCE_BRANCH}")"
+          ahead_by="$(jq -r '.ahead_by' <<<"${compare_json}")"
+          behind_by="$(jq -r '.behind_by' <<<"${compare_json}")"
+          status="$(jq -r '.status' <<<"${compare_json}")"
+
+          echo "status=${status}"
+          echo "main ahead of dev-1: ${ahead_by}"
+          echo "dev-1 ahead of main: ${behind_by}"
+
+          {
+            echo "ahead_by=${ahead_by}"
+            echo "behind_by=${behind_by}"
+            echo "status=${status}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Find existing sync PR
+        id: existing_pr
+        if: steps.compare.outputs.ahead_by != '0'
+        run: |
+          set -euo pipefail
+          pr_number="$(gh pr list \
+            --repo "${REPOSITORY}" \
+            --base "${TARGET_BRANCH}" \
+            --head "${SOURCE_BRANCH}" \
+            --state open \
+            --json number \
+            --jq '.[0].number // ""')"
+          echo "number=${pr_number}" >> "${GITHUB_OUTPUT}"
+          if [ -n "${pr_number}" ]; then
+            echo "Existing sync PR: #${pr_number}"
+          else
+            echo "No existing sync PR found."
+          fi
+
+      - name: Create sync PR
+        if: steps.compare.outputs.ahead_by != '0' && steps.existing_pr.outputs.number == ''
+        run: |
+          set -euo pipefail
+          printf '%s\n' \
+            '## Summary' \
+            '' \
+            'Synchronize changes that reached `main` directly back into `dev-1`.' \
+            '' \
+            '## Why' \
+            '' \
+            '`dev-1` is the active development branch. Security hotfixes, Dependabot PRs, release fixes, or direct repository maintenance can land on `main`; this PR keeps `dev-1` from drifting behind.' \
+            '' \
+            '## Merge policy' \
+            '' \
+            '- Merge only after CI is green.' \
+            '- Resolve conflicts manually if the branches diverged.' \
+            '- Do not bypass branch protection.' \
+            > /tmp/sync-pr-body.md
+
+          gh pr create \
+            --repo "${REPOSITORY}" \
+            --base "${TARGET_BRANCH}" \
+            --head "${SOURCE_BRANCH}" \
+            --title "chore: sync main into dev-1" \
+            --body-file /tmp/sync-pr-body.md
+
+      - name: Nothing to synchronize
+        if: steps.compare.outputs.ahead_by == '0'
+        run: echo "main has no commits missing from dev-1. No sync PR needed."
