@@ -32,3 +32,4 @@ jobs:
           RENOVATE_BASE_BRANCHES: '["dev-1"]'
           RENOVATE_REQUIRE_CONFIG: required
           RENOVATE_ONBOARDING: "false"
+          RENOVATE_PR_CREATION: immediate
