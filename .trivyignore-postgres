@@ -1,0 +1,16 @@
+# Tracked exception for the official postgres:16-alpine gosu binary.
+# Revisit when Docker Hub publishes a postgres:16-alpine digest with gosu rebuilt on a fixed Go stdlib.
+# Expiry: 2026-08-02
+CVE-2025-68121
+CVE-2025-61726
+CVE-2025-61729
+CVE-2026-25679
+CVE-2026-27145
+CVE-2026-32280
+CVE-2026-32281
+CVE-2026-32283
+CVE-2026-33811
+CVE-2026-33814
+CVE-2026-39820
+CVE-2026-39836
+CVE-2026-42499
