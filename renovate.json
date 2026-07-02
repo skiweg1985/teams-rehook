@@ -1,0 +1,18 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "enabledManagers": ["npm", "dockerfile", "docker-compose", "pip-compile"],
+  "minimumReleaseAge": "14 days",
+  "internalChecksFilter": "strict",
+  "minimumReleaseAgeBehaviour": "timestamp-required",
+  "prCreation": "not-pending",
+  "pip-compile": {
+    "managerFilePatterns": ["/^backend/requirements\\.txt$/"]
+  },
+  "packageRules": [
+    {
+      "matchManagers": ["pip-compile"],
+      "groupName": "backend Python dependencies"
+    }
+  ]
+}
