@@ -412,6 +412,28 @@ class GraphDelegatedOAuthPendingCredential(Base):
     __table_args__ = (UniqueConstraint("organization_id", name="uq_graph_delegated_oauth_pending_org"),)
 
 
+class AuthDiagnosticSnapshot(Base):
+    __tablename__ = "auth_diagnostic_snapshots"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    component: Mapped[str] = mapped_column(String(80), index=True)
+    credential_signature: Mapped[str] = mapped_column(String(64), default="")
+    status: Mapped[str] = mapped_column(String(40), default="unchecked", index=True)
+    message: Mapped[str] = mapped_column(Text, default="")
+    token_checked: Mapped[bool] = mapped_column(Boolean, default=False)
+    token_request_succeeded: Mapped[bool] = mapped_column(Boolean, default=False)
+    diagnostics_json: Mapped[str] = mapped_column(Text, default="{}")
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+    __table_args__ = (
+        UniqueConstraint("organization_id", "component", name="uq_auth_diagnostic_snapshots_org_component"),
+    )
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_events"
 

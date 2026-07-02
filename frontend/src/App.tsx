@@ -66,8 +66,9 @@ import type {
   BotConversationReferenceDetailOut,
   BotConversationReferenceOut,
   ClientIpAccessMode,
-  DeliveryAuthRefreshOut,
+  DeliveryAuthRefreshJobOut,
   DeliveryBackend,
+  EventEnvelope,
   EventLogEntryOut,
   EventLogEntryPageOut,
   GraphDeliveryOAuthPendingOut,
@@ -1686,6 +1687,15 @@ function featurePolicyFromReadiness(readiness: AdminReadinessOut): DeliveryFeatu
   };
 }
 
+function featurePolicyFromSettings(settings: SettingItemOut[]): DeliveryFeaturePolicy {
+  const settingsByKey = new Map(settings.map((item) => [item.key, item]));
+  return {
+    botFrameworkEnabled: settingEnabled(settingsByKey, "bot_framework_enabled"),
+    graphLookupEnabled: settingEnabled(settingsByKey, "graph_lookup_enabled"),
+    graphDeliveryEnabled: settingEnabled(settingsByKey, "graph_delivery_enabled"),
+  };
+}
+
 function routeDeliveryFeatureEnabled(route: WebhookRouteOut, policy: DeliveryFeaturePolicy): boolean {
   if (route.delivery_backend === "bot_framework") return policy.botFrameworkEnabled;
   if (route.delivery_backend === "graph") return policy.graphDeliveryEnabled && policy.graphLookupEnabled;
@@ -1992,9 +2002,9 @@ function WebhooksPage() {
     setLoading(true);
     setError("");
     try {
-      const [routeRows, readiness] = await Promise.all([api.webhookRoutes(), api.adminReadiness(csrfToken)]);
+      const [routeRows, settings] = await Promise.all([api.webhookRoutes(), api.adminSettings(csrfToken)]);
       setRoutes(routeRows);
-      setFeaturePolicy(featurePolicyFromReadiness(readiness));
+      setFeaturePolicy(featurePolicyFromSettings(settings));
     } catch (err) {
       setError(isApiError(err) ? err.message : "Webhook routes could not be loaded.");
     } finally {
@@ -6582,11 +6592,92 @@ const DELIVERY_IDENTITY_SETTING_KEYS = [
   "ms_app_client_secret",
 ] as const;
 
-function deliveryAuthRefreshToastTone(result: DeliveryAuthRefreshOut): "success" | "info" {
+const DELIVERY_AUTH_AUTO_REFRESH_MAX_AGE_MS = 15 * 60 * 1000;
+const DELIVERY_AUTH_AUTO_REFRESH_EXPIRY_BUFFER_MS = 10 * 60 * 1000;
+
+function dateMs(value?: string | null): number | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function authStatusCanAutoRefresh(status: string): boolean {
+  return !["disabled", "mock", "missing", "incomplete"].includes(status);
+}
+
+function authStatusNeedsRecentRetry(status: string): boolean {
+  return ["token_error", "expired", "configuration_error"].includes(status);
+}
+
+function deliveryAuthComponentAutoRefreshKey({
+  checkedAt,
+  enabled,
+  expiresAt,
+  id,
+  nowMs,
+  status,
+}: {
+  checkedAt?: string | null;
+  enabled: boolean;
+  expiresAt?: string | null;
+  id: string;
+  nowMs: number;
+  status: string;
+}): string {
+  if (!enabled || !authStatusCanAutoRefresh(status)) return "";
+  const checkedAtMs = dateMs(checkedAt);
+  const expiresAtMs = dateMs(expiresAt);
+
+  if (status === "unchecked") return `${id}:${status}:missing`;
+  if (authStatusNeedsRecentRetry(status)) {
+    if (!checkedAtMs || nowMs - checkedAtMs >= DELIVERY_AUTH_AUTO_REFRESH_MAX_AGE_MS) {
+      return `${id}:${status}:${checkedAt ?? "missing"}`;
+    }
+    return "";
+  }
+  if (expiresAtMs && expiresAtMs <= nowMs + DELIVERY_AUTH_AUTO_REFRESH_EXPIRY_BUFFER_MS) {
+    return `${id}:expires:${expiresAt}`;
+  }
+  if (checkedAtMs && nowMs - checkedAtMs >= DELIVERY_AUTH_AUTO_REFRESH_MAX_AGE_MS) {
+    return `${id}:stale:${checkedAt}`;
+  }
+  return "";
+}
+
+function deliveryAuthAutoRefreshKey(readiness: AdminReadinessOut, nowMs = Date.now()): string {
+  return [
+    deliveryAuthComponentAutoRefreshKey({
+      checkedAt: readiness.bot.oauth.token.checked_at,
+      enabled: readiness.bot.enabled,
+      expiresAt: readiness.bot.oauth.token.expires_at,
+      id: "bot_delivery",
+      nowMs,
+      status: readiness.bot.auth_status,
+    }),
+    deliveryAuthComponentAutoRefreshKey({
+      checkedAt: readiness.graph_lookup.oauth.token.checked_at,
+      enabled: readiness.graph_lookup.enabled,
+      expiresAt: readiness.graph_lookup.oauth.token.expires_at,
+      id: "graph_lookup",
+      nowMs,
+      status: readiness.graph_lookup.auth_status,
+    }),
+    deliveryAuthComponentAutoRefreshKey({
+      checkedAt: readiness.graph_delivery.refresh_checked_at,
+      enabled: readiness.graph_delivery.enabled,
+      expiresAt: readiness.graph_delivery.access_token_expires_at,
+      id: "graph_delivery",
+      nowMs,
+      status: readiness.graph_delivery.auth_status,
+    }),
+  ].filter(Boolean).join("|");
+}
+
+function deliveryAuthRefreshToastTone(result: DeliveryAuthRefreshJobOut): "success" | "info" {
   return deliveryAuthRefreshComponents(result).some((component) => component.status === "skipped") ? "info" : "success";
 }
 
-function deliveryAuthRefreshToastDescription(result: DeliveryAuthRefreshOut): string {
+function deliveryAuthRefreshToastDescription(result: DeliveryAuthRefreshJobOut): string {
   const components = deliveryAuthRefreshComponents(result);
   const failed = components.filter((component) => component.status === "failed");
   if (failed.length) {
@@ -6600,16 +6691,16 @@ function deliveryAuthRefreshToastDescription(result: DeliveryAuthRefreshOut): st
     cleared ? `${cleared} cache${cleared === 1 ? "" : "s"} cleared` : "",
     skipped ? `${skipped} skipped` : "",
   ].filter(Boolean);
-  return parts.join(", ") || "Delivery authentication state was checked.";
+  return parts.join(", ") || "Current status was checked.";
 }
 
-function deliveryAuthRefreshComponents(result: DeliveryAuthRefreshOut) {
-  return [
-    { label: "Bot delivery", ...result.bot_delivery },
-    { label: "Graph lookup", ...result.graph_lookup },
-    { label: "Graph delivery", ...result.graph_delivery },
-    { label: "Bot inbound auth", ...result.bot_inbound_auth },
-  ];
+function deliveryAuthRefreshComponents(result: DeliveryAuthRefreshJobOut) {
+  const components: Array<{ label: string; status: string; message: string }> = [];
+  if (result.bot_delivery) components.push({ label: "Bot delivery", ...result.bot_delivery });
+  if (result.graph_lookup) components.push({ label: "Graph lookup", ...result.graph_lookup });
+  if (result.graph_delivery) components.push({ label: "Graph delivery", ...result.graph_delivery });
+  if (result.bot_inbound_auth) components.push({ label: "Bot inbound auth", ...result.bot_inbound_auth });
+  return components;
 }
 
 function DeliveryMethodsPage() {
@@ -6622,6 +6713,13 @@ function DeliveryMethodsPage() {
   const [graphOAuthConfirm, setGraphOAuthConfirm] = useState<"reconnect" | "disconnect" | null>(null);
   const [authRefreshBusy, setAuthRefreshBusy] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const authRefreshSourceRef = useRef<EventSource | null>(null);
+  const authRefreshPollRef = useRef<number | null>(null);
+  const activeAuthRefreshJobRef = useRef("");
+  const activeAuthRefreshSilentRef = useRef(false);
+  const authRefreshStartInFlightRef = useRef(false);
+  const autoAuthRefreshKeyRef = useRef("");
+  const finishedAuthRefreshJobRef = useRef("");
   const csrfToken = session.status === "authenticated" ? session.csrfToken : "";
 
   const refresh = useCallback(async (options?: { showLoading?: boolean }) => {
@@ -6642,6 +6740,12 @@ function DeliveryMethodsPage() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    return () => {
+      stopWatchingDeliveryAuthRefresh();
+    };
+  }, []);
 
   async function copyDiagnosticValue(value: string, label: string) {
     await navigator.clipboard.writeText(value);
@@ -6686,23 +6790,110 @@ function DeliveryMethodsPage() {
     setGraphOAuthConfirm("disconnect");
   }
 
-  async function refreshDeliveryAuth() {
-    setAuthRefreshBusy(true);
-    setError("");
-    try {
-      const result = await api.refreshDeliveryAuth(csrfToken);
-      setReadiness(result.readiness);
-      notify({
-        tone: result.ok ? deliveryAuthRefreshToastTone(result) : "error",
-        title: result.ok ? "Auth tokens refreshed" : "Auth refresh needs attention",
-        description: deliveryAuthRefreshToastDescription(result),
-      });
-    } catch (err) {
-      setError(isApiError(err) ? err.message : "Delivery auth tokens could not be refreshed.");
-    } finally {
-      setAuthRefreshBusy(false);
+  function stopWatchingDeliveryAuthRefresh() {
+    authRefreshSourceRef.current?.close();
+    authRefreshSourceRef.current = null;
+    if (authRefreshPollRef.current !== null) {
+      window.clearInterval(authRefreshPollRef.current);
+      authRefreshPollRef.current = null;
     }
   }
+
+  function finishDeliveryAuthRefresh(job: DeliveryAuthRefreshJobOut) {
+    if (finishedAuthRefreshJobRef.current === job.job_id) return;
+    const silent = activeAuthRefreshSilentRef.current;
+    finishedAuthRefreshJobRef.current = job.job_id;
+    stopWatchingDeliveryAuthRefresh();
+    activeAuthRefreshJobRef.current = "";
+    activeAuthRefreshSilentRef.current = false;
+    if (job.readiness) setReadiness(job.readiness);
+    setAuthRefreshBusy(false);
+    if (!silent) {
+      notify({
+        tone: job.ok ? deliveryAuthRefreshToastTone(job) : "error",
+        title: job.ok ? "Refresh complete" : "Refresh needs attention",
+        description: job.status === "failed" && !job.readiness ? job.message || "Current status could not be refreshed." : deliveryAuthRefreshToastDescription(job),
+      });
+    }
+  }
+
+  async function pollDeliveryAuthRefreshJob(jobId: string, finishOnTerminal = false) {
+    try {
+      const job = await api.deliveryAuthRefreshJob(csrfToken, jobId);
+      if (job.readiness) setReadiness(job.readiness);
+      if (finishOnTerminal && (job.status === "completed" || job.status === "failed")) finishDeliveryAuthRefresh(job);
+    } catch (err) {
+      if (!activeAuthRefreshSilentRef.current) setError(isApiError(err) ? err.message : "Refresh status could not be loaded.");
+      setAuthRefreshBusy(false);
+      activeAuthRefreshJobRef.current = "";
+      activeAuthRefreshSilentRef.current = false;
+      stopWatchingDeliveryAuthRefresh();
+    }
+  }
+
+  function watchDeliveryAuthRefresh(job: DeliveryAuthRefreshJobOut, options?: { silent?: boolean }) {
+    stopWatchingDeliveryAuthRefresh();
+    activeAuthRefreshJobRef.current = job.job_id;
+    activeAuthRefreshSilentRef.current = Boolean(options?.silent);
+    finishedAuthRefreshJobRef.current = "";
+    const source = new EventSource(job.stream_url, { withCredentials: true });
+    const handleTerminalEvent = (event: MessageEvent<string>) => {
+      try {
+        const envelope = JSON.parse(event.data) as EventEnvelope<{ job_id?: string }>;
+        if (envelope.payload.job_id !== activeAuthRefreshJobRef.current) return;
+        void pollDeliveryAuthRefreshJob(envelope.payload.job_id, true);
+      } catch {
+        void pollDeliveryAuthRefreshJob(activeAuthRefreshJobRef.current, true);
+      }
+    };
+    source.addEventListener("delivery_auth.complete", handleTerminalEvent);
+    source.addEventListener("delivery_auth.error", handleTerminalEvent);
+    authRefreshSourceRef.current = source;
+    authRefreshPollRef.current = window.setInterval(() => {
+      if (activeAuthRefreshJobRef.current) void pollDeliveryAuthRefreshJob(activeAuthRefreshJobRef.current, true);
+    }, 2500);
+  }
+
+  async function refreshDeliveryAuth(options?: { silent?: boolean }) {
+    const silent = Boolean(options?.silent);
+    if (silent && authRefreshStartInFlightRef.current) return;
+    if (!silent) {
+      setAuthRefreshBusy(true);
+      setError("");
+    }
+    authRefreshStartInFlightRef.current = true;
+    try {
+      const job = await api.refreshDeliveryAuth(csrfToken);
+      if (job.readiness) setReadiness(job.readiness);
+      activeAuthRefreshSilentRef.current = silent;
+      if (job.status === "completed" || job.status === "failed") {
+        finishDeliveryAuthRefresh(job);
+        return;
+      }
+      watchDeliveryAuthRefresh(job, { silent });
+    } catch (err) {
+      if (!silent) setError(isApiError(err) ? err.message : "Refresh could not be started.");
+      setAuthRefreshBusy(false);
+      activeAuthRefreshJobRef.current = "";
+      activeAuthRefreshSilentRef.current = false;
+    } finally {
+      authRefreshStartInFlightRef.current = false;
+    }
+  }
+
+  useEffect(() => {
+    if (!readiness || !csrfToken) return undefined;
+    const maybeStartBackgroundRefresh = () => {
+      if (activeAuthRefreshJobRef.current || authRefreshStartInFlightRef.current) return;
+      const autoRefreshKey = deliveryAuthAutoRefreshKey(readiness);
+      if (!autoRefreshKey || autoAuthRefreshKeyRef.current === autoRefreshKey) return;
+      autoAuthRefreshKeyRef.current = autoRefreshKey;
+      void refreshDeliveryAuth({ silent: true });
+    };
+    maybeStartBackgroundRefresh();
+    const intervalId = window.setInterval(maybeStartBackgroundRefresh, 60 * 1000);
+    return () => window.clearInterval(intervalId);
+  }, [csrfToken, readiness]);
 
   const settingsByKey = useMemo(() => new Map(settings.map((item) => [item.key, item])), [settings]);
   const deliverySettings = orderedSettings(DELIVERY_SETTING_KEYS, settingsByKey);
@@ -6738,7 +6929,7 @@ function DeliveryMethodsPage() {
                 aria-busy={authRefreshBusy}
               >
                 <RefreshCw aria-hidden="true" className={classNames("button-icon", authRefreshBusy && "button-icon--spin")} focusable="false" />
-                {authRefreshBusy ? "Refreshing..." : "Refresh auth tokens"}
+                {authRefreshBusy ? "Refreshing..." : "Refresh"}
               </button>
               <button
                 className="icon-button delivery-settings-trigger"
@@ -6873,11 +7064,11 @@ function DeliveryComponentCard({
   const enabled = item?.effective_value === "true";
   const graphDeliveryBlocked = item?.key === "graph_delivery_enabled" && !enabled && !graphLookupEnabled;
   const readyChecks = integration.healthChecks.filter((check) => check.tone === "success").length;
-  const tokenFactValue = integration.facts.find((fact) => fact.label === "Token");
+  const tokenFactValue = integration.facts.find((fact) => fact.label === "Status");
   const actionItem = integration.attentionItems[0];
   const checksTone = readyChecks === integration.healthChecks.length ? "success" : readyChecks > 0 ? "warn" : "danger";
   const configuredCount = integration.credentials.filter(([, value]) => value === "Configured" || value === "Inherited").length;
-  const tokenTooltip = `Token ${tokenFactValue?.value ?? "Unknown"}`;
+  const tokenTooltip = `Status ${tokenFactValue?.value ?? "Unknown"}`;
   const secondaryDetailItems: RowActionItem[] = [
     { label: "Open diagnostics", icon: Activity, onClick: () => setDetailView("diagnostics") },
     { label: "Open technical information", icon: Info, onClick: () => setDetailView("technical") },
@@ -7048,7 +7239,7 @@ function DeliverySettingsModal({
           <span className={classNames("delivery-status-dot", identityReady ? "delivery-status-dot--success" : "delivery-status-dot--warn")} aria-hidden="true" />
           <div>
             <strong>{configuredCount}/3 identity values configured</strong>
-            <p>{identityReady ? "Tenant, client and secret are ready for delivery auth." : "Complete the missing identity values before refreshing auth tokens."}</p>
+            <p>{identityReady ? "Tenant, client and secret are ready." : "Complete the missing identity values before refreshing status."}</p>
           </div>
           <StatusBadge label={overrideCount > 0 ? `${overrideCount} overrides` : "ENV"} tone={overrideCount > 0 ? "warn" : "neutral"} />
         </section>
@@ -8003,7 +8194,7 @@ function buildBotIntegrationView(readiness: AdminReadinessOut, onCopy: (value: s
     healthChecks: [
       { label: "Availability", value: readiness.bot.enabled ? "Enabled" : "Disabled", tone: readiness.bot.enabled ? "success" : "neutral" },
       { label: "App credentials", value: readiness.bot.credentials_configured ? "Configured" : "Missing", tone: readiness.bot.credentials_configured ? "success" : "warn" },
-      { label: "Token request", value: tokenFact(oauth), tone: oauth.token.succeeded ? "success" : oauth.token.checked ? "danger" : "neutral" },
+      { label: "Status check", value: tokenFact(oauth), tone: oauth.token.succeeded ? "success" : oauth.token.checked ? "danger" : "neutral" },
     ],
     capabilities: [
       { label: "Message path", value: "Bot conversation" },
@@ -8054,7 +8245,7 @@ function buildGraphLookupIntegrationView(readiness: AdminReadinessOut, onCopy: (
     healthChecks: [
       { label: "Availability", value: readiness.graph_lookup.enabled ? "Enabled" : "Disabled", tone: readiness.graph_lookup.enabled ? "success" : "neutral" },
       { label: "App credentials", value: readiness.graph_lookup.configured ? "Configured" : "Missing", tone: readiness.graph_lookup.configured ? "success" : "warn" },
-      { label: "Token request", value: tokenFact(oauth), tone: oauth.token.succeeded ? "success" : oauth.token.checked ? "danger" : "neutral" },
+      { label: "Status check", value: tokenFact(oauth), tone: oauth.token.succeeded ? "success" : oauth.token.checked ? "danger" : "neutral" },
       { label: "Directory metadata", value: oauth.app.available || oauth.tenant.available ? "Available" : "Limited", tone: oauth.app.available || oauth.tenant.available ? "success" : "warn" },
       {
         label: "Group membership",
@@ -8114,7 +8305,7 @@ function buildGraphDeliveryIntegrationView(
     ],
     facts: [
       {
-        label: "Token",
+        label: "Status",
         value: delegatedTokenFact(readiness),
         tone: readiness.token_request_succeeded ? "success" : readiness.token_checked ? "danger" : "neutral",
       },
@@ -8129,7 +8320,7 @@ function buildGraphDeliveryIntegrationView(
     healthChecks: [
       { label: "Availability", value: readiness.enabled ? "Enabled" : "Disabled", tone: readiness.enabled ? "success" : "neutral" },
       { label: "Service user", value: readiness.configured ? "Connected" : "Not connected", tone: readiness.configured ? "success" : readiness.enabled ? "warn" : "neutral" },
-      { label: "Token refresh", value: delegatedTokenFact(readiness), tone: readiness.token_request_succeeded ? "success" : readiness.token_checked ? "danger" : "neutral" },
+      { label: "Status refresh", value: delegatedTokenFact(readiness), tone: readiness.token_request_succeeded ? "success" : readiness.token_checked ? "danger" : "neutral" },
       {
         label: "Required scopes",
         value: readiness.missing_scopes.length ? `${readiness.missing_scopes.length} missing` : "Present",
@@ -8139,7 +8330,7 @@ function buildGraphDeliveryIntegrationView(
     capabilities: [
       { label: "Availability", value: readiness.enabled ? "Available" : "Disabled", tone: readiness.enabled ? "success" : "neutral" },
       { label: "Sender", value: serviceUser },
-      { label: "Token expires", value: readiness.access_token_expires_at ? formatRelativeTime(readiness.access_token_expires_at) : "-" },
+      { label: "Status expires", value: readiness.access_token_expires_at ? formatRelativeTime(readiness.access_token_expires_at) : "-" },
     ],
     credentials: [
       ["Tenant ID", readiness.tenant_id ? "Configured" : "Missing"],
@@ -8171,7 +8362,7 @@ function buildGraphDeliveryIntegrationView(
     diagnosticRows: [
       { label: "Credential source", value: readiness.credential_source || "missing" },
       { label: "Refresh checked", value: readiness.refresh_checked_at ? formatDateTime(readiness.refresh_checked_at) : "Not checked" },
-      { label: "Token request", value: readiness.token_request_succeeded ? "Succeeded" : readiness.token_checked ? "Failed" : "Not checked" },
+      { label: "Status refresh", value: readiness.token_request_succeeded ? "Succeeded" : readiness.token_checked ? "Failed" : "Not checked" },
       { label: "Missing scopes", value: readiness.missing_scopes.join(", ") || "-" },
     ],
     technicalRows: [
@@ -8187,7 +8378,7 @@ function buildGraphDeliveryIntegrationView(
 
 function oauthFacts(oauth: OAuthDiagnosticsOut): StatusFact[] {
   return [
-    { label: "Token", value: tokenFact(oauth), tone: oauth.token.succeeded ? "success" : oauth.token.checked ? "danger" : "neutral" },
+    { label: "Status", value: tokenFact(oauth), tone: oauth.token.succeeded ? "success" : oauth.token.checked ? "danger" : "neutral" },
     { label: "Expires", value: tokenExpirationShortLabel(oauth), tone: oauth.token.succeeded ? "success" : "neutral" },
     { label: "Credentials", value: oauthCredentialSourceLabel(oauth.credential_source) },
     { label: "Scope", value: compactScope(oauth.scope || oauth.token.audience) },
@@ -8204,9 +8395,9 @@ function oauthPermissionBadges(oauth: OAuthDiagnosticsOut, fallbackTone: "succes
 function oauthDiagnosticRows(oauth: OAuthDiagnosticsOut): StatusTechnicalRow[] {
   return [
     { label: "Credential source", value: oauthCredentialSourceLabel(oauth.credential_source) },
-    { label: "Token checked", value: yesNo(oauth.token.checked) },
-    { label: "Token request", value: oauth.token.succeeded ? "Succeeded" : oauth.token.checked ? "Failed" : "Not checked" },
-    { label: "Token expires", value: tokenExpirationShortLabel(oauth) },
+    { label: "Status checked", value: yesNo(oauth.token.checked) },
+    { label: "Status request", value: oauth.token.succeeded ? "Succeeded" : oauth.token.checked ? "Failed" : "Not checked" },
+    { label: "Status expires", value: tokenExpirationShortLabel(oauth) },
     { label: "App metadata", value: oauth.app.metadata_checked ? (oauth.app.available ? "Available" : oauth.app.message || "Unavailable") : "Not checked" },
     { label: "Tenant metadata", value: oauth.tenant.metadata_checked ? (oauth.tenant.available ? "Available" : oauth.tenant.message || "Unavailable") : "Not checked" },
   ];
@@ -8243,7 +8434,7 @@ function RelayHealthHero({
   overallTone: StatusTone;
   readiness: AdminReadinessOut;
 }) {
-  const tokenCount = integrations.filter((integration) => integration.facts.some((fact) => fact.label === "Token" && fact.tone === "success")).length;
+  const tokenCount = integrations.filter((integration) => integration.facts.some((fact) => fact.label === "Status" && fact.tone === "success")).length;
   const attentionItems = integrations.flatMap((integration) => integration.attentionItems);
   const readyCount = integrations.filter((integration) => integration.tone === "success").length;
   const nextStep = attentionItems[0]?.title ?? (readiness.graph_delivery.configured ? "Monitor message delivery" : "Connect service user");
@@ -8260,7 +8451,7 @@ function RelayHealthHero({
           <p>
             {overallTone === "success"
               ? "No immediate action is required. Keep an eye on message logs after new routes are added."
-              : "Start with the first item below, then refresh auth tokens to confirm the fix."}
+              : "Start with the first item below, then refresh to confirm the fix."}
           </p>
         </div>
       </div>
@@ -8279,9 +8470,9 @@ function RelayHealthHero({
           tone={methodsEnabled === methodsTotal ? "success" : methodsEnabled > 0 ? "warn" : "danger"}
         />
         <StatusOverviewMetric
-          label="Auth"
+          label="Checks"
           value={`${tokenCount}/${integrations.length} valid`}
-          detail="Token checks that currently pass."
+          detail="Latest checks that currently pass."
           tone={tokenCount === integrations.length ? "success" : tokenCount > 0 ? "warn" : "danger"}
         />
       </div>
@@ -8310,11 +8501,12 @@ function StatusFactList({ facts }: { facts: StatusFact[] }) {
   return (
     <dl className="status-detail-facts">
       {facts.map((fact) => (
-        <FragmentPair
-          key={fact.label}
-          label={fact.label}
-          value={<span className={classNames("status-detail-fact-value", fact.tone && fact.tone !== "neutral" && `status-detail-fact-value--${fact.tone}`)}>{fact.value}</span>}
-        />
+        <div className="status-detail-fact" key={fact.label}>
+          <dt>{fact.label}</dt>
+          <dd>
+            <span className={classNames("status-detail-fact-value", fact.tone && fact.tone !== "neutral" && `status-detail-fact-value--${fact.tone}`)}>{fact.value}</span>
+          </dd>
+        </div>
       ))}
     </dl>
   );
@@ -8544,22 +8736,24 @@ function tokenValidityLabel(expiresAt: string): string {
 
 function readinessSummary(authStatus: string, message: string, oauth: OAuthDiagnosticsOut): string {
   if (authStatus === "disabled") return message || "This integration is disabled by feature policy.";
-  if (authStatus === "ready") return "Token checks passed, required credentials are present and the integration is ready for production traffic.";
-  if (authStatus === "permission_warning") return "Core token checks passed, but optional directory metadata is limited by Microsoft Graph permissions.";
-  if (authStatus === "mock") return "Token checks are skipped in this environment, but local delivery checks remain available.";
-  if (authStatus === "token_error") return message || "Token verification failed, so runtime delivery cannot be trusted yet.";
+  if (authStatus === "ready") return "Latest checks passed, required credentials are present and the integration is ready for production traffic.";
+  if (authStatus === "permission_warning") return "Core checks passed, but optional directory metadata is limited by Microsoft Graph permissions.";
+  if (authStatus === "mock") return "External checks are skipped in this environment, but local delivery checks remain available.";
+  if (authStatus === "unchecked") return message || "This integration is being checked in the background.";
+  if (authStatus === "token_error") return message || "Verification failed, so runtime delivery cannot be trusted yet.";
   if (authStatus === "incomplete") return message || "Required credentials are missing for this integration.";
-  if (oauth.token.succeeded) return "Token checks passed, but the readiness state needs review.";
+  if (oauth.token.succeeded) return "Latest checks passed, but the readiness state needs review.";
   return message || "Readiness could not be fully determined.";
 }
 
 function graphDeliverySummary(readiness: AdminReadinessOut["graph_delivery"]): string {
   if (readiness.auth_status === "disabled") return readiness.message || "Delegated Microsoft Graph delivery is disabled by feature policy.";
-  if (readiness.auth_status === "ready") return "Delegated token checks passed, required scopes are present and Graph delivery can be used.";
+  if (readiness.auth_status === "ready") return "Latest delegated checks passed, required scopes are present and Graph delivery can be used.";
   if (readiness.auth_status === "missing") return readiness.message || "Connect a delegated service user before Microsoft Graph delivery can send messages.";
   if (readiness.auth_status === "expired") return readiness.message || "The delegated service-user connection has expired or was revoked.";
-  if (readiness.auth_status === "permission_warning") return readiness.message || "The delegated token is valid, but required Graph delivery scopes are missing.";
-  if (readiness.auth_status === "token_error") return readiness.message || "Delegated token verification failed.";
+  if (readiness.auth_status === "permission_warning") return readiness.message || "The delegated connection is valid, but required Graph delivery scopes are missing.";
+  if (readiness.auth_status === "token_error") return readiness.message || "Delegated verification failed.";
+  if (readiness.auth_status === "unchecked") return readiness.message || "Graph delivery is being checked in the background.";
   if (readiness.auth_status === "configuration_error") return readiness.message || "Delegated Graph delivery has a configuration error.";
   if (readiness.auth_status === "incomplete") return readiness.message || "Required app registration settings are missing.";
   return readiness.message || "Graph delivery readiness could not be fully determined.";
@@ -8577,8 +8771,8 @@ function delegatedTokenFact(readiness: AdminReadinessOut["graph_delivery"]): str
 }
 
 function graphDeliveryScopeSummary(readiness: AdminReadinessOut["graph_delivery"]): string {
-  if (!readiness.token_checked) return "Scopes are verified after a delegated token refresh succeeds.";
-  if (!readiness.token_request_succeeded) return "Scopes cannot be verified until delegated token refresh succeeds.";
+  if (!readiness.token_checked) return "Scopes are verified after the background refresh completes.";
+  if (!readiness.token_request_succeeded) return "Scopes cannot be verified until the status refresh succeeds.";
   if (readiness.missing_scopes.length) return `${readiness.missing_scopes.length} required delegated scope${readiness.missing_scopes.length === 1 ? "" : "s"} missing.`;
   return "All required delegated delivery scopes are present.";
 }
@@ -8622,12 +8816,14 @@ function authStatusTone(status: string): "neutral" | "success" | "warn" | "dange
   if (status === "expired") return "danger";
   if (status === "missing") return "warn";
   if (status === "incomplete") return "warn";
+  if (status === "unchecked") return "warn";
   return "neutral";
 }
 
 function healthStateLabel(status: string): string {
   if (status === "disabled") return "Disabled";
   if (status === "ready" || status === "mock") return "Ready";
+  if (status === "unchecked") return "Checking";
   if (status === "token_error" || status === "expired" || status === "configuration_error") return "Error";
   return "Warning";
 }
@@ -8635,7 +8831,7 @@ function healthStateLabel(status: string): string {
 function permissionSummary(oauth: OAuthDiagnosticsOut): string {
   if (oauth.credential_source === "disabled") return "Permission checks are skipped while this integration is disabled.";
   if (!oauth.token.checked) return "Permissions have not been checked yet.";
-  if (!oauth.token.succeeded) return "Permissions cannot be verified until token acquisition succeeds.";
+  if (!oauth.token.succeeded) return "Permissions cannot be verified until the status check succeeds.";
   if (oauth.token.roles.length) return `${oauth.token.roles.length} application permission${oauth.token.roles.length === 1 ? "" : "s"} returned in the token.`;
   return "The token is valid, but no application roles were reported.";
 }
@@ -8646,9 +8842,17 @@ function readinessAttentionItems(authStatus: string, message: string, oauth: OAu
 
   if (authStatus === "token_error") {
     items.push({
-      title: "Token request failed",
+      title: "Refresh failed",
       description: message || "Required: fix the credentials or tenant configuration before this integration can be trusted.",
       tone: "danger",
+    });
+  }
+
+  if (authStatus === "unchecked") {
+    items.push({
+      title: "Checking status",
+      description: message || "A background refresh will update the current status shortly.",
+      tone: "warn",
     });
   }
 
@@ -8694,16 +8898,24 @@ function graphDeliveryAttentionItems(readiness: AdminReadinessOut["graph_deliver
   if (readiness.auth_status === "expired") {
     items.push({
       title: "Delegated connection expired",
-      description: readiness.message || "Required: reconnect the service user because Microsoft rejected the refresh token.",
+      description: readiness.message || "Required: reconnect the service user because Microsoft rejected the connection.",
       tone: "danger",
     });
   }
 
   if (readiness.auth_status === "token_error") {
     items.push({
-      title: "Delegated token check failed",
+      title: "Delegated refresh failed",
       description: readiness.message || "Required: verify the service-user connection and tenant access.",
       tone: "danger",
+    });
+  }
+
+  if (readiness.auth_status === "unchecked") {
+    items.push({
+      title: "Checking status",
+      description: readiness.message || "A background refresh will update the current Graph delivery status shortly.",
+      tone: "warn",
     });
   }
 

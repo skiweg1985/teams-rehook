@@ -136,7 +136,7 @@ Backend:
 
 ```bash
 cd backend
-pip install -r requirements.txt
+pip install --require-hashes -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
@@ -144,7 +144,7 @@ Frontend:
 
 ```bash
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 

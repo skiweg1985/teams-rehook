@@ -1,0 +1,130 @@
+name: General Hardening
+
+on:
+  pull_request:
+    branches:
+      - dev-1
+  push:
+    branches:
+      - dev-1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    container:
+      image: python:3.11-slim@sha256:b27df5841f3355e9473f9a516d38a6783b6c8dfeacaf2d14a240f443b368ddb6
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - name: Install locked dependencies
+        run: python -m pip install --no-cache-dir --require-hashes -r backend/requirements.txt
+
+      - name: Check installed packages
+        run: python -m pip check
+
+      - name: Compile backend
+        run: python -m py_compile backend/app/*.py backend/app/routers/*.py backend/app/core/*.py backend/app/services/*.py
+
+      - name: Test backend
+        run: python -m pytest -q
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    container:
+      image: node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - name: Install locked dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Audit frontend dependencies
+        working-directory: frontend
+        run: npm audit
+
+  renovate:
+    name: Renovate Config
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - name: Validate Renovate config
+        run: >-
+          docker run --rm
+          -u 0:0
+          -v "$PWD:/repo"
+          -w /repo
+          renovate/renovate:latest@sha256:37be0bc3f9e07050f0d393bcde8d9262930ac56e15338232296c8654fd3a8899
+          renovate-config-validator renovate.json
+
+  images:
+    name: Container Images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - name: Prepare local environment
+        run: cp .env.example .env
+
+      - name: Validate Compose config
+        run: docker compose config
+
+      - name: Build application images
+        run: docker compose build backend frontend proxy
+
+      - name: Pull pinned Compose images
+        run: docker compose pull postgres
+
+      - name: Scan backend image
+        run: >-
+          docker run --rm
+          -v /var/run/docker.sock:/var/run/docker.sock
+          -v trivy-cache:/root/.cache/
+          aquasec/trivy:latest@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f
+          image --scanners vuln --ignore-unfixed --exit-code 1
+          --severity HIGH,CRITICAL teams-rehook-backend:latest
+
+      - name: Scan frontend image
+        run: >-
+          docker run --rm
+          -v /var/run/docker.sock:/var/run/docker.sock
+          -v trivy-cache:/root/.cache/
+          aquasec/trivy:latest@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f
+          image --scanners vuln --ignore-unfixed --exit-code 1
+          --severity HIGH,CRITICAL teams-rehook-frontend:latest
+
+      - name: Scan proxy image
+        run: >-
+          docker run --rm
+          -v /var/run/docker.sock:/var/run/docker.sock
+          -v trivy-cache:/root/.cache/
+          aquasec/trivy:latest@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f
+          image --scanners vuln --ignore-unfixed --exit-code 1
+          --severity HIGH,CRITICAL teams-rehook-proxy:latest
+
+      - name: Scan postgres image
+        run: >-
+          docker run --rm
+          -v /var/run/docker.sock:/var/run/docker.sock
+          -v trivy-cache:/root/.cache/
+          -v "$PWD/.trivyignore-postgres:/repo/.trivyignore-postgres:ro"
+          aquasec/trivy:latest@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f
+          image --ignorefile /repo/.trivyignore-postgres
+          --scanners vuln --ignore-unfixed --exit-code 1
+          --severity HIGH,CRITICAL
+          postgres:16-alpine@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb

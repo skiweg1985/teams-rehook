@@ -62,6 +62,31 @@ Before review:
 - Build the frontend when UI behavior changes.
 - Update documentation when features, APIs, environment variables, operational procedures, or security assumptions change.
 
+## Dependency Intake
+
+New runtime, build, test, or operational dependencies should be added only when they remove meaningful implementation risk or maintenance cost that the existing stack cannot reasonably cover.
+
+Before adding a dependency:
+
+- Prefer the Python standard library, the existing FastAPI/SQLAlchemy/Pydantic stack, the existing React/Vite/TypeScript stack, or repository-local helpers when they are sufficient.
+- Confirm the dependency is actively maintained, has a clear release history, and has a license compatible with the project.
+- Check whether the package adds install scripts, native builds, binary downloads, code generation, or runtime network calls.
+- Review the direct package and notable transitive packages for size, maintenance status, and operational impact.
+- Keep backend direct dependencies in `backend/requirements.in` and regenerate `backend/requirements.txt` with hashes.
+- Keep frontend dependency changes reflected in `frontend/package-lock.json` and install with `npm ci`.
+- Keep Dockerfile and Compose image references pinned as `tag@sha256:digest`.
+
+PRs that add or replace dependencies must include:
+
+- Why the dependency is needed.
+- Which existing alternatives were considered.
+- Whether it is runtime, build-time, test-only, or operational tooling.
+- Any install scripts, native build steps, generated code, binary downloads, or new system packages.
+- Any configuration, deployment, license, or audit impact.
+- Validation output for the affected build, tests, audit, or image scan.
+
+Exceptions are allowed only when the PR documents why the dependency is necessary, how the risk is bounded, and when the exception should be revisited.
+
 ## Issues
 
 Use issues for reproducible bugs, scoped feature requests, and operational gaps. Include enough context to reproduce or evaluate the request.

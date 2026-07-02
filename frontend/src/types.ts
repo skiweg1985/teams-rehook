@@ -498,6 +498,22 @@ export type DeliveryAuthRefreshComponentOut = {
   message: string;
 };
 
+export type DeliveryAuthRefreshJobOut = {
+  job_id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  stream_url: string;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  ok: boolean | null;
+  bot_delivery: DeliveryAuthRefreshComponentOut | null;
+  graph_lookup: DeliveryAuthRefreshComponentOut | null;
+  graph_delivery: DeliveryAuthRefreshComponentOut | null;
+  bot_inbound_auth: DeliveryAuthRefreshComponentOut | null;
+  readiness: AdminReadinessOut | null;
+  message: string;
+};
+
 export type DeliveryAuthRefreshOut = {
   ok: boolean;
   refreshed_at: string;
@@ -516,6 +532,7 @@ export type OAuthDiagnosticsOut = {
   token: {
     checked: boolean;
     succeeded: boolean;
+    checked_at: string | null;
     expires_in_seconds: number | null;
     expires_at: string | null;
     audience: string;
@@ -539,6 +556,14 @@ export type OAuthDiagnosticsOut = {
     primary_domain: string;
     message: string;
   };
+};
+
+export type EventEnvelope<TPayload = Record<string, unknown>> = {
+  id: string;
+  topic: string;
+  type: string;
+  created_at: string;
+  payload: TPayload;
 };
 
 export type TeamsTargetSearchResult = {

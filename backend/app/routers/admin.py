@@ -5,12 +5,13 @@ import hashlib
 import hmac
 import json
 import secrets
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
@@ -54,7 +55,7 @@ from app.schemas import (
     BotReadinessOut,
     ClientEventIn,
     DeliveryAuthRefreshComponentOut,
-    DeliveryAuthRefreshOut,
+    DeliveryAuthRefreshJobOut,
     EventLogEntryOut,
     EventLogEntryPageOut,
     GraphDeliveryOAuthStartOut,
@@ -79,6 +80,14 @@ from app.schemas import (
 )
 from app.security import dumps_json, ensure_utc, hash_secret, loads_json, utcnow
 from app.services.bot_framework_auth import reset_bot_framework_auth_cache
+from app.services.auth_diagnostics import (
+    AUTH_COMPONENT_BOT_DELIVERY,
+    AUTH_COMPONENT_GRAPH_LOOKUP,
+    app_only_credential_signature,
+    get_oauth_snapshot,
+    oauth_from_snapshot,
+    store_oauth_snapshot,
+)
 from app.services.bot_access_roles import (
     BOT_PERMISSION_FIELDS,
     ROUTE_OPERATOR_SYSTEM_KEY,
@@ -87,6 +96,7 @@ from app.services.bot_access_roles import (
     role_permissions,
 )
 from app.services.event_log import emit_event, event_from_entry
+from app.services.event_stream import event_bus
 from app.services.graph_delegated_auth import (
     DEFAULT_DELEGATED_GRAPH_SCOPES,
     GraphDelegatedAuthError,
@@ -100,9 +110,9 @@ from app.services.graph_delegated_auth import (
     promote_pending_delegated_credential,
     refresh_delegated_access_token,
 )
-from app.services.graph_targets import GraphConfigError, GraphRequestError, get_graph_token_manager, reset_graph_token_manager
+from app.services.graph_targets import GraphConfigError, GraphRequestError, reset_graph_token_manager
 from app.services.log_retention import cleanup_log_events
-from app.services.teams_bot import BotDeliveryError, get_token_manager, reset_bot_token_manager
+from app.services.teams_bot import BotDeliveryError, reset_bot_token_manager
 from app.services.webhook_abuse import cleanup_buckets, unblock_bucket
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -116,6 +126,26 @@ class OAuthTokenResponse:
     access_token: str
     expires_in_seconds: int
     claims: dict
+
+
+@dataclass
+class DeliveryAuthRefreshJobState:
+    job_id: str
+    organization_id: str
+    admin_id: str
+    db_bind: object
+    status: str
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    ok: bool | None = None
+    components: dict[str, DeliveryAuthRefreshComponentOut] | None = None
+    readiness: AdminReadinessOut | None = None
+    message: str = ""
+
+
+_delivery_auth_jobs: dict[str, DeliveryAuthRefreshJobState] = {}
+_delivery_auth_job_lock = threading.Lock()
 
 
 @router.get("/settings", response_model=list[SettingItemOut], dependencies=[Depends(require_csrf)])
@@ -277,10 +307,7 @@ def confirm_graph_delivery_oauth_pending(
         },
     )
     db.commit()
-    readiness = _admin_readiness(db, admin, settings=get_effective_settings())
-    if readiness.graph_delivery.token_checked:
-        db.commit()
-    return readiness
+    return _admin_readiness(db, admin.organization_id, settings=get_effective_settings())
 
 
 @router.delete(
@@ -1075,59 +1102,46 @@ def _record_session_revocation(db: Session, admin: User, user: User, revoked_ses
 
 @router.get("/readiness", response_model=AdminReadinessOut, dependencies=[Depends(require_csrf)])
 def readiness(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
-    return _admin_readiness(db, admin)
+    return _admin_readiness(db, admin.organization_id)
 
 
-@router.post("/delivery-auth/refresh", response_model=DeliveryAuthRefreshOut, dependencies=[Depends(require_csrf)])
+@router.post(
+    "/delivery-auth/refresh",
+    response_model=DeliveryAuthRefreshJobOut,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_csrf)],
+)
 def refresh_delivery_auth(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
-    settings = get_effective_settings()
-    refreshed_at = utcnow()
-    bot_delivery = _refresh_bot_delivery_token(settings)
-    graph_lookup = _refresh_graph_lookup_token(settings)
-    graph_delivery = _refresh_graph_delivery_token(db, admin.organization_id, settings)
-    bot_inbound_auth = _refresh_bot_inbound_auth_cache()
-    components = {
-        "bot_delivery": bot_delivery,
-        "graph_lookup": graph_lookup,
-        "graph_delivery": graph_delivery,
-        "bot_inbound_auth": bot_inbound_auth,
-    }
-    record_audit(
-        db,
-        action="delivery_auth.tokens_refreshed",
-        actor_type="user",
-        actor_id=admin.id,
-        organization_id=admin.organization_id,
-        metadata={
-            "components": {key: value.status for key, value in components.items()},
-        },
-    )
-    readiness_out = _admin_readiness(db, admin, settings=settings)
-    db.commit()
-    return DeliveryAuthRefreshOut(
-        ok=not any(component.status == "failed" for component in components.values()),
-        refreshed_at=refreshed_at,
-        bot_delivery=bot_delivery,
-        graph_lookup=graph_lookup,
-        graph_delivery=graph_delivery,
-        bot_inbound_auth=bot_inbound_auth,
-        readiness=readiness_out,
-    )
+    return _start_delivery_auth_refresh_job(admin, db)
 
 
-def _admin_readiness(db: Session, admin: User, settings=None) -> AdminReadinessOut:
+@router.get("/delivery-auth/refresh/{job_id}", response_model=DeliveryAuthRefreshJobOut, dependencies=[Depends(require_csrf)])
+def get_delivery_auth_refresh_job(job_id: str, admin: User = Depends(require_admin)):
+    job = _delivery_auth_job(job_id)
+    if job is None or job.organization_id != admin.organization_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Refresh job was not found")
+    return _delivery_auth_job_out(job)
+
+
+def _admin_readiness(db: Session, organization_id: str, settings=None) -> AdminReadinessOut:
     settings = settings or get_effective_settings()
     delivery_mode = settings.bot_delivery_mode_normalized
-    bot = _bot_readiness(settings, delivery_mode) if settings.bot_framework_enabled else _disabled_bot_readiness(settings, delivery_mode)
-    graph_lookup = _graph_lookup_readiness(settings) if settings.graph_lookup_enabled else _disabled_graph_lookup_readiness(settings)
+    bot = (
+        _bot_readiness(db, organization_id, settings, delivery_mode)
+        if settings.bot_framework_enabled
+        else _disabled_bot_readiness(settings, delivery_mode)
+    )
+    graph_lookup = (
+        _graph_lookup_readiness(db, organization_id, settings)
+        if settings.graph_lookup_enabled
+        else _disabled_graph_lookup_readiness(settings)
+    )
     graph_delivery_enabled = settings.graph_delivery_enabled and settings.graph_lookup_enabled
     graph_delivery = (
-        _graph_delivery_readiness(db, admin.organization_id, settings)
+        _graph_delivery_readiness(db, organization_id, settings)
         if graph_delivery_enabled
         else _disabled_graph_delivery_readiness(settings, graph_lookup_enabled=settings.graph_lookup_enabled)
     )
-    if graph_delivery.token_checked:
-        db.commit()
 
     return AdminReadinessOut(
         app_name=settings.app_name,
@@ -1155,39 +1169,290 @@ def _admin_readiness(db: Session, admin: User, settings=None) -> AdminReadinessO
     )
 
 
-def _refresh_bot_delivery_token(settings) -> DeliveryAuthRefreshComponentOut:
+def _start_delivery_auth_refresh_job(admin: User, db: Session) -> DeliveryAuthRefreshJobOut:
+    with _delivery_auth_job_lock:
+        for job in _delivery_auth_jobs.values():
+            if job.organization_id == admin.organization_id and job.status in {"queued", "running"}:
+                return _delivery_auth_job_out(job)
+        job = DeliveryAuthRefreshJobState(
+            job_id=secrets.token_urlsafe(18),
+            organization_id=admin.organization_id,
+            admin_id=admin.id,
+            db_bind=db.get_bind(),
+            status="queued",
+            created_at=utcnow(),
+            components={},
+            message="Refresh queued.",
+        )
+        _delivery_auth_jobs[job.job_id] = job
+
+    event_bus.publish(
+        "delivery_auth",
+        "queued",
+        {"job_id": job.job_id, "status": job.status, "created_at": job.created_at.isoformat()},
+    )
+    worker = threading.Thread(target=_run_delivery_auth_refresh_job, args=(job.job_id,), daemon=True)
+    worker.start()
+    return _delivery_auth_job_out(job)
+
+
+def _delivery_auth_job(job_id: str) -> DeliveryAuthRefreshJobState | None:
+    with _delivery_auth_job_lock:
+        return _delivery_auth_jobs.get(job_id)
+
+
+def _update_delivery_auth_job(job_id: str, **updates) -> DeliveryAuthRefreshJobState | None:
+    with _delivery_auth_job_lock:
+        job = _delivery_auth_jobs.get(job_id)
+        if job is None:
+            return None
+        for key, value in updates.items():
+            setattr(job, key, value)
+        return job
+
+
+def _delivery_auth_job_out(job: DeliveryAuthRefreshJobState) -> DeliveryAuthRefreshJobOut:
+    components = job.components or {}
+    return DeliveryAuthRefreshJobOut(
+        job_id=job.job_id,
+        status=job.status,  # type: ignore[arg-type]
+        stream_url=f"{get_effective_settings().api_v1_prefix.rstrip('/')}/events/stream?topics=delivery_auth",
+        created_at=job.created_at,
+        started_at=job.started_at,
+        completed_at=job.completed_at,
+        ok=job.ok,
+        bot_delivery=components.get("bot_delivery"),
+        graph_lookup=components.get("graph_lookup"),
+        graph_delivery=components.get("graph_delivery"),
+        bot_inbound_auth=components.get("bot_inbound_auth"),
+        readiness=job.readiness,
+        message=job.message,
+    )
+
+
+def _run_delivery_auth_refresh_job(job_id: str) -> None:
+    started_at = utcnow()
+    job = _update_delivery_auth_job(job_id, status="running", started_at=started_at, message="Refresh is running.")
+    if job is None:
+        return
+    event_bus.publish("delivery_auth", "started", {"job_id": job_id, "status": "running", "started_at": started_at.isoformat()})
+
+    components: dict[str, DeliveryAuthRefreshComponentOut] = {}
+    try:
+        with Session(bind=job.db_bind) as db:
+            settings = get_effective_settings()
+            for key, factory in [
+                ("bot_delivery", lambda: _refresh_bot_delivery_token(db, job.organization_id, settings)),
+                ("graph_lookup", lambda: _refresh_graph_lookup_token(db, job.organization_id, settings)),
+                ("graph_delivery", lambda: _refresh_graph_delivery_token(db, job.organization_id, settings)),
+                ("bot_inbound_auth", _refresh_bot_inbound_auth_cache),
+            ]:
+                component = factory()
+                components[key] = component
+                _update_delivery_auth_job(job_id, components=dict(components))
+                event_bus.publish(
+                    "delivery_auth",
+                    "component",
+                    {
+                        "job_id": job_id,
+                        "component": key,
+                        "status": component.status,
+                        "message": component.message,
+                    },
+                )
+
+            ok = not any(component.status == "failed" for component in components.values())
+            readiness_out = _admin_readiness(db, job.organization_id, settings=settings)
+            record_audit(
+                db,
+                action="delivery_auth.tokens_refreshed",
+                actor_type="user",
+                actor_id=job.admin_id,
+                organization_id=job.organization_id,
+                metadata={"components": {key: value.status for key, value in components.items()}},
+            )
+            db.commit()
+            completed_at = utcnow()
+            _update_delivery_auth_job(
+                job_id,
+                status="completed",
+                completed_at=completed_at,
+                ok=ok,
+                components=components,
+                readiness=readiness_out,
+                message="Refresh completed.",
+            )
+            event_bus.publish(
+                "delivery_auth",
+                "complete",
+                {
+                    "job_id": job_id,
+                    "status": "completed",
+                    "ok": ok,
+                    "completed_at": completed_at.isoformat(),
+                    "readiness": readiness_out.model_dump(mode="json"),
+                    "components": {key: value.model_dump(mode="json") for key, value in components.items()},
+                },
+            )
+    except Exception as exc:
+        completed_at = utcnow()
+        _update_delivery_auth_job(
+            job_id,
+            status="failed",
+            completed_at=completed_at,
+            ok=False,
+            components=components,
+            message="Refresh failed unexpectedly.",
+        )
+        event_bus.publish(
+            "delivery_auth",
+            "error",
+            {
+                "job_id": job_id,
+                "status": "failed",
+                "completed_at": completed_at.isoformat(),
+                "message": "Refresh failed unexpectedly.",
+                "error_type": exc.__class__.__name__,
+            },
+        )
+
+
+def _refresh_bot_delivery_token(db: Session, organization_id: str, settings) -> DeliveryAuthRefreshComponentOut:
     reset_bot_token_manager()
     if not settings.bot_framework_enabled:
         return DeliveryAuthRefreshComponentOut(status="skipped", message="Bot Framework delivery is disabled by feature policy.")
     if settings.bot_delivery_mode_normalized != "real":
-        return DeliveryAuthRefreshComponentOut(status="skipped", message="Bot Framework delivery is in mock mode; no delivery token is requested.")
+        return DeliveryAuthRefreshComponentOut(status="skipped", message="Bot Framework delivery is in mock mode; no external status refresh is needed.")
+    signature = app_only_credential_signature(
+        tenant_id=settings.ms_app_tenant_id,
+        client_id=settings.ms_app_client_id,
+        client_secret=settings.ms_app_client_secret,
+        scope=settings.botframework_scope,
+    )
     try:
-        get_token_manager().get_token()
+        token_response = _fetch_oauth_token(
+            tenant_id=settings.ms_app_tenant_id,
+            client_id=settings.ms_app_client_id,
+            client_secret=settings.ms_app_client_secret,
+            scope=settings.botframework_scope,
+            config_error=BotDeliveryError,
+            request_error=BotDeliveryError,
+            missing_labels={
+                "tenant_id": "MS_APP_TENANT_ID",
+                "client_id": "MS_APP_CLIENT_ID",
+                "client_secret": "MS_APP_CLIENT_SECRET",
+            },
+        )
     except BotDeliveryError:
+        store_oauth_snapshot(
+            db,
+            organization_id=organization_id,
+            component=AUTH_COMPONENT_BOT_DELIVERY,
+            credential_signature_value=signature,
+            status="token_error",
+            message="Bot Framework status refresh failed. Check tenant ID, client ID, client secret and app permissions.",
+            oauth=_oauth_diagnostics(
+                credential_source="ms_app",
+                tenant_id=settings.ms_app_tenant_id,
+                client_id=settings.ms_app_client_id,
+                scope=settings.botframework_scope,
+                token=OAuthTokenDiagnosticsOut(checked=True, succeeded=False, checked_at=utcnow()),
+            ),
+        )
         return DeliveryAuthRefreshComponentOut(
             status="failed",
-            message="Bot Framework delivery token refresh failed. Check tenant ID, client ID, client secret and app permissions.",
+            message="Bot Framework delivery status refresh failed. Check tenant ID, client ID, client secret and app permissions.",
         )
-    return DeliveryAuthRefreshComponentOut(status="refreshed", message="Bot Framework delivery token was refreshed.")
+    store_oauth_snapshot(
+        db,
+        organization_id=organization_id,
+        component=AUTH_COMPONENT_BOT_DELIVERY,
+        credential_signature_value=signature,
+        status="ready",
+        message="Bot Framework status refresh succeeded. Delivery still requires a valid Teams conversation reference and bot permissions.",
+        oauth=_oauth_diagnostics(
+            credential_source="ms_app",
+            tenant_id=settings.ms_app_tenant_id,
+            client_id=settings.ms_app_client_id,
+            scope=settings.botframework_scope,
+            token=_token_diagnostics(token_response),
+        ),
+    )
+    return DeliveryAuthRefreshComponentOut(status="refreshed", message="Bot Framework delivery status was refreshed.")
 
 
-def _refresh_graph_lookup_token(settings) -> DeliveryAuthRefreshComponentOut:
+def _refresh_graph_lookup_token(db: Session, organization_id: str, settings) -> DeliveryAuthRefreshComponentOut:
     reset_graph_token_manager()
     if not settings.graph_lookup_enabled:
         return DeliveryAuthRefreshComponentOut(status="skipped", message="Microsoft Graph lookup is disabled by feature policy.")
+    signature = app_only_credential_signature(
+        tenant_id=settings.ms_app_tenant_id,
+        client_id=settings.ms_app_client_id,
+        client_secret=settings.ms_app_client_secret,
+        scope=settings.graph_scope,
+    )
     try:
-        get_graph_token_manager().get_token()
+        token_response = _fetch_oauth_token(
+            tenant_id=settings.ms_app_tenant_id,
+            client_id=settings.ms_app_client_id,
+            client_secret=settings.ms_app_client_secret,
+            scope=settings.graph_scope,
+            config_error=GraphConfigError,
+            request_error=GraphRequestError,
+            missing_labels={
+                "tenant_id": "MS_APP_TENANT_ID",
+                "client_id": "MS_APP_CLIENT_ID",
+                "client_secret": "MS_APP_CLIENT_SECRET",
+            },
+        )
     except GraphConfigError:
         return DeliveryAuthRefreshComponentOut(
             status="failed",
-            message="Microsoft Graph lookup token refresh failed because app credentials are incomplete.",
+            message="Microsoft Graph lookup status refresh failed because app credentials are incomplete.",
         )
     except GraphRequestError:
+        store_oauth_snapshot(
+            db,
+            organization_id=organization_id,
+            component=AUTH_COMPONENT_GRAPH_LOOKUP,
+            credential_signature_value=signature,
+            status="token_error",
+            message="Microsoft Graph status refresh failed. Check credentials, tenant and app permissions.",
+            oauth=_oauth_diagnostics(
+                credential_source="ms_app",
+                tenant_id=settings.ms_app_tenant_id,
+                client_id=settings.ms_app_client_id,
+                scope=settings.graph_scope,
+                token=OAuthTokenDiagnosticsOut(checked=True, succeeded=False, checked_at=utcnow()),
+            ),
+        )
         return DeliveryAuthRefreshComponentOut(
             status="failed",
-            message="Microsoft Graph lookup token refresh failed. Check credentials, tenant and app permissions.",
+            message="Microsoft Graph lookup status refresh failed. Check credentials, tenant and app permissions.",
         )
-    return DeliveryAuthRefreshComponentOut(status="refreshed", message="Microsoft Graph lookup token was refreshed.")
+    oauth = _oauth_diagnostics(
+        credential_source="ms_app",
+        tenant_id=settings.ms_app_tenant_id,
+        client_id=settings.ms_app_client_id,
+        scope=settings.graph_scope,
+        token=_token_diagnostics(token_response),
+        metadata=_metadata_from_graph_token(token_response.access_token, settings.ms_app_client_id),
+    )
+    metadata_available = oauth.app.available and oauth.tenant.available
+    store_oauth_snapshot(
+        db,
+        organization_id=organization_id,
+        component=AUTH_COMPONENT_GRAPH_LOOKUP,
+        credential_signature_value=signature,
+        status="ready" if metadata_available else "permission_warning",
+        message=(
+            "Microsoft Graph status refresh succeeded. Lookup and readiness diagnostics are available."
+            if metadata_available
+            else "Microsoft Graph status refresh succeeded. Lookup can still work, but optional directory metadata is limited by tenant permissions."
+        ),
+        oauth=oauth,
+    )
+    return DeliveryAuthRefreshComponentOut(status="refreshed", message="Microsoft Graph lookup status was refreshed.")
 
 
 def _refresh_graph_delivery_token(db: Session, organization_id: str, settings) -> DeliveryAuthRefreshComponentOut:
@@ -1208,7 +1473,7 @@ def _refresh_graph_delivery_token(db: Session, organization_id: str, settings) -
     except GraphDelegatedConfigError:
         return DeliveryAuthRefreshComponentOut(
             status="failed",
-            message="Delegated Graph delivery token refresh failed because app registration settings are incomplete.",
+            message="Delegated Graph delivery status refresh failed because app registration settings are incomplete.",
         )
     except HTTPException as exc:
         detail = str(exc.detail)
@@ -1218,9 +1483,9 @@ def _refresh_graph_delivery_token(db: Session, organization_id: str, settings) -
     except GraphDelegatedAuthError:
         return DeliveryAuthRefreshComponentOut(
             status="failed",
-            message="Delegated Graph delivery token refresh failed. Reconnect the service user if the token is expired or revoked.",
+            message="Delegated Graph delivery status refresh failed. Reconnect the service user if the connection is expired or revoked.",
         )
-    return DeliveryAuthRefreshComponentOut(status="refreshed", message="Delegated Graph delivery token was refreshed.")
+    return DeliveryAuthRefreshComponentOut(status="refreshed", message="Delegated Graph delivery status was refreshed.")
 
 
 def _refresh_bot_inbound_auth_cache() -> DeliveryAuthRefreshComponentOut:
@@ -1307,7 +1572,7 @@ def _b64url_json(payload: dict) -> str:
     return encoded.rstrip("=")
 
 
-def _bot_readiness(settings, delivery_mode: str) -> BotReadinessOut:
+def _bot_readiness(db: Session, organization_id: str, settings, delivery_mode: str) -> BotReadinessOut:
     credential_fields = {
         "tenant_id": _configured_status(settings.ms_app_tenant_id),
         "client_id": _configured_status(settings.ms_app_client_id),
@@ -1333,7 +1598,7 @@ def _bot_readiness(settings, delivery_mode: str) -> BotReadinessOut:
             credentials_configured=credentials_configured,
             credential_fields=credential_fields,
             oauth=oauth,
-            message="Mock delivery is active. Token checks are skipped and Teams messages are simulated.",
+            message="Mock delivery is active. Status checks are skipped and Teams messages are simulated.",
         )
     if not credentials_configured:
         return BotReadinessOut(
@@ -1347,61 +1612,42 @@ def _bot_readiness(settings, delivery_mode: str) -> BotReadinessOut:
             oauth=oauth,
             message="Real delivery requires MS_APP_TENANT_ID, MS_APP_CLIENT_ID and MS_APP_CLIENT_SECRET.",
         )
-    try:
-        token_response = _fetch_oauth_token(
+
+    snapshot = get_oauth_snapshot(
+        db,
+        organization_id=organization_id,
+        component=AUTH_COMPONENT_BOT_DELIVERY,
+        credential_signature_value=app_only_credential_signature(
             tenant_id=settings.ms_app_tenant_id,
             client_id=settings.ms_app_client_id,
             client_secret=settings.ms_app_client_secret,
             scope=settings.botframework_scope,
-            config_error=BotDeliveryError,
-            request_error=BotDeliveryError,
-            missing_labels={
-                "tenant_id": "MS_APP_TENANT_ID",
-                "client_id": "MS_APP_CLIENT_ID",
-                "client_secret": "MS_APP_CLIENT_SECRET",
-            },
-        )
-    except BotDeliveryError:
+        ),
+    )
+    if snapshot is None:
         return BotReadinessOut(
             ready=False,
-            auth_status="token_error",
-            token_checked=True,
+            auth_status="unchecked",
+            token_checked=False,
             token_request_succeeded=False,
             mode=delivery_mode,
             credentials_configured=True,
             credential_fields=credential_fields,
-            oauth=_oauth_diagnostics(
-                credential_source="ms_app",
-                tenant_id=settings.ms_app_tenant_id,
-                client_id=settings.ms_app_client_id,
-                scope=settings.botframework_scope,
-                token=OAuthTokenDiagnosticsOut(checked=True, succeeded=False),
-            ),
-            message="Bot Framework token request failed. Check tenant ID, client ID, client secret and app permissions.",
+            oauth=oauth,
+            message="Bot Framework status is being refreshed in the background.",
         )
-    oauth = _oauth_diagnostics(
-        credential_source="ms_app",
-        tenant_id=settings.ms_app_tenant_id,
-        client_id=settings.ms_app_client_id,
-        scope=settings.botframework_scope,
-        token=_token_diagnostics(token_response),
-        metadata=_metadata_for_credentials(
-            tenant_id=settings.ms_app_tenant_id,
-            client_id=settings.ms_app_client_id,
-            client_secret=settings.ms_app_client_secret,
-            scope=settings.graph_scope,
-        ),
-    )
+    oauth = oauth_from_snapshot(snapshot)
+    ready = snapshot.status == "ready" and snapshot.token_request_succeeded
     return BotReadinessOut(
-        ready=True,
-        auth_status="ready",
-        token_checked=True,
-        token_request_succeeded=True,
+        ready=ready,
+        auth_status=snapshot.status,
+        token_checked=snapshot.token_checked,
+        token_request_succeeded=snapshot.token_request_succeeded,
         mode=delivery_mode,
         credentials_configured=True,
         credential_fields=credential_fields,
         oauth=oauth,
-        message="Bot Framework token request succeeded. Delivery still requires a valid Teams conversation reference and bot permissions.",
+        message=snapshot.message,
     )
 
 
@@ -1433,7 +1679,7 @@ def _disabled_bot_readiness(settings, delivery_mode: str) -> BotReadinessOut:
     )
 
 
-def _graph_lookup_readiness(settings) -> GraphReadinessOut:
+def _graph_lookup_readiness(db: Session, organization_id: str, settings) -> GraphReadinessOut:
     credential_fields = {
         "tenant_id": _configured_status(settings.ms_app_tenant_id),
         "client_id": _configured_status(settings.ms_app_client_id),
@@ -1460,65 +1706,43 @@ def _graph_lookup_readiness(settings) -> GraphReadinessOut:
             oauth=oauth,
             message="Graph lookup requires MS_APP_TENANT_ID, MS_APP_CLIENT_ID and MS_APP_CLIENT_SECRET.",
         )
-    try:
-        token_response = _fetch_oauth_token(
+
+    snapshot = get_oauth_snapshot(
+        db,
+        organization_id=organization_id,
+        component=AUTH_COMPONENT_GRAPH_LOOKUP,
+        credential_signature_value=app_only_credential_signature(
             tenant_id=settings.ms_app_tenant_id,
             client_id=settings.ms_app_client_id,
             client_secret=settings.ms_app_client_secret,
             scope=settings.graph_scope,
-            config_error=GraphConfigError,
-            request_error=GraphRequestError,
-            missing_labels={
-                "tenant_id": "MS_APP_TENANT_ID",
-                "client_id": "MS_APP_CLIENT_ID",
-                "client_secret": "MS_APP_CLIENT_SECRET",
-            },
-        )
-    except GraphConfigError:
+        ),
+    )
+    if snapshot is None:
+        group_membership = _graph_group_membership_readiness([])
         return GraphReadinessOut(
             ready=False,
-            auth_status="incomplete",
+            auth_status="unchecked",
             token_checked=False,
-            token_request_succeeded=False,
-            configured=False,
-            credential_source="missing",
-            credential_fields=credential_fields,
-            oauth=oauth,
-            message="Graph lookup credentials are incomplete.",
-        )
-    except GraphRequestError:
-        return GraphReadinessOut(
-            ready=False,
-            auth_status="token_error",
-            token_checked=True,
             token_request_succeeded=False,
             configured=True,
             credential_source=credential_source,
             credential_fields=credential_fields,
-            oauth=_oauth_diagnostics(
-                credential_source=credential_source,
-                tenant_id=settings.ms_app_tenant_id,
-                client_id=settings.ms_app_client_id,
-                scope=settings.graph_scope,
-                token=OAuthTokenDiagnosticsOut(checked=True, succeeded=False),
-            ),
-            message="Microsoft Graph token request failed. Check credentials, tenant and app permissions.",
+            oauth=oauth,
+            group_membership_lookup_ready=group_membership["ready"],
+            group_membership_required_roles=list(GRAPH_GROUP_MEMBERSHIP_REQUIRED_ROLES),
+            group_membership_alternative_roles=list(GRAPH_GROUP_MEMBERSHIP_ALTERNATIVE_ROLES),
+            group_membership_missing_roles=group_membership["missing_roles"],
+            group_membership_message=group_membership["message"],
+            message="Microsoft Graph lookup status is being refreshed in the background.",
         )
-    oauth = _oauth_diagnostics(
-        credential_source=credential_source,
-        tenant_id=settings.ms_app_tenant_id,
-        client_id=settings.ms_app_client_id,
-        scope=settings.graph_scope,
-        token=_token_diagnostics(token_response),
-        metadata=_metadata_from_graph_token(token_response.access_token, settings.ms_app_client_id),
-    )
-    metadata_available = oauth.app.available and oauth.tenant.available
+    oauth = oauth_from_snapshot(snapshot)
     group_membership = _graph_group_membership_readiness(oauth.token.roles)
     return GraphReadinessOut(
-        ready=True,
-        auth_status="ready" if metadata_available else "permission_warning",
-        token_checked=True,
-        token_request_succeeded=True,
+        ready=snapshot.token_request_succeeded,
+        auth_status=snapshot.status,
+        token_checked=snapshot.token_checked,
+        token_request_succeeded=snapshot.token_request_succeeded,
         configured=True,
         credential_source=credential_source,
         credential_fields=credential_fields,
@@ -1528,11 +1752,7 @@ def _graph_lookup_readiness(settings) -> GraphReadinessOut:
         group_membership_alternative_roles=list(GRAPH_GROUP_MEMBERSHIP_ALTERNATIVE_ROLES),
         group_membership_missing_roles=group_membership["missing_roles"],
         group_membership_message=group_membership["message"],
-        message=(
-            "Microsoft Graph token request succeeded. Lookup and readiness diagnostics are available."
-            if metadata_available
-            else "Microsoft Graph token request succeeded. Lookup can still work, but optional directory metadata is limited by tenant permissions."
-        ),
+        message=snapshot.message,
     )
 
 
@@ -1600,16 +1820,7 @@ def _graph_delivery_readiness(db: Session, organization_id: str, settings) -> Gr
             message="Delegated Graph delivery has not been configured.",
         )
 
-    try:
-        access_token = refresh_delegated_access_token(
-            db,
-            organization_id=organization_id,
-            settings=settings,
-            scopes=DEFAULT_DELEGATED_GRAPH_SCOPES,
-        )
-        diagnostics = access_token.diagnostics
-    except GraphDelegatedConfigError:
-        diagnostics = diagnostics_for_organization(db, organization_id)
+    if not settings.ms_app_tenant_id or not settings.ms_app_client_id or not settings.ms_app_client_secret:
         return _graph_delivery_readiness_out(
             diagnostics=diagnostics,
             settings=settings,
@@ -1621,40 +1832,44 @@ def _graph_delivery_readiness(db: Session, organization_id: str, settings) -> Gr
             token_request_succeeded=False,
             message="Delegated Graph delivery requires MS_APP_TENANT_ID, MS_APP_CLIENT_ID and MS_APP_CLIENT_SECRET.",
         )
-    except HTTPException as exc:
-        detail = str(exc.detail)
-        if "SETTINGS_ENC_KEY" not in detail:
-            raise
-        diagnostics = diagnostics_for_organization(db, organization_id)
+
+    token_checked = diagnostics.status in {"ready", "expired", "token_error"}
+    token_request_succeeded = diagnostics.status == "ready"
+    if diagnostics.status == "expired":
         return _graph_delivery_readiness_out(
             diagnostics=diagnostics,
             settings=settings,
             required_scopes=required_scopes,
             credential_source=credential_source,
             ready=False,
-            auth_status="configuration_error",
+            auth_status="expired",
+            token_checked=token_checked,
+            token_request_succeeded=False,
+            message="Delegated Graph connection is expired or revoked. Reconnect the service user.",
+        )
+    if diagnostics.status == "token_error":
+        return _graph_delivery_readiness_out(
+            diagnostics=diagnostics,
+            settings=settings,
+            required_scopes=required_scopes,
+            credential_source=credential_source,
+            ready=False,
+            auth_status="token_error",
+            token_checked=token_checked,
+            token_request_succeeded=False,
+            message="Delegated Graph status refresh failed. Check the service-user connection and Microsoft tenant access.",
+        )
+    if diagnostics.status != "ready":
+        return _graph_delivery_readiness_out(
+            diagnostics=diagnostics,
+            settings=settings,
+            required_scopes=required_scopes,
+            credential_source=credential_source,
+            ready=False,
+            auth_status="unchecked",
             token_checked=False,
             token_request_succeeded=False,
-            message=detail,
-        )
-    except GraphDelegatedAuthError:
-        diagnostics = diagnostics_for_organization(db, organization_id)
-        auth_status = diagnostics.status if diagnostics.status in {"expired", "token_error"} else "token_error"
-        message = (
-            "Delegated Graph refresh token is expired or revoked. Reconnect the service user."
-            if auth_status == "expired"
-            else "Delegated Graph token refresh failed. Check the service-user connection and Microsoft tenant access."
-        )
-        return _graph_delivery_readiness_out(
-            diagnostics=diagnostics,
-            settings=settings,
-            required_scopes=required_scopes,
-            credential_source=credential_source,
-            ready=False,
-            auth_status=auth_status,
-            token_checked=True,
-            token_request_succeeded=False,
-            message=message,
+            message="Delegated Graph delivery status is being refreshed in the background.",
         )
 
     missing_scopes = _missing_required_scopes(diagnostics.scopes or [], required_scopes)
@@ -1666,10 +1881,10 @@ def _graph_delivery_readiness(db: Session, organization_id: str, settings) -> Gr
             credential_source=credential_source,
             ready=False,
             auth_status="permission_warning",
-            token_checked=True,
-            token_request_succeeded=True,
+            token_checked=token_checked,
+            token_request_succeeded=token_request_succeeded,
             missing_scopes=missing_scopes,
-            message=f"Delegated Graph token refresh succeeded, but required scopes are missing: {', '.join(missing_scopes)}.",
+            message=f"Delegated Graph status was refreshed previously, but required scopes are missing: {', '.join(missing_scopes)}.",
         )
 
     return _graph_delivery_readiness_out(
@@ -1679,9 +1894,9 @@ def _graph_delivery_readiness(db: Session, organization_id: str, settings) -> Gr
         credential_source=credential_source,
         ready=True,
         auth_status="ready",
-        token_checked=True,
-        token_request_succeeded=True,
-        message="Delegated Graph token refresh succeeded. Graph delivery prerequisites are usable.",
+        token_checked=token_checked,
+        token_request_succeeded=token_request_succeeded,
+        message="Delegated Graph delivery prerequisites are usable.",
     )
 
 
@@ -1829,11 +2044,13 @@ def _oauth_diagnostics(
 def _token_diagnostics(response: OAuthTokenResponse) -> OAuthTokenDiagnosticsOut:
     claims = response.claims
     roles = claims.get("roles") if isinstance(claims.get("roles"), list) else []
+    checked_at = utcnow()
     return OAuthTokenDiagnosticsOut(
         checked=True,
         succeeded=True,
+        checked_at=checked_at,
         expires_in_seconds=response.expires_in_seconds,
-        expires_at=utcnow() + timedelta(seconds=max(response.expires_in_seconds, 1)),
+        expires_at=checked_at + timedelta(seconds=max(response.expires_in_seconds, 1)),
         audience=str(claims.get("aud") or ""),
         issuer=str(claims.get("iss") or ""),
         roles=[str(role) for role in roles],

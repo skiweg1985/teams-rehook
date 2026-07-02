@@ -66,13 +66,14 @@ def _build_monitoring_status(db: Session) -> MonitoringStatusOut:
     generated_at = utcnow()
     delivery_mode = settings.bot_delivery_mode_normalized
     enabled_backends = _enabled_delivery_backends(settings)
+    organization_id = db.scalar(select(Organization.id).order_by(Organization.created_at.asc())) or ""
     bot_readiness = (
-        _bot_readiness(settings, delivery_mode)
+        _bot_readiness(db, organization_id, settings, delivery_mode)
         if settings.bot_framework_enabled
         else MonitoringReadinessComponentOut(enabled=False, ready=True, auth_status="disabled")
     )
     graph_lookup_readiness = (
-        _graph_lookup_readiness(settings)
+        _graph_lookup_readiness(db, organization_id, settings)
         if settings.graph_lookup_enabled
         else MonitoringGraphReadinessOut(
             enabled=False,

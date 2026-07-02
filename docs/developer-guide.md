@@ -43,7 +43,7 @@ Backend:
 
 ```bash
 cd backend
-pip install -r requirements.txt
+pip install --require-hashes -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
@@ -51,7 +51,7 @@ Frontend:
 
 ```bash
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
@@ -69,6 +69,19 @@ npm run test
 ```
 
 `npm run test` runs the frontend build, backend syntax check, and pytest suite.
+
+## Backend Dependency Updates
+
+Direct backend dependencies are maintained in `backend/requirements.in`.
+`backend/requirements.txt` is generated from that file and must be committed with pinned versions and hashes.
+
+```bash
+cd backend
+python -m pip install pip-tools
+pip-compile --generate-hashes --output-file=requirements.txt requirements.in
+```
+
+Review new dependencies against the dependency intake rules in [Contributing](../CONTRIBUTING.md#dependency-intake).
 
 ## Backend Notes
 
