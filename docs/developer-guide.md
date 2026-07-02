@@ -81,6 +81,8 @@ python -m pip install pip-tools
 pip-compile --generate-hashes --output-file=requirements.txt requirements.in
 ```
 
+Review new dependencies against the dependency intake rules in [Contributing](../CONTRIBUTING.md#dependency-intake).
+
 ## Backend Notes
 
 Main entry point:
