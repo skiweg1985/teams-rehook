@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 from urllib.parse import parse_qs, urlparse
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -106,6 +107,19 @@ def login_admin(client: TestClient) -> str:
     )
     assert response.status_code == 200
     return response.json()["csrf_token"]
+
+
+def wait_refresh_job(client: TestClient, csrf_token: str, response):
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    for _ in range(80):
+        job_response = client.get(f"/api/v1/admin/delivery-auth/refresh/{job_id}", headers={"X-CSRF-Token": csrf_token})
+        assert job_response.status_code == 200
+        body = job_response.json()
+        if body["status"] in {"completed", "failed"}:
+            return body
+        time.sleep(0.05)
+    raise AssertionError("Refresh job did not complete")
 
 
 def fake_jwt(**claims) -> str:
@@ -232,9 +246,15 @@ def test_readiness_reports_real_delivery_missing_bot_credentials(db_session: Ses
 
 
 def test_readiness_checks_bot_token_for_real_delivery(db_session: Session, monkeypatch: pytest.MonkeyPatch):
+    calls = {"token": 0}
+
+    def fake_fetch(**kwargs):
+        calls["token"] += 1
+        return fake_token_response(kwargs["scope"])
+
     monkeypatch.setattr(
         "app.routers.admin._fetch_oauth_token",
-        lambda **kwargs: fake_token_response(kwargs["scope"]),
+        fake_fetch,
     )
     monkeypatch.setattr("app.routers.admin._metadata_for_credentials", lambda **kwargs: metadata_pair())
     with make_client(
@@ -250,10 +270,11 @@ def test_readiness_checks_bot_token_for_real_delivery(db_session: Session, monke
 
     assert response.status_code == 200
     body = response.json()
-    assert body["bot"]["ready"] is True
-    assert body["bot"]["auth_status"] == "ready"
-    assert body["bot"]["token_checked"] is True
-    assert body["bot"]["token_request_succeeded"] is True
+    assert calls["token"] == 0
+    assert body["bot"]["ready"] is False
+    assert body["bot"]["auth_status"] == "unchecked"
+    assert body["bot"]["token_checked"] is False
+    assert body["bot"]["token_request_succeeded"] is False
     assert body["bot"]["credential_fields"] == {
         "tenant_id": "configured",
         "client_id": "configured",
@@ -262,13 +283,8 @@ def test_readiness_checks_bot_token_for_real_delivery(db_session: Session, monke
     assert body["bot"]["oauth"]["tenant_id"] == "tenant"
     assert body["bot"]["oauth"]["client_id"] == "client"
     assert body["bot"]["oauth"]["scope"] == "https://api.botframework.com/.default"
-    assert body["bot"]["oauth"]["token"]["succeeded"] is True
-    assert body["bot"]["oauth"]["token"]["expires_in_seconds"] == 3600
-    assert body["bot"]["oauth"]["token"]["audience"] == "https://api.botframework.com/.default"
-    assert body["bot"]["oauth"]["token"]["roles"] == ["User.Read.All", "Team.ReadBasic.All"]
-    assert body["bot"]["oauth"]["app"]["display_name"] == "Teams Rehook App"
-    assert body["bot"]["oauth"]["app"]["service_principal_id"] == "sp-id"
-    assert body["bot"]["oauth"]["tenant"]["display_name"] == "Example Tenant"
+    assert body["bot"]["oauth"]["token"]["succeeded"] is False
+    assert body["bot"]["oauth"]["token"]["roles"] == []
 
 
 def test_readiness_reports_bot_token_error_without_leaking_details(db_session: Session, monkeypatch: pytest.MonkeyPatch):
@@ -292,10 +308,10 @@ def test_readiness_reports_bot_token_error_without_leaking_details(db_session: S
     assert response.status_code == 200
     body = response.json()
     assert body["bot"]["ready"] is False
-    assert body["bot"]["auth_status"] == "token_error"
-    assert body["bot"]["token_checked"] is True
+    assert body["bot"]["auth_status"] == "unchecked"
+    assert body["bot"]["token_checked"] is False
     assert body["bot"]["token_request_succeeded"] is False
-    assert body["bot"]["oauth"]["token"]["checked"] is True
+    assert body["bot"]["oauth"]["token"]["checked"] is False
     assert body["bot"]["oauth"]["token"]["succeeded"] is False
     assert "raw provider detail" not in body["bot"]["message"]
 
@@ -316,10 +332,9 @@ def test_readiness_reports_shared_ms_app_credentials(db_session: Session, monkey
         MS_APP_CLIENT_SECRET="secret",
     ) as client:
         csrf_token = login_admin(client)
-        response = client.get("/api/v1/admin/readiness", headers={"X-CSRF-Token": csrf_token})
+        response = client.post("/api/v1/admin/delivery-auth/refresh", headers={"X-CSRF-Token": csrf_token})
+        body = wait_refresh_job(client, csrf_token, response)["readiness"]
 
-    assert response.status_code == 200
-    body = response.json()
     assert body["bot"]["ready"] is True
     assert body["graph_lookup"]["ready"] is True
     assert body["graph_lookup"]["credential_source"] == "ms_app"
@@ -365,10 +380,9 @@ def test_readiness_keeps_graph_ready_when_metadata_is_unavailable(db_session: Se
         MS_APP_CLIENT_SECRET="secret",
     ) as client:
         csrf_token = login_admin(client)
-        response = client.get("/api/v1/admin/readiness", headers={"X-CSRF-Token": csrf_token})
+        response = client.post("/api/v1/admin/delivery-auth/refresh", headers={"X-CSRF-Token": csrf_token})
+        body = wait_refresh_job(client, csrf_token, response)["readiness"]
 
-    assert response.status_code == 200
-    body = response.json()
     assert body["graph_lookup"]["ready"] is True
     assert body["graph_lookup"]["auth_status"] == "permission_warning"
     assert body["graph_lookup"]["token_request_succeeded"] is True
@@ -397,10 +411,10 @@ def test_readiness_reports_graph_token_error_without_leaking_details(db_session:
     assert response.status_code == 200
     body = response.json()
     assert body["graph_lookup"]["ready"] is False
-    assert body["graph_lookup"]["auth_status"] == "token_error"
-    assert body["graph_lookup"]["token_checked"] is True
+    assert body["graph_lookup"]["auth_status"] == "unchecked"
+    assert body["graph_lookup"]["token_checked"] is False
     assert body["graph_lookup"]["token_request_succeeded"] is False
-    assert body["graph_lookup"]["oauth"]["token"]["checked"] is True
+    assert body["graph_lookup"]["oauth"]["token"]["checked"] is False
     assert body["graph_lookup"]["oauth"]["token"]["succeeded"] is False
     assert "raw graph response" not in body["graph_lookup"]["message"]
 
@@ -491,20 +505,18 @@ def test_readiness_reports_ready_graph_delivery_credential(db_session: Session, 
     assert body["graph_delivery"]["token_checked"] is True
     assert body["graph_delivery"]["token_request_succeeded"] is True
     assert body["graph_delivery"]["credential_source"] == "delegated_service_user"
-    assert body["graph_delivery"]["service_user_id"] == "service-user-id"
-    assert body["graph_delivery"]["service_user_display_name"] == "Graph Service User"
-    assert body["graph_delivery"]["service_user_principal_name"] == "graph-service@example.com"
+    assert body["graph_delivery"]["service_user_id"] == "old-user-id"
+    assert body["graph_delivery"]["service_user_display_name"] == "Old Service User"
+    assert body["graph_delivery"]["service_user_principal_name"] == "old-service@example.com"
     assert body["graph_delivery"]["missing_scopes"] == []
     assert "refresh-token" not in json.dumps(body["graph_delivery"])
 
 
 def test_readiness_reports_graph_delivery_expired_without_raw_details(db_session: Session, monkeypatch: pytest.MonkeyPatch):
-    add_delegated_credential(db_session)
-
-    def expired_token(**kwargs):
-        raise graph_delegated_auth._ExpiredRefreshTokenError("raw invalid_grant body")
-
-    monkeypatch.setattr(graph_delegated_auth, "_request_token", expired_token)
+    credential = add_delegated_credential(db_session)
+    credential.last_status = "expired"
+    credential.last_error = "Delegated Graph refresh token is expired or revoked."
+    db_session.commit()
     with make_client(
         db_session,
         monkeypatch,
@@ -525,12 +537,10 @@ def test_readiness_reports_graph_delivery_expired_without_raw_details(db_session
 
 
 def test_readiness_reports_graph_delivery_token_error_without_raw_details(db_session: Session, monkeypatch: pytest.MonkeyPatch):
-    add_delegated_credential(db_session)
-
-    def token_error(**kwargs):
-        raise GraphDelegatedAuthError("raw provider body")
-
-    monkeypatch.setattr(graph_delegated_auth, "_request_token", token_error)
+    credential = add_delegated_credential(db_session)
+    credential.last_status = "token_error"
+    credential.last_error = "Delegated Graph token refresh failed."
+    db_session.commit()
     with make_client(
         db_session,
         monkeypatch,
@@ -566,10 +576,10 @@ def test_readiness_reports_graph_delivery_settings_key_error(db_session: Session
 
     assert response.status_code == 200
     body = response.json()
-    assert body["graph_delivery"]["ready"] is False
-    assert body["graph_delivery"]["auth_status"] == "configuration_error"
-    assert body["graph_delivery"]["token_checked"] is False
-    assert "SETTINGS_ENC_KEY" in body["graph_delivery"]["message"]
+    assert body["graph_delivery"]["ready"] is True
+    assert body["graph_delivery"]["auth_status"] == "ready"
+    assert body["graph_delivery"]["token_checked"] is True
+    assert "SETTINGS_ENC_KEY" not in body["graph_delivery"]["message"]
     assert "refresh-token" not in json.dumps(body["graph_delivery"])
 
 
@@ -836,24 +846,18 @@ def test_delivery_auth_refresh_resets_enabled_token_managers_and_returns_readine
     monkeypatch: pytest.MonkeyPatch,
 ):
     add_delegated_credential(db_session)
-    calls = {"bot": 0, "graph": 0, "delegated": 0}
-
-    def bot_token(settings):
-        calls["bot"] += 1
-        return "bot-token", 3600
-
-    def graph_token(settings):
-        calls["graph"] += 1
-        return "graph-token", 3600
+    calls = {"oauth": 0, "delegated": 0}
 
     def delegated_token(**kwargs):
         calls["delegated"] += 1
         return delegated_token_response()
 
-    monkeypatch.setattr("app.services.teams_bot.fetch_botframework_token", bot_token)
-    monkeypatch.setattr("app.services.graph_targets.fetch_graph_token", graph_token)
+    def oauth_token(**kwargs):
+        calls["oauth"] += 1
+        return fake_token_response(kwargs["scope"])
+
     monkeypatch.setattr(graph_delegated_auth, "_request_token", delegated_token)
-    monkeypatch.setattr("app.routers.admin._fetch_oauth_token", lambda **kwargs: fake_token_response(kwargs["scope"]))
+    monkeypatch.setattr("app.routers.admin._fetch_oauth_token", oauth_token)
     monkeypatch.setattr("app.routers.admin._metadata_from_graph_token", lambda access_token, client_id: metadata_pair())
 
     with make_client(
@@ -866,9 +870,9 @@ def test_delivery_auth_refresh_resets_enabled_token_managers_and_returns_readine
     ) as client:
         csrf_token = login_admin(client)
         response = client.post("/api/v1/admin/delivery-auth/refresh", headers={"X-CSRF-Token": csrf_token})
+        body = wait_refresh_job(client, csrf_token, response)
 
-    assert response.status_code == 200
-    body = response.json()
+    assert response.status_code == 202
     assert body["ok"] is True
     assert body["bot_delivery"]["status"] == "refreshed"
     assert body["graph_lookup"]["status"] == "refreshed"
@@ -877,11 +881,8 @@ def test_delivery_auth_refresh_resets_enabled_token_managers_and_returns_readine
     assert body["readiness"]["bot"]["ready"] is True
     assert body["readiness"]["graph_lookup"]["ready"] is True
     assert body["readiness"]["graph_delivery"]["ready"] is True
-    assert calls["bot"] == 1
-    assert calls["graph"] == 1
-    assert calls["delegated"] >= 1
-    assert "bot-token" not in json.dumps(body)
-    assert "graph-token" not in json.dumps(body)
+    assert calls["oauth"] == 2
+    assert calls["delegated"] == 1
     assert "refresh-token" not in json.dumps(body)
     audit = db_session.query(AuditEvent).filter_by(action="delivery_auth.tokens_refreshed").one()
     assert json.loads(audit.metadata_json)["components"] == {
@@ -910,9 +911,9 @@ def test_delivery_auth_refresh_skips_mock_and_unconfigured_components(db_session
             json={"value": "false"},
         ).status_code == 200
         response = client.post("/api/v1/admin/delivery-auth/refresh", headers={"X-CSRF-Token": csrf_token})
+        body = wait_refresh_job(client, csrf_token, response)
 
-    assert response.status_code == 200
-    body = response.json()
+    assert response.status_code == 202
     assert body["ok"] is True
     assert body["bot_delivery"]["status"] == "skipped"
     assert body["graph_lookup"]["status"] == "skipped"
@@ -926,19 +927,16 @@ def test_delivery_auth_refresh_skips_mock_and_unconfigured_components(db_session
 def test_delivery_auth_refresh_reports_sanitized_failures(db_session: Session, monkeypatch: pytest.MonkeyPatch):
     add_delegated_credential(db_session)
 
-    def bot_token(settings):
-        raise BotDeliveryError("raw bot provider body with bot-secret")
-
-    def graph_token(settings):
-        raise GraphRequestError("raw graph provider body with graph-secret")
-
     def delegated_token(**kwargs):
         raise GraphDelegatedAuthError("raw delegated provider body with delegated-secret")
 
-    monkeypatch.setattr("app.services.teams_bot.fetch_botframework_token", bot_token)
-    monkeypatch.setattr("app.services.graph_targets.fetch_graph_token", graph_token)
+    def oauth_token(**kwargs):
+        if kwargs["request_error"] is BotDeliveryError:
+            raise BotDeliveryError("raw bot provider body with bot-secret")
+        raise GraphRequestError("raw graph provider body with graph-secret")
+
     monkeypatch.setattr(graph_delegated_auth, "_request_token", delegated_token)
-    monkeypatch.setattr("app.routers.admin._fetch_oauth_token", lambda **kwargs: fake_token_response(kwargs["scope"]))
+    monkeypatch.setattr("app.routers.admin._fetch_oauth_token", oauth_token)
     monkeypatch.setattr("app.routers.admin._metadata_from_graph_token", lambda access_token, client_id: metadata_pair())
 
     with make_client(
@@ -951,9 +949,9 @@ def test_delivery_auth_refresh_reports_sanitized_failures(db_session: Session, m
     ) as client:
         csrf_token = login_admin(client)
         response = client.post("/api/v1/admin/delivery-auth/refresh", headers={"X-CSRF-Token": csrf_token})
+        body = wait_refresh_job(client, csrf_token, response)
 
-    assert response.status_code == 200
-    body = response.json()
+    assert response.status_code == 202
     assert body["ok"] is False
     assert body["bot_delivery"]["status"] == "failed"
     assert body["graph_lookup"]["status"] == "failed"

@@ -13,7 +13,7 @@ import type {
   BotAuthorizedUserUpdate,
   BotConversationReferenceDetailOut,
   BotConversationReferenceOut,
-  DeliveryAuthRefreshOut,
+  DeliveryAuthRefreshJobOut,
   EventLogEntryPageOut,
   FirstAdminCreate,
   GraphDeliveryOAuthPendingOut,
@@ -258,10 +258,13 @@ export const api = {
     return request<AdminReadinessOut>("/api/v1/admin/readiness", { csrfToken });
   },
   refreshDeliveryAuth(csrfToken: string) {
-    return request<DeliveryAuthRefreshOut>("/api/v1/admin/delivery-auth/refresh", {
+    return request<DeliveryAuthRefreshJobOut>("/api/v1/admin/delivery-auth/refresh", {
       method: "POST",
       csrfToken,
     });
+  },
+  deliveryAuthRefreshJob(csrfToken: string, jobId: string) {
+    return request<DeliveryAuthRefreshJobOut>(`/api/v1/admin/delivery-auth/refresh/${encodeURIComponent(jobId)}`, { csrfToken });
   },
   adminSettings(csrfToken: string) {
     return request<SettingItemOut[]>("/api/v1/admin/settings", { csrfToken });
