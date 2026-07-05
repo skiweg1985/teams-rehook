@@ -6764,6 +6764,14 @@ html.dark .app-logo-image--dark {
     border-spacing: 0;
   }
 
+  .data-table.data-table--dashboard-routes th,
+  .data-table.data-table--dashboard-routes td,
+  .data-table.data-table--bot-groups th,
+  .data-table.data-table--bot-groups td {
+    width: auto;
+    max-width: none;
+  }
+
   .data-table thead {
     display: none;
   }
